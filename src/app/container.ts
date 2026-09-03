@@ -8,7 +8,7 @@ import {
 } from "../orders/repository.js";
 import { CartService, OrderService } from "../orders/service.js";
 import { createPaymentService, PaymentService } from "../payments/service.js";
-import { MongoStorage } from "../storage/mongo.js";
+import { MongoStorage, type IndexState } from "../storage/mongo.js";
 
 /**
  * One place that wires the services together.
@@ -27,6 +27,8 @@ export interface Storage {
   readonly kind: "mongodb" | "memory";
   /** False while a configured database has not been reached yet. */
   readonly ready: boolean;
+  /** Whether the indexes the schema relies on are in place. */
+  readonly indexes: IndexState;
   connect(): Promise<void>;
   close(): Promise<void>;
 }
@@ -56,6 +58,7 @@ function memoryStorage(): Storage {
   return {
     kind: "memory",
     ready: true,
+    indexes: "ready",
     async connect() {},
     async close() {},
   };

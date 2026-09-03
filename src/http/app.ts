@@ -66,6 +66,7 @@ export function createServer(app: Services = services) {
       ok: app.storage.ready,
       phase: 2,
       storage: app.storage.kind,
+      indexes: app.storage.indexes,
     });
   });
 

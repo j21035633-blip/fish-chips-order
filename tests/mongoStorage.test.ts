@@ -142,6 +142,50 @@ describe("MongoStorage", () => {
     await storage.close();
   });
 
+  // Index creation used to be part of "connected", so a database user without
+  // index privileges was indistinguishable from an unreachable database — and
+  // took the process down with it — while reads and writes worked fine.
+  it("stays usable when index creation is refused", async () => {
+    const storage = new MongoStorage(uri, "index_failure");
+    // Stand in for a user that may read and write but may not create indexes.
+    const denied = Object.assign(new Error("not authorized on index_failure to execute command"), {
+      code: 13,
+    });
+    const original = storage.db.collection("orders").createIndex;
+    storage.db.createIndex = (() => Promise.reject(denied)) as never;
+    const collection = storage.db.collection.bind(storage.db);
+    storage.db.collection = ((name: string) => {
+      const target = collection(name);
+      target.createIndex = (() => Promise.reject(denied)) as never;
+      return target;
+    }) as never;
+
+    await storage.connect();
+
+    expect(storage.ready).toBe(true);
+    expect(storage.indexes).toBe("failed");
+
+    // The point: orders still store and read back.
+    const orders = storage.orders();
+    const now = new Date().toISOString();
+    await orders.save({
+      id: "o-noindex",
+      reference: "NX-0001",
+      lines: [],
+      itemCount: 0,
+      subtotalSen: 0,
+      totalSen: 0,
+      subtotal: "RM0.00",
+      total: "RM0.00",
+      paymentStatus: "pending",
+      createdAt: now,
+      updatedAt: now,
+    });
+    expect((await orders.get("o-noindex"))?.reference).toBe("NX-0001");
+    expect(original).toBeDefined();
+    await storage.close();
+  });
+
   // A failed connect used to close the topology for good, so every retry after
   // the first threw MongoTopologyClosedError and the app could never recover
   // from a database that was merely slow to come up.

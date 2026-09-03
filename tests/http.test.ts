@@ -27,7 +27,7 @@ describe("menu api", async () => {
   it("serves health", async () => {
     const res = await get("/health");
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ ok: true, phase: 2, storage: "memory" });
+    await expect(res.json()).resolves.toEqual({ ok: true, phase: 2, storage: "memory", indexes: "ready" });
   });
 
   it("serves the full menu", async () => {

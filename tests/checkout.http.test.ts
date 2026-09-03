@@ -51,7 +51,7 @@ function buildServices(): Services {
     [new StripeAdapter(stripeConfig, BASE_URL), new RevenueMonsterAdapter(revenueMonsterConfig, BASE_URL)],
     BASE_URL,
   );
-  return { carts, orders, payments, storage: { kind: "memory", ready: true, async connect() {}, async close() {} } };
+  return { carts, orders, payments, storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} } as const };
 }
 
 beforeAll(async () => {
@@ -100,7 +100,7 @@ function stripeSigned(body: string) {
 
 describe("checkout flow", async () => {
   it("reports phase 2 on health", async () => {
-    await expect(json(await fetch(`${base}/health`))).resolves.toEqual({ ok: true, phase: 2, storage: "memory" });
+    await expect(json(await fetch(`${base}/health`))).resolves.toEqual({ ok: true, phase: 2, storage: "memory", indexes: "ready" });
   });
 
   it("builds a cart with a running total", async () => {

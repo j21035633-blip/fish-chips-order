@@ -18,6 +18,8 @@ import type { Cart, Order } from "../orders/types.js";
 /** An untouched cart is worth nothing; let Mongo reap it. Orders never expire. */
 const CART_TTL_SECONDS = 24 * 60 * 60;
 
+export type IndexState = "pending" | "ready" | "failed";
+
 type StoredCart = Cart & { _id: string; expiresAt: Date };
 type StoredOrder = Order & { _id: string };
 
@@ -27,6 +29,7 @@ export class MongoStorage {
   private database: Db;
   private connected = false;
   private attempted = false;
+  private indexState: IndexState = "pending";
 
   constructor(
     private readonly uri: string,
@@ -45,6 +48,10 @@ export class MongoStorage {
     return this.connected;
   }
 
+  get indexes(): IndexState {
+    return this.indexState;
+  }
+
   async connect(): Promise<void> {
     // A failed `connect` leaves the topology closed for good, so a retry on the
     // same client throws MongoTopologyClosedError forever. Start each attempt
@@ -58,8 +65,29 @@ export class MongoStorage {
     this.attempted = true;
 
     await this.client.connect();
-    await this.ensureIndexes();
+    // `connect` can resolve without having spoken to a server. Ping, so "ready"
+    // means the database actually answered.
+    await this.database.command({ ping: 1 });
     this.connected = true;
+
+    // Indexes are a constraint and an optimisation, not a precondition for
+    // storing an order. Letting a failure here mark the whole database
+    // unreachable made a permissions problem look identical to an outage — and
+    // took the process down with it — while reads and writes worked fine.
+    try {
+      await this.ensureIndexes();
+      this.indexState = "ready";
+    } catch (error) {
+      this.indexState = "failed";
+      console.error(
+        `[storage] connected, but creating indexes failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      console.error(
+        "[storage] orders are being stored, but the unique index on `reference` is not in place, " +
+          "so two orders could in principle share a counter code. Usually the database user lacks " +
+          "index privileges, or an index of the same name already exists with different options.",
+      );
+    }
   }
 
   async close(): Promise<void> {
