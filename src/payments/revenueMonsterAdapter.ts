@@ -126,8 +126,9 @@ export class RevenueMonsterAdapter implements PaymentAdapter {
       status: "pending",
       simulated: false,
     };
-    if (result.item?.url !== undefined) session.checkoutUrl = result.item.url;
-    if (result.item?.qrCodeUrl !== undefined) session.qrCodeUrl = result.item.qrCodeUrl;
+    // A JSON `null` is not a link; `!== undefined` would store one anyway.
+    if (result.item?.url) session.checkoutUrl = result.item.url;
+    if (result.item?.qrCodeUrl) session.qrCodeUrl = result.item.qrCodeUrl;
     return session;
   }
 

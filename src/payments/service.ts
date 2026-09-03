@@ -93,6 +93,16 @@ export class PaymentService {
       idempotencyKey: `${order.id}:${randomUUID()}`,
     });
 
+    if (!session.simulated && !session.checkoutUrl && !session.qrCodeUrl) {
+      // The provider accepted the payment but gave the customer nowhere to go.
+      // Nothing downstream can recover from that on its own, and without a line
+      // here there is no trace of it in the logs at all.
+      console.error(
+        `[payments] ${session.provider} returned no checkout URL or QR for order ${order.reference} ` +
+          `(payment ${session.providerPaymentId}) — the customer cannot pay from this session.`,
+      );
+    }
+
     const payment: OrderPayment = {
       method,
       provider: session.provider,

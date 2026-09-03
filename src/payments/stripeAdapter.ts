@@ -81,7 +81,8 @@ export class StripeAdapter implements PaymentAdapter {
       status: "pending",
       simulated: false,
     };
-    if (payload.url !== undefined) session.checkoutUrl = payload.url;
+    // A JSON `null` is not a link. `!== undefined` would store one anyway.
+    if (payload.url) session.checkoutUrl = payload.url;
     return session;
   }
 

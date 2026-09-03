@@ -450,15 +450,19 @@ async function renderOrderView(orderId) {
   cartToggle.hidden = true;
   clearInterval(pollTimer);
 
-  // Only fetched when an order turns out to have no payment attempt on it.
+  // Only fetched when an order turns out to have nowhere for the customer to pay.
   let methods = [];
 
   const draw = (order) => {
     const paid = order.paymentStatus === "paid";
+    // Where the customer can actually go and pay, if anywhere. A provider that
+    // accepts the session but answers with no link leaves an attempt on the
+    // order that nobody can act on, which is indistinguishable from none.
+    const payableUrl = order.payment?.checkoutUrl ?? order.payment?.qrCodeUrl;
     // Placing the order and starting the payment are two calls, so an order can
-    // exist with no attempt on it when the second one failed. Offer a way to pay
-    // rather than sitting on "waiting" forever.
-    const unstarted = !paid && !order.payment;
+    // reach this page with no usable attempt on it. Offer a way to pay rather
+    // than sitting on "waiting" forever.
+    const stalled = !paid && !payableUrl;
     const errorEl = el("p", { class: "error", hidden: true });
 
     mount(view,
@@ -470,12 +474,19 @@ async function renderOrderView(orderId) {
         ]),
         paid
           ? el("p", { style: "margin:16px 0 0", text: "Paid — we're on it. Show this screen at the counter." })
-          : unstarted
-            ? el("p", { class: "muted", style: "margin:16px 0 0", text: "Payment hasn't been started for this order yet." })
+          : stalled
+            ? el("p", { class: "muted", style: "margin:16px 0 0", text: stalledReason(order) })
             : el("p", { class: "muted", style: "margin:16px 0 0", text: "Waiting for payment to confirm…" }),
       ]),
 
-      unstarted
+      // A live link the customer can go back to — they may have closed the tab.
+      !paid && payableUrl
+        ? el("section", { class: "panel" }, [
+            el("a", { class: "primary wide button-link", href: payableUrl, text: "Continue to payment" }),
+          ])
+        : null,
+
+      stalled
         ? el("section", { class: "panel" }, [
             el("h2", { text: "How would you like to pay?" }),
             methodPicker(methods),
@@ -552,7 +563,8 @@ async function renderOrderView(orderId) {
     const { order } = await api(`/api/orders/${orderId}`);
     // Nothing else on this page needs the method list, so only pay for it when
     // the recovery panel is about to be drawn.
-    if (!order.payment && order.paymentStatus === "pending" && methods.length === 0) {
+    const stuck = !order.payment?.checkoutUrl && !order.payment?.qrCodeUrl;
+    if (stuck && order.paymentStatus === "pending" && methods.length === 0) {
       ({ methods } = await api("/api/payments/methods"));
     }
     draw(order);
@@ -567,7 +579,7 @@ async function renderOrderView(orderId) {
     // Payment settles on a webhook, which lands whenever the provider sends it.
     // Only poll once an attempt exists — redrawing underneath the method picker
     // would throw away the customer's selection every three seconds.
-    if (order.paymentStatus === "pending" && order.payment) {
+    if (order.paymentStatus === "pending" && (order.payment?.checkoutUrl || order.payment?.qrCodeUrl)) {
       pollTimer = setInterval(() => refresh().catch(() => {}), 3000);
     }
   };
@@ -577,6 +589,13 @@ async function renderOrderView(orderId) {
   } catch (error) {
     mount(view, el("p", { class: "empty", text: error.message }));
   }
+}
+
+/** Why the order is stuck, in the customer's terms. */
+function stalledReason(order) {
+  return order.payment
+    ? "We couldn't get a payment page from the provider. Try again below."
+    : "Payment hasn't been started for this order yet.";
 }
 
 function statusLabel(status) {

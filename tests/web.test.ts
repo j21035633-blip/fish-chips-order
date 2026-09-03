@@ -19,13 +19,17 @@ import { createServer } from "../src/http/app.js";
 
 let server: Server;
 let base: string;
+// Kept so a test can put an order into a state the simulated adapters never
+// produce on their own.
+let services: ReturnType<typeof createServices>;
 
 // jsdom serves import.meta.url over http, so resolve from the project root.
 const webDir = resolve(process.cwd(), "src/web");
 const appUrl = pathToFileURL(resolve(webDir, "app.js")).href;
 
 beforeAll(async () => {
-  server = createServer(createServices()).listen(0);
+  services = createServices();
+  server = createServer(services).listen(0);
   await new Promise((resolve) => server.once("listening", resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
@@ -218,6 +222,37 @@ describe("customer page", () => {
     expect(order.payment).toBeDefined();
     expect(order.payment.method).toBe("card");
     expect(order.payment.checkoutUrl).toContain("/simulated-checkout");
+  });
+
+  // What production hit: Stripe accepted the session but returned no `url`, so
+  // the order carried an attempt that the customer could not act on.
+  it("offers a way to pay when the provider returned no checkout link", async () => {
+    const orderId = await placeOrder();
+    await services.payments.initiate(orderId, "card");
+    delete services.orders.get(orderId).payment!.checkoutUrl;
+
+    await bootPage(`/order/${orderId}`);
+
+    const view = document.getElementById("view")!;
+    expect(view.textContent).toContain("We couldn't get a payment page from the provider.");
+    expect(view.textContent).toContain("How would you like to pay?");
+    expect(view.textContent).toContain("Pay RM16.90");
+    // The dead end this replaces.
+    expect(view.textContent).not.toContain("Waiting for payment to confirm");
+  });
+
+  it("links back to a live checkout instead of the picker", async () => {
+    const orderId = await placeOrder();
+    const order = await services.payments.initiate(orderId, "card");
+
+    await bootPage(`/order/${orderId}`);
+
+    const view = document.getElementById("view")!;
+    const link = view.querySelector("a.button-link") as HTMLAnchorElement;
+    expect(link.textContent).toBe("Continue to payment");
+    expect(link.href).toBe(order.payment!.checkoutUrl);
+    expect(view.textContent).toContain("Waiting for payment to confirm");
+    expect(view.textContent).not.toContain("How would you like to pay?");
   });
 
   it("shows the payment attempt once one exists", async () => {

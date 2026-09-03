@@ -145,6 +145,20 @@ describe("StripeAdapter", () => {
     await expect(adapter.createPayment(request(anOrder()))).rejects.toThrow("No such price");
   });
 
+  // Stripe answering with `"url": null` used to be stored as a checkout URL,
+  // which reads as a usable link everywhere downstream.
+  it("stores no checkout URL when the session comes back without one", async () => {
+    for (const body of [{ id: "cs_test_1" }, { id: "cs_test_1", url: null }]) {
+      const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(body));
+      const adapter = new StripeAdapter(liveStripe, BASE_URL, fetchImpl as unknown as typeof fetch);
+
+      const session = await adapter.createPayment(request(anOrder()));
+
+      expect(session.providerPaymentId).toBe("cs_test_1");
+      expect(session.checkoutUrl).toBeUndefined();
+    }
+  });
+
   it("accepts a correctly signed webhook", () => {
     const order = anOrder();
     const body = stripeEvent(order);
@@ -362,6 +376,27 @@ describe("PaymentService", () => {
     expect(methods.find((option) => option.method === "card")?.provider).toBe("stripe");
     expect(methods.find((option) => option.method === "ewallet")?.provider).toBe("revenue_monster");
     expect(methods.every((option) => option.simulated)).toBe(true);
+  });
+
+  it("logs when a live provider returns a session the customer cannot pay from", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ id: "cs_test_1", url: null }));
+    const payments = new PaymentService(
+      orders,
+      [new StripeAdapter(liveStripe, BASE_URL, fetchImpl as unknown as typeof fetch)],
+      BASE_URL,
+    );
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const order = anOrder();
+
+    const updated = await payments.initiate(order.id, "card");
+
+    // The attempt is still recorded — the webhook may yet settle it — but there
+    // is nowhere to send the customer, and the log says so.
+    expect(updated.payment?.providerPaymentId).toBe("cs_test_1");
+    expect(updated.payment?.checkoutUrl).toBeUndefined();
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining("no checkout URL"));
+    expect(logged.mock.calls[0]?.[0]).toContain(order.reference);
+    logged.mockRestore();
   });
 
   it("routes each method to its provider", () => {
