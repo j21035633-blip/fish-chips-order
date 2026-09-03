@@ -165,4 +165,94 @@ describe("customer page", () => {
     await bootPage("/order/does-not-exist");
     expect(document.getElementById("view")!.textContent).toContain("No order");
   });
+
+  // `Node.replaceChildren` stringifies non-Nodes, so an unfilled `: null` slot
+  // used to reach the page as the literal text "null".
+  it("never renders a literal null in an optional slot", async () => {
+    await bootPage("/");
+
+    const chips = [...document.querySelectorAll("button.item")].find((item) =>
+      item.textContent?.includes("Hand-Cut Chips"),
+    ) as HTMLButtonElement;
+    chips.click();
+    await settle(2);
+
+    // Hand-Cut Chips declares no allergens, so the allergen line is skipped.
+    const body = document.getElementById("item-dialog-body")!;
+    expect(body.textContent).not.toContain("null");
+    expect(body.textContent).not.toContain("Contains:");
+  });
+
+  it("offers a way to pay for an order whose payment never started", async () => {
+    const orderId = await placeOrder();
+    await bootPage(`/order/${orderId}`);
+
+    const view = document.getElementById("view")!;
+    expect(view.textContent).not.toContain("null");
+    expect(view.textContent).toContain("Payment hasn't been started for this order yet.");
+    // Not "waiting to confirm" — there is nothing in flight to wait for.
+    expect(view.textContent).not.toContain("Waiting for payment to confirm");
+
+    // The recovery panel is a full method picker, not a dead end.
+    expect(view.textContent).toContain("How would you like to pay?");
+    expect(view.querySelectorAll(".method")).toHaveLength(2);
+    expect(view.textContent).toContain("Pay RM16.90");
+  });
+
+  it("attaches a payment session when the order page's pay button is used", async () => {
+    const orderId = await placeOrder();
+    await bootPage(`/order/${orderId}`);
+
+    const view = document.getElementById("view")!;
+    const payButton = [...view.querySelectorAll("button")].find((button) =>
+      button.textContent?.startsWith("Pay "),
+    ) as HTMLButtonElement;
+    // jsdom logs "Not implemented: navigation" here — that is the real redirect
+    // to the checkout URL firing.
+    payButton.click();
+    await settle();
+
+    // The status endpoint now carries the attempt the page was missing.
+    const response = await fetch(`${base}/api/orders/${orderId}`);
+    const { order } = (await response.json()) as { order: Record<string, any> };
+    expect(order.payment).toBeDefined();
+    expect(order.payment.method).toBe("card");
+    expect(order.payment.checkoutUrl).toContain("/simulated-checkout");
+  });
+
+  it("shows the payment attempt once one exists", async () => {
+    const orderId = await placeOrder();
+    await fetch(`${base}/api/orders/${orderId}/payment`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ method: "card" }),
+    });
+
+    await bootPage(`/order/${orderId}`);
+
+    const view = document.getElementById("view")!;
+    expect(view.textContent).not.toContain("null");
+    expect(view.textContent).toContain("Waiting for payment to confirm");
+    expect(view.textContent).toContain("Complete test payment");
+    expect(view.textContent).not.toContain("How would you like to pay?");
+  });
 });
+
+/** Places a one-item order straight through the API and returns its id. */
+async function placeOrder(): Promise<string> {
+  const json = async (path: string, init?: RequestInit) => {
+    const response = await fetch(`${base}${path}`, {
+      headers: { "content-type": "application/json" },
+      ...init,
+    });
+    return (await response.json()) as any;
+  };
+
+  const { cartId } = await json("/api/carts", { method: "POST" });
+  await json(`/api/carts/${cartId}/lines`, {
+    method: "POST",
+    body: JSON.stringify({ itemId: "fish-dory-classic", quantity: 1 }),
+  });
+  const { order } = await json("/api/orders", { method: "POST", body: JSON.stringify({ cartId }) });
+  return order.id;
+}

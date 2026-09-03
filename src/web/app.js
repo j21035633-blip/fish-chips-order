@@ -47,6 +47,17 @@ function el(tag, props = {}, children = []) {
   return node;
 }
 
+/**
+ * Replaces a node's children.
+ *
+ * `Node.replaceChildren` stringifies anything that is not a Node, so a `null`
+ * from a `cond ? el(...) : null` slot lands in the page as the literal text
+ * "null". Drop the empty slots the way `el` already does for its own children.
+ */
+function mount(node, ...children) {
+  node.replaceChildren(...children.filter((child) => child !== null && child !== undefined && child !== false));
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
@@ -109,7 +120,7 @@ function renderCart() {
   cartToggle.hidden = lines.length === 0;
   checkoutButton.disabled = lines.length === 0;
 
-  cartBody.replaceChildren(
+  mount(cartBody,
     lines.length === 0
       ? el("p", { class: "empty", text: "Nothing in here yet." })
       : el(
@@ -179,7 +190,7 @@ async function renderMenuView() {
   const [{ categories }] = await Promise.all([api("/api/menu"), ensureCart()]);
   state.menu = categories;
 
-  view.replaceChildren(
+  mount(view,
     ...categories.map((category) =>
       el("section", { class: "category" }, [
         el("div", { class: "category-head" }, [
@@ -217,7 +228,7 @@ function openItem(item) {
   state.dialogItem = item;
   state.dialogQty = 1;
 
-  itemDialogBody.replaceChildren(
+  mount(itemDialogBody,
     el("h3", { text: item.name }),
     el("p", { class: "flavour", text: item.flavourNotes }),
     el("p", { class: "portion", text: item.portionSummary }),
@@ -307,6 +318,37 @@ itemAddButton.addEventListener("click", async () => {
 
 // --------------------------------------------------------- checkout view
 
+/**
+ * The radio list of payment methods, shared by checkout and the order page's
+ * recovery panel so both submit the same `method` value.
+ */
+function methodPicker(methods) {
+  return el(
+    "div",
+    { class: "methods" },
+    methods.map((option, index) =>
+      el("label", { class: "method" }, [
+        el("input", { type: "radio", name: "method", value: option.method, checked: index === 0 }),
+        el("div", {}, [
+          el("div", { class: "method-label", text: option.label }),
+          el("div", { class: "method-desc", text: option.description }),
+          el("div", { class: "method-brands", text: option.brands.join(" · ") }),
+          option.simulated ? el("div", { class: "method-sim", text: "Test mode" }) : null,
+        ]),
+      ]),
+    ),
+  );
+}
+
+/** Starts a payment attempt for an order and returns what the adapter recorded. */
+async function startPayment(orderId, method) {
+  const { payment } = await api(`/api/orders/${orderId}/payment`, {
+    method: "POST",
+    body: JSON.stringify({ method }),
+  });
+  return payment;
+}
+
 async function renderCheckoutView() {
   closeCart();
   const [{ methods }] = await Promise.all([api("/api/payments/methods"), ensureCart()]);
@@ -326,7 +368,7 @@ async function renderCheckoutView() {
     onClick: () => pay(errorEl, payButton),
   });
 
-  view.replaceChildren(
+  mount(view,
     el("h1", { style: "font-size:22px;margin-bottom:16px", text: "Checkout" }),
 
     el("section", { class: "panel" }, [
@@ -347,21 +389,7 @@ async function renderCheckoutView() {
       ]),
 
       el("h2", { text: "How would you like to pay?" }),
-      el(
-        "div",
-        { class: "methods" },
-        methods.map((option, index) =>
-          el("label", { class: "method" }, [
-            el("input", { type: "radio", name: "method", value: option.method, checked: index === 0 }),
-            el("div", {}, [
-              el("div", { class: "method-label", text: option.label }),
-              el("div", { class: "method-desc", text: option.description }),
-              el("div", { class: "method-brands", text: option.brands.join(" · ") }),
-              option.simulated ? el("div", { class: "method-sim", text: "Test mode" }) : null,
-            ]),
-          ]),
-        ),
-      ),
+      methodPicker(methods),
     ]),
 
     payButton,
@@ -397,10 +425,7 @@ async function pay(errorEl, payButton) {
 
     const order = state.pendingOrder;
 
-    const { payment } = await api(`/api/orders/${order.id}/payment`, {
-      method: "POST",
-      body: JSON.stringify({ method }),
-    });
+    const payment = await startPayment(order.id, method);
 
     if (payment?.checkoutUrl) {
       window.location.href = payment.checkoutUrl;
@@ -425,10 +450,18 @@ async function renderOrderView(orderId) {
   cartToggle.hidden = true;
   clearInterval(pollTimer);
 
+  // Only fetched when an order turns out to have no payment attempt on it.
+  let methods = [];
+
   const draw = (order) => {
     const paid = order.paymentStatus === "paid";
+    // Placing the order and starting the payment are two calls, so an order can
+    // exist with no attempt on it when the second one failed. Offer a way to pay
+    // rather than sitting on "waiting" forever.
+    const unstarted = !paid && !order.payment;
+    const errorEl = el("p", { class: "error", hidden: true });
 
-    view.replaceChildren(
+    mount(view,
       el("section", { class: "panel", style: "text-align:center" }, [
         el("p", { class: "muted", text: "Order" }),
         el("div", { class: "reference", text: order.reference }),
@@ -437,8 +470,44 @@ async function renderOrderView(orderId) {
         ]),
         paid
           ? el("p", { style: "margin:16px 0 0", text: "Paid — we're on it. Show this screen at the counter." })
-          : el("p", { class: "muted", style: "margin:16px 0 0", text: "Waiting for payment to confirm…" }),
+          : unstarted
+            ? el("p", { class: "muted", style: "margin:16px 0 0", text: "Payment hasn't been started for this order yet." })
+            : el("p", { class: "muted", style: "margin:16px 0 0", text: "Waiting for payment to confirm…" }),
       ]),
+
+      unstarted
+        ? el("section", { class: "panel" }, [
+            el("h2", { text: "How would you like to pay?" }),
+            methodPicker(methods),
+            el("button", {
+              class: "primary wide",
+              type: "button",
+              style: "margin-top:16px",
+              text: `Pay ${order.total}`,
+              onClick: async (event) => {
+                const button = event.target;
+                const method = view.querySelector('input[name="method"]:checked')?.value;
+                errorEl.hidden = true;
+                button.disabled = true;
+                button.textContent = "Starting payment…";
+                try {
+                  const payment = await startPayment(order.id, method);
+                  if (payment?.checkoutUrl) {
+                    window.location.href = payment.checkoutUrl;
+                    return;
+                  }
+                  startPolling(await refresh());
+                } catch (error) {
+                  errorEl.textContent = error.message;
+                  errorEl.hidden = false;
+                  button.disabled = false;
+                  button.textContent = `Pay ${order.total}`;
+                }
+              },
+            }),
+            errorEl,
+          ])
+        : null,
 
       order.payment?.simulated && !paid
         ? el("section", { class: "panel" }, [
@@ -481,6 +550,11 @@ async function renderOrderView(orderId) {
 
   const refresh = async () => {
     const { order } = await api(`/api/orders/${orderId}`);
+    // Nothing else on this page needs the method list, so only pay for it when
+    // the recovery panel is about to be drawn.
+    if (!order.payment && order.paymentStatus === "pending" && methods.length === 0) {
+      ({ methods } = await api("/api/payments/methods"));
+    }
     draw(order);
     if (order.paymentStatus === "paid" || order.paymentStatus === "failed") {
       clearInterval(pollTimer);
@@ -488,14 +562,20 @@ async function renderOrderView(orderId) {
     return order;
   };
 
-  try {
-    const order = await refresh();
+  const startPolling = (order) => {
+    clearInterval(pollTimer);
     // Payment settles on a webhook, which lands whenever the provider sends it.
-    if (order.paymentStatus === "pending") {
+    // Only poll once an attempt exists — redrawing underneath the method picker
+    // would throw away the customer's selection every three seconds.
+    if (order.paymentStatus === "pending" && order.payment) {
       pollTimer = setInterval(() => refresh().catch(() => {}), 3000);
     }
+  };
+
+  try {
+    startPolling(await refresh());
   } catch (error) {
-    view.replaceChildren(el("p", { class: "empty", text: error.message }));
+    mount(view, el("p", { class: "empty", text: error.message }));
   }
 }
 
@@ -512,7 +592,7 @@ async function renderSimulatedCheckout() {
 
   const { order } = await api(`/api/orders/${orderId}`);
 
-  view.replaceChildren(
+  mount(view,
     el("section", { class: "panel" }, [
       el("div", { class: "notice", text: "Test mode. This stands in for the provider's payment page — no money moves." }),
       el("h2", { text: `Pay ${order.total}` }),
@@ -554,7 +634,7 @@ function navigate(path) {
 async function route() {
   clearInterval(pollTimer);
   cartToggle.hidden = false;
-  view.replaceChildren(el("p", { class: "loading", text: "Loading…" }));
+  mount(view, el("p", { class: "loading", text: "Loading…" }));
 
   try {
     const path = location.pathname;
@@ -563,7 +643,7 @@ async function route() {
     else if (path === "/checkout") await renderCheckoutView();
     else await renderMenuView();
   } catch (error) {
-    view.replaceChildren(el("p", { class: "empty", text: error.message }));
+    mount(view, el("p", { class: "empty", text: error.message }));
   }
 }
 
