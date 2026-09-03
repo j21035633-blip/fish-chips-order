@@ -23,31 +23,67 @@ type StoredOrder = Order & { _id: string };
 
 export class MongoStorage {
   readonly kind = "mongodb" as const;
-  private readonly client: MongoClient;
-  readonly db: Db;
+  private client: MongoClient;
+  private database: Db;
+  private connected = false;
+  private attempted = false;
 
-  constructor(uri: string, dbName: string) {
-    // `undefined` means "absent", not "null" — the domain types use optional
-    // properties and a null read back would not satisfy them.
-    this.client = new MongoClient(uri, { ignoreUndefined: true });
-    this.db = this.client.db(dbName);
+  constructor(
+    private readonly uri: string,
+    private readonly dbName: string,
+  ) {
+    this.client = this.newClient();
+    this.database = this.client.db(dbName);
+  }
+
+  /** Future collections (game, vouchers) share this connection. */
+  get db(): Db {
+    return this.database;
+  }
+
+  get ready(): boolean {
+    return this.connected;
   }
 
   async connect(): Promise<void> {
+    // A failed `connect` leaves the topology closed for good, so a retry on the
+    // same client throws MongoTopologyClosedError forever. Start each attempt
+    // after the first from a fresh client. Repositories resolve their collection
+    // through `this.database` per call, so they follow the swap.
+    if (this.attempted) {
+      await this.client.close().catch(() => {});
+      this.client = this.newClient();
+      this.database = this.client.db(this.dbName);
+    }
+    this.attempted = true;
+
     await this.client.connect();
     await this.ensureIndexes();
+    this.connected = true;
   }
 
   async close(): Promise<void> {
+    this.connected = false;
     await this.client.close();
   }
 
   carts(): CartRepository {
-    return new MongoCartRepository(this.db.collection<StoredCart>("carts"));
+    return new MongoCartRepository(() => this.database.collection<StoredCart>("carts"));
   }
 
   orders(): OrderRepository {
-    return new MongoOrderRepository(this.db.collection<StoredOrder>("orders"));
+    return new MongoOrderRepository(() => this.database.collection<StoredOrder>("orders"));
+  }
+
+  private newClient(): MongoClient {
+    return new MongoClient(this.uri, {
+      // `undefined` means "absent", not "null" — the domain types use optional
+      // properties and a null read back would not satisfy them.
+      ignoreUndefined: true,
+      // Fail an attempt in seconds rather than the default half-minute; the
+      // caller retries, and a slow failure just looks like a hang.
+      serverSelectionTimeoutMS: 5_000,
+    });
   }
 
   /**
@@ -65,10 +101,10 @@ export class MongoStorage {
 }
 
 class MongoCartRepository implements CartRepository {
-  constructor(private readonly carts: Collection<StoredCart>) {}
+  constructor(private readonly carts: () => Collection<StoredCart>) {}
 
   async get(cartId: string): Promise<Cart | undefined> {
-    const doc = await this.carts.findOne({ _id: cartId });
+    const doc = await this.carts().findOne({ _id: cartId });
     return doc === null ? undefined : toCart(doc);
   }
 
@@ -78,16 +114,16 @@ class MongoCartRepository implements CartRepository {
       _id: cart.id,
       expiresAt: new Date(Date.now() + CART_TTL_SECONDS * 1000),
     };
-    await this.carts.replaceOne({ _id: cart.id }, document, { upsert: true });
+    await this.carts().replaceOne({ _id: cart.id }, document, { upsert: true });
   }
 
   async delete(cartId: string): Promise<void> {
-    await this.carts.deleteOne({ _id: cartId });
+    await this.carts().deleteOne({ _id: cartId });
   }
 }
 
 class MongoOrderRepository implements OrderRepository {
-  constructor(private readonly orders: Collection<StoredOrder>) {}
+  constructor(private readonly orders: () => Collection<StoredOrder>) {}
 
   async get(orderId: string): Promise<Order | undefined> {
     return this.one({ _id: orderId });
@@ -103,16 +139,16 @@ class MongoOrderRepository implements OrderRepository {
 
   async save(order: Order): Promise<void> {
     const document: StoredOrder = { ...order, _id: order.id };
-    await this.orders.replaceOne({ _id: order.id }, document, { upsert: true });
+    await this.orders().replaceOne({ _id: order.id }, document, { upsert: true });
   }
 
   async all(): Promise<Order[]> {
-    const docs = await this.orders.find({}).sort({ createdAt: -1 }).toArray();
+    const docs = await this.orders().find({}).sort({ createdAt: -1 }).toArray();
     return docs.map(toOrder);
   }
 
   private async one(filter: Filter<StoredOrder>): Promise<Order | undefined> {
-    const doc = await this.orders.findOne(filter);
+    const doc = await this.orders().findOne(filter);
     return doc === null ? undefined : toOrder(doc);
   }
 }

@@ -142,6 +142,47 @@ describe("MongoStorage", () => {
     await storage.close();
   });
 
+  // A failed connect used to close the topology for good, so every retry after
+  // the first threw MongoTopologyClosedError and the app could never recover
+  // from a database that was merely slow to come up.
+  it("recovers when the database only becomes reachable later", async () => {
+    const port = 47654;
+    const storage = new MongoStorage(`mongodb://127.0.0.1:${port}`, "late_start");
+
+    await expect(storage.connect()).rejects.toThrow();
+    expect(storage.ready).toBe(false);
+    // A second attempt must fail the same way, not with "Topology is closed".
+    await expect(storage.connect()).rejects.toThrow(/Server selection timed out|ECONNREFUSED/);
+    expect(storage.ready).toBe(false);
+
+    const late = await MongoMemoryServer.create({ instance: { port } });
+    try {
+      await storage.connect();
+      expect(storage.ready).toBe(true);
+
+      // Repositories built before the connection existed still work.
+      const orders = storage.orders();
+      const now = new Date().toISOString();
+      await orders.save({
+        id: "o-late",
+        reference: "LT-0001",
+        lines: [],
+        itemCount: 0,
+        subtotalSen: 0,
+        totalSen: 0,
+        subtotal: "RM0.00",
+        total: "RM0.00",
+        paymentStatus: "pending",
+        createdAt: now,
+        updatedAt: now,
+      });
+      expect((await orders.get("o-late"))?.reference).toBe("LT-0001");
+    } finally {
+      await storage.close();
+      await late.stop();
+    }
+  }, 120_000);
+
   it("deletes a cart", async () => {
     const db = "cart_delete";
     const storage = new MongoStorage(uri, db);

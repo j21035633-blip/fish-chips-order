@@ -59,8 +59,14 @@ export function createServer(app: Services = services) {
 
   // ------------------------------------------------------------------ health
   server.get("/health", (_req, res) => {
-    // `storage` makes an accidental in-memory deploy visible from outside.
-    res.json({ ok: true, phase: 2, storage: app.storage.kind });
+    // `storage` makes an accidental in-memory deploy visible from outside, and
+    // a configured database we have not reached yet is not "ok" — orders cannot
+    // be recorded until it is.
+    res.status(app.storage.ready ? 200 : 503).json({
+      ok: app.storage.ready,
+      phase: 2,
+      storage: app.storage.kind,
+    });
   });
 
   // -------------------------------------------------------------------- menu

@@ -51,7 +51,7 @@ function buildServices(): Services {
     [new StripeAdapter(stripeConfig, BASE_URL), new RevenueMonsterAdapter(revenueMonsterConfig, BASE_URL)],
     BASE_URL,
   );
-  return { carts, orders, payments, storage: { kind: "memory", async connect() {}, async close() {} } };
+  return { carts, orders, payments, storage: { kind: "memory", ready: true, async connect() {}, async close() {} } };
 }
 
 beforeAll(async () => {

@@ -25,6 +25,8 @@ import { MongoStorage } from "../storage/mongo.js";
  */
 export interface Storage {
   readonly kind: "mongodb" | "memory";
+  /** False while a configured database has not been reached yet. */
+  readonly ready: boolean;
   connect(): Promise<void>;
   close(): Promise<void>;
 }
@@ -53,6 +55,7 @@ export function createServices(): Services {
 function memoryStorage(): Storage {
   return {
     kind: "memory",
+    ready: true,
     async connect() {},
     async close() {},
   };
