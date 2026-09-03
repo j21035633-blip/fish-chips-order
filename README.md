@@ -21,6 +21,25 @@ npm run typecheck
 npm run dev              # http://localhost:3000
 ```
 
+### Building for deployment
+
+```bash
+npm run build            # tsc -p tsconfig.build.json && node scripts/copy-web.mjs
+npm start                # node dist/http/server.js
+```
+
+Three configs, deliberately separate — the build one is what makes `npm start`'s path correct:
+
+| Config | Used by | Why |
+| --- | --- | --- |
+| `tsconfig.json` | `typecheck` | Covers `src/` **and** `tests/`. Never emits. |
+| `tsconfig.build.json` | `build` | `rootDir: "src"` so output is `dist/http/…`, not `dist/src/http/…`. Excludes tests. |
+| `tsconfig.web-tests.json` | `typecheck` | DOM lib for the jsdom page test only; adding `DOM` globally collides with `@types/node`'s fetch types. |
+
+`copy-web.mjs` exists because `tsc` emits JS and nothing else — without it the customer page's
+HTML and CSS never reach `dist/`. With it, `dist/` is self-contained and runs from any working
+directory, which is what a pruned container deploy needs.
+
 Open `http://localhost:3000` for the customer page. `npm run menu` still drives the menu
 tools straight to stdout (`-- --item fish-dory-classic`, `-- --exclude gluten`, `-- --suggest`).
 
