@@ -353,12 +353,28 @@ describe("checkout flow", async () => {
   });
 
   it("serves the customer web page", async () => {
-    for (const path of ["/", "/checkout", "/order/anything"]) {
+    // "/order" is the QR landing page; "/order/:id" is a placed order. Both
+    // are client-rendered from the same document.
+    for (const path of ["/", "/checkout", "/order", "/order?table=5", "/order/anything"]) {
       const res = await fetch(`${base}${path}`);
       expect(res.status, path).toBe(200);
       expect(res.headers.get("content-type")).toContain("text/html");
       await expect(res.text()).resolves.toContain("Anchor &amp; Batter");
     }
+  });
+
+  it("opens a cart for a table, and refuses a malformed one", async () => {
+    const opened = await post("/api/carts", { table: "a3" });
+    expect(opened.status).toBe(200);
+    const { cartId, tableNumber } = (await opened.json()) as { cartId: string; tableNumber: string };
+    expect(tableNumber).toBe("A3");
+
+    const read = await fetch(`${base}/api/carts/${cartId}`);
+    await expect(read.json()).resolves.toMatchObject({ cart: { tableNumber: "A3" } });
+
+    const bad = await post("/api/carts", { table: "../admin" });
+    expect(bad.status).toBe(400);
+    await expect(bad.json()).resolves.toMatchObject({ error: "invalid_table_number" });
   });
 
   it("serves the page assets", async () => {

@@ -36,8 +36,39 @@ export interface CartLine {
 export interface Cart {
   id: string;
   lines: CartLine[];
+  /**
+   * The table whose QR opened this session, when there was one. A routing tag
+   * for the kitchen and the counter — never an identity, and never a key
+   * anything is stored under: the cart belongs to the browser session, so two
+   * customers at one table have two carts.
+   */
+  tableNumber?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * What a table label may look like: short, because it is printed on a sticker
+ * and read back by staff. "5", "12", "A3", "PATIO-1".
+ */
+const TABLE_NUMBER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,7}$/;
+
+/**
+ * Normalises a table label from a QR's query string, or throws.
+ *
+ * Uppercased so "a3" and "A3" are one table rather than two, and so what the
+ * kitchen reads matches what is printed on the sticker.
+ */
+export function parseTableNumber(raw: unknown): string {
+  const value = typeof raw === "string" ? raw.trim().toUpperCase() : "";
+  if (!TABLE_NUMBER_PATTERN.test(value)) {
+    throw new OrderValidationError(
+      `"${String(raw)}" is not a table number.`,
+      "invalid_table_number",
+      { table: raw },
+    );
+  }
+  return value;
 }
 
 /** A selection with its menu names and price resolved. */
@@ -69,6 +100,8 @@ export interface PricedLine {
 
 export interface PricedCart {
   cartId: string;
+  /** Echoed back so the page can show which table it is ordering for. */
+  tableNumber?: string;
   lines: PricedLine[];
   /** Number of physical items, not number of lines. */
   itemCount: number;
@@ -110,6 +143,8 @@ export interface Order {
   paymentStatus: PaymentStatus;
   payment?: OrderPayment;
   customerName?: string;
+  /** Carried from the cart, so the kitchen knows where the food goes. */
+  tableNumber?: string;
   createdAt: string;
   updatedAt: string;
 }

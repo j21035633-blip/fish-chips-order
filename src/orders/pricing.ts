@@ -76,11 +76,16 @@ export function priceLine(line: CartLine, menu: MenuService): PricedLine {
   return priced;
 }
 
-export function priceCart(cartId: string, lines: CartLine[], menu: MenuService): PricedCart {
+export function priceCart(
+  cartId: string,
+  lines: CartLine[],
+  menu: MenuService,
+  tableNumber?: string,
+): PricedCart {
   const priced = lines.map((line) => priceLine(line, menu));
   const subtotalSen = priced.reduce((total, line) => total + line.lineTotalSen, 0);
 
-  return {
+  const cart: PricedCart = {
     cartId,
     lines: priced,
     itemCount: priced.reduce((count, line) => count + line.quantity, 0),
@@ -90,6 +95,8 @@ export function priceCart(cartId: string, lines: CartLine[], menu: MenuService):
     totalSen: subtotalSen,
     total: formatSen(subtotalSen),
   };
+  if (tableNumber !== undefined) cart.tableNumber = tableNumber;
+  return cart;
 }
 
 function rejectUnknownGroups(item: MenuItemView, selections: OptionSelection[]): void {

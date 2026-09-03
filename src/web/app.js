@@ -15,12 +15,17 @@ const itemDialogBody = document.getElementById("item-dialog-body");
 const itemQtyEl = document.getElementById("item-qty");
 const itemPriceEl = document.getElementById("item-price");
 const itemAddButton = document.getElementById("item-add");
+const tableBadge = document.getElementById("table-badge");
 
 const CART_KEY = "fishchips.cartId";
+// The table survives checkout: the customer is still sitting there, so a second
+// order in the same session goes to the same table without another scan.
+const TABLE_KEY = "fishchips.tableNumber";
 
 const state = {
   menu: null,
   cart: null,
+  tableNumber: null,
   dialogItem: null,
   dialogQty: 1,
   pendingOrder: null,
@@ -92,6 +97,7 @@ async function ensureCart() {
   if (stored) {
     try {
       const { cart } = await api(`/api/carts/${stored}`);
+      setTable(cart.tableNumber ?? null);
       state.cart = cart;
       return cart;
     } catch (error) {
@@ -99,11 +105,36 @@ async function ensureCart() {
       if (error.status !== 404) console.warn(error);
     }
   }
-  const { cartId } = await api("/api/carts", { method: "POST" });
+  return startFreshCart(localStorage.getItem(TABLE_KEY));
+}
+
+/**
+ * Opens a brand-new cart, discarding whatever was stored.
+ *
+ * The table is a property of the *new* cart rather than something looked up
+ * later, so a cart is routable from the moment it exists.
+ */
+async function startFreshCart(table) {
+  localStorage.removeItem(CART_KEY);
+  const { cartId, tableNumber } = await api("/api/carts", {
+    method: "POST",
+    body: JSON.stringify(table ? { table } : {}),
+  });
   localStorage.setItem(CART_KEY, cartId);
+  setTable(tableNumber ?? null);
+
   const { cart } = await api(`/api/carts/${cartId}`);
   state.cart = cart;
+  renderCart();
   return cart;
+}
+
+function setTable(tableNumber) {
+  state.tableNumber = tableNumber;
+  if (tableNumber) localStorage.setItem(TABLE_KEY, tableNumber);
+  else localStorage.removeItem(TABLE_KEY);
+  tableBadge.textContent = tableNumber ? `Table ${tableNumber}` : "";
+  tableBadge.hidden = !tableNumber;
 }
 
 function setCart(cart) {
@@ -373,6 +404,12 @@ async function renderCheckoutView() {
 
     el("section", { class: "panel" }, [
       el("h2", { text: "Your order" }),
+      cart.tableNumber
+        ? el("div", { class: "summary-line" }, [
+            el("span", { class: "muted", text: "Table" }),
+            el("span", { text: cart.tableNumber }),
+          ])
+        : null,
       ...cart.lines.map((line) =>
         el("div", { class: "summary-line" }, [
           el("span", { text: `${line.quantity}× ${line.name}` }),
@@ -469,6 +506,9 @@ async function renderOrderView(orderId) {
       el("section", { class: "panel", style: "text-align:center" }, [
         el("p", { class: "muted", text: "Order" }),
         el("div", { class: "reference", text: order.reference }),
+        order.tableNumber
+          ? el("p", { class: "muted", style: "margin:6px 0 0", text: `Table ${order.tableNumber}` })
+          : null,
         el("div", { style: "margin-top:12px" }, [
           el("span", { class: `status ${order.paymentStatus}`, text: statusLabel(order.paymentStatus) }),
         ]),
@@ -643,6 +683,42 @@ async function renderSimulatedCheckout() {
   );
 }
 
+// ---------------------------------------------------------- QR table landing
+
+/**
+ * Where a table's QR points: `/order?table=5`.
+ *
+ * A scan always opens a brand-new session. The previous customer's cart at this
+ * table must never appear, so this discards the stored cart before asking for
+ * one — the table is a routing tag, not a shared "current order".
+ *
+ * The URL is then rewritten to "/" so that a refresh resumes *this* customer's
+ * cart rather than silently starting a third one. Only a real scan re-enters
+ * here, which is exactly when a fresh cart is wanted.
+ */
+async function renderTableLanding() {
+  const table = new URLSearchParams(location.search).get("table");
+
+  if (table) {
+    try {
+      await startFreshCart(table);
+    } catch (error) {
+      // A malformed table in a mis-printed QR should not strand the customer at
+      // a blank page; the counter flow still works.
+      console.warn(error);
+      mount(view, el("p", { class: "empty", text: `${error.message} Showing the menu instead.` }));
+      history.replaceState({}, "", "/");
+      cartToggle.hidden = false;
+      return;
+    }
+  }
+
+  // No table: this is the counter/takeaway entry point, so keep whatever cart
+  // the customer already had.
+  history.replaceState({}, "", "/");
+  await renderMenuView();
+}
+
 // ------------------------------------------------------------------ router
 
 function navigate(path) {
@@ -657,7 +733,8 @@ async function route() {
 
   try {
     const path = location.pathname;
-    if (path === "/simulated-checkout") await renderSimulatedCheckout();
+    if (path === "/order") await renderTableLanding();
+    else if (path === "/simulated-checkout") await renderSimulatedCheckout();
     else if (path.startsWith("/order/")) await renderOrderView(path.split("/")[2]);
     else if (path === "/checkout") await renderCheckoutView();
     else await renderMenuView();

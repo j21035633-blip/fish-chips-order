@@ -10,6 +10,7 @@ import {
 } from "./repository.js";
 import {
   OrderValidationError,
+  parseTableNumber,
   type Cart,
   type CartLine,
   type OptionSelection,
@@ -40,9 +41,10 @@ export class CartService {
     private readonly menu: MenuService = menuService,
   ) {}
 
-  async create(): Promise<Cart> {
+  async create(tableNumber?: string): Promise<Cart> {
     const now = new Date().toISOString();
     const cart: Cart = { id: randomUUID(), lines: [], createdAt: now, updatedAt: now };
+    if (tableNumber !== undefined) cart.tableNumber = parseTableNumber(tableNumber);
     await this.carts.save(cart);
     return cart;
   }
@@ -57,7 +59,7 @@ export class CartService {
 
   async price(cartId: string): Promise<PricedCart> {
     const cart = await this.get(cartId);
-    return priceCart(cart.id, cart.lines, this.menu);
+    return priceCart(cart.id, cart.lines, this.menu, cart.tableNumber);
   }
 
   /** Adds a line. Prices it first, so an invalid selection never reaches the cart. */
@@ -76,7 +78,7 @@ export class CartService {
     if (input.note !== undefined) line.note = input.note;
 
     const next = [...cart.lines, line];
-    const priced = priceCart(cart.id, next, this.menu);
+    const priced = priceCart(cart.id, next, this.menu, cart.tableNumber);
 
     await this.commit(cart, next);
     return priced;
@@ -93,7 +95,7 @@ export class CartService {
     }
 
     const next = cart.lines.map((line) => (line.lineId === lineId ? { ...line, quantity } : line));
-    const priced = priceCart(cart.id, next, this.menu);
+    const priced = priceCart(cart.id, next, this.menu, cart.tableNumber);
 
     await this.commit(cart, next);
     return priced;
@@ -106,7 +108,7 @@ export class CartService {
     }
 
     const next = cart.lines.filter((line) => line.lineId !== lineId);
-    const priced = priceCart(cart.id, next, this.menu);
+    const priced = priceCart(cart.id, next, this.menu, cart.tableNumber);
 
     await this.commit(cart, next);
     return priced;
@@ -115,7 +117,7 @@ export class CartService {
   async clear(cartId: string): Promise<PricedCart> {
     const cart = await this.get(cartId);
     await this.commit(cart, []);
-    return priceCart(cart.id, [], this.menu);
+    return priceCart(cart.id, [], this.menu, cart.tableNumber);
   }
 
   private async commit(cart: Cart, lines: CartLine[]): Promise<void> {
@@ -156,7 +158,7 @@ export class OrderService {
       throw new OrderValidationError("The cart is empty.", "empty_cart", { cartId: input.cartId });
     }
 
-    const priced = priceCart(cart.id, cart.lines, this.menu);
+    const priced = priceCart(cart.id, cart.lines, this.menu, cart.tableNumber);
     const now = new Date().toISOString();
 
     const order: Order = {
@@ -173,6 +175,9 @@ export class OrderService {
       updatedAt: now,
     };
     if (input.customerName !== undefined) order.customerName = input.customerName;
+    // The table rides along from the cart; there is no second place to set it,
+    // so a customer cannot check out "as" a table they never scanned.
+    if (cart.tableNumber !== undefined) order.tableNumber = cart.tableNumber;
 
     await this.orders.save(order);
     // The cart is spent. Emptying it stops a double-submit from creating a twin order.

@@ -52,12 +52,26 @@ export const startPaymentInput = z.object({
 
 export const orderRefInput = z.object({ orderId: z.string().min(1) });
 
+export const createCartInput = z.object({
+  table: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Table label from the QR the customer scanned. Omit for counter/takeaway."),
+});
+
 export function createOrderTools(app: Services = services) {
   return {
     /** Opens a cart. One per QR scan / browser session. */
-    async create_cart() {
-      const cart = await app.carts.create();
-      return { cartId: cart.id, text: "Cart's open — what can I get you?" };
+    async create_cart(rawInput: unknown = {}) {
+      const { table } = createCartInput.parse(rawInput ?? {});
+      const cart = await app.carts.create(table);
+      const where = cart.tableNumber === undefined ? "" : ` for table ${cart.tableNumber}`;
+      return {
+        cartId: cart.id,
+        tableNumber: cart.tableNumber,
+        text: `Cart's open${where} — what can I get you?`,
+      };
     },
 
     async add_to_cart(rawInput: unknown) {

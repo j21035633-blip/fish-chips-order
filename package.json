@@ -15,19 +15,25 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web-tests.json",
-    "providers": "tsx src/cli/providers.ts"
+    "providers": "tsx src/cli/providers.ts",
+    "qr": "tsx src/cli/qr.ts"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "mongodb": "^6.21.0",
+    "qrcode": "^1.5.4",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.5",
+    "@types/pngjs": "^6.0.5",
+    "@types/qrcode": "^1.5.6",
     "jsdom": "^29.1.1",
+    "jsqr": "^1.4.0",
     "mongodb-memory-server": "^10.4.3",
+    "pngjs": "^7.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"

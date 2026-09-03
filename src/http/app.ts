@@ -111,8 +111,8 @@ export function createServer(app: Services = services) {
   });
 
   // ------------------------------------------------------------------- carts
-  server.post("/api/carts", (_req, res) => {
-    void runAsync(res, () => tools.create_cart());
+  server.post("/api/carts", (req, res) => {
+    void runAsync(res, () => tools.create_cart(req.body ?? {}));
   });
 
   server.get("/api/carts/:cartId", (req, res) => {
@@ -182,7 +182,7 @@ export function createServer(app: Services = services) {
   if (webDir) {
     server.use(express.static(webDir));
     // The order page is client-rendered from the same document.
-    server.get(["/", "/checkout", "/order/:orderId", "/simulated-checkout"], (_req, res) => {
+    server.get(["/", "/checkout", "/order", "/order/:orderId", "/simulated-checkout"], (_req, res) => {
       res.sendFile(join(webDir, "index.html"));
     });
   }

@@ -267,6 +267,13 @@ short code is read out at the counter and two customers must never share one. Ca
 abandoned ones are reaped; orders never expire. `MongoStorage.db` is public so the game and voucher
 collections a later phase adds share the same connection.
 
+**A table is a routing tag, not a session.** `/order?table=5` always opens a *new*
+cart — a previous customer's order must never appear when the next one scans the same sticker — and
+then rewrites the URL to `/` so a refresh resumes that customer's own cart instead of starting a
+third. The table rides on the cart and is copied onto the order at confirmation; `confirm_order`
+takes no table of its own, so nobody can check out as a table they never scanned. `/order` with no
+`table` is the counter/takeaway entry point and keeps whatever cart is already there.
+
 **Orders carry no kitchen status.** Received / Cooking / Ready belongs to the POS and to a later
 phase; the only lifecycle modelled here is payment. A test asserts the field's absence.
 
@@ -283,6 +290,19 @@ phase; the only lifecycle modelled here is payment. A test asserts the field's a
   out doesn't mark the Trawler Platter unavailable. Worth fixing when the POS feed lands.
 - **No migration for orders placed before persistence landed.** Anything created while the app was
   running in memory is gone; there was nowhere to read it from.
+
+## Table QR codes
+
+```
+npm run qr -- --tables 1-12
+npm run qr -- --tables 1-8,PATIO-1 --base-url https://order.example.com --out qr
+```
+
+Writes a scannable PNG per table plus an `index.html` print sheet. Codes use error-correction level
+`Q`, which tolerates a smudged sticker. A script rather than an admin page: staff auth is a later
+phase, and an unauthenticated route that mints table codes is not something to leave on a public
+deployment. A test decodes the generated PNGs with a real QR reader and compares them against the
+URL they should carry.
 
 ## Not built yet
 

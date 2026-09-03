@@ -26,7 +26,10 @@ export function renderCart(cart: PricedCart): string {
 /** The full read-back before checkout. */
 export function renderOrder(order: Order): string {
   const lines = order.lines.map((line) => `- ${renderLine(line)}`);
-  const head = `Order ${order.reference}`;
+  // The table is the first thing the counter needs; keep it on the head line.
+  const head = order.tableNumber === undefined
+    ? `Order ${order.reference}`
+    : `Order ${order.reference} · Table ${order.tableNumber}`;
   const status = order.paymentStatus === "paid" ? "Paid" : `Payment ${order.paymentStatus}`;
 
   return `${head}\n${lines.join("\n")}\n\nTotal: ${order.total}\n${status}`;

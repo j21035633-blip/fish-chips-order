@@ -70,6 +70,16 @@ async function bootPage(path = "/") {
   await settle();
 }
 
+/** Boots the page again without clearing storage — a second scan, same phone. */
+async function bootPageKeepingStorage(path: string) {
+  document.documentElement.innerHTML = readFileSync(`${webDir}/index.html`, "utf8")
+    .replace(/^[\s\S]*?<body>/, "")
+    .replace(/<\/body>[\s\S]*$/, "");
+  window.history.replaceState({}, "", path);
+  await import(/* @vite-ignore */ `${appUrl}?cache=${Math.random()}`);
+  await settle();
+}
+
 /** Lets the page's chained fetches resolve. */
 async function settle(rounds = 12) {
   for (let index = 0; index < rounds; index += 1) {
@@ -271,6 +281,95 @@ describe("customer page", async () => {
     expect(view.textContent).toContain("Waiting for payment to confirm");
     expect(view.textContent).toContain("Complete test payment");
     expect(view.textContent).not.toContain("How would you like to pay?");
+  });
+});
+
+describe("QR table landing", () => {
+  // Session & Sales Behavior: "when a new customer scans the same table's QR,
+  // they always get an empty cart. A previous customer's order must never
+  // appear on a new session."
+  it("discards the previous customer's cart on a scan", async () => {
+    // Customer one: scans table 7 and puts something in the cart.
+    await bootPage("/order?table=7");
+    const firstCartId = localStorage.getItem("fishchips.cartId");
+    expect(firstCartId).toBeTruthy();
+
+    const dory = [...document.querySelectorAll("button.item")].find((item) =>
+      item.textContent?.includes("Classic Battered Dory"),
+    ) as HTMLButtonElement;
+    dory.click();
+    await settle(2);
+    (document.getElementById("item-add") as HTMLButtonElement).click();
+    await settle();
+    expect(document.getElementById("cart-count")!.textContent).toBe("1");
+
+    // Customer two scans the same sticker. Same table, different person.
+    await bootPageKeepingStorage("/order?table=7");
+
+    expect(localStorage.getItem("fishchips.cartId")).not.toBe(firstCartId);
+    expect(document.getElementById("cart-count")!.textContent).toBe("0");
+    expect(document.getElementById("table-badge")!.textContent).toBe("Table 7");
+  });
+
+  it("shows the table and rewrites the URL so a refresh is not a new scan", async () => {
+    await bootPage("/order?table=A3");
+
+    expect(document.getElementById("table-badge")!.hidden).toBe(false);
+    expect(document.getElementById("table-badge")!.textContent).toBe("Table A3");
+    // Landing rewrites to "/", so reloading resumes this customer's cart
+    // instead of silently opening a third one.
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.search).toBe("");
+  });
+
+  it("keeps the existing cart when there is no table (counter flow)", async () => {
+    await bootPage("/");
+    const dory = [...document.querySelectorAll("button.item")].find((item) =>
+      item.textContent?.includes("Classic Battered Dory"),
+    ) as HTMLButtonElement;
+    dory.click();
+    await settle(2);
+    (document.getElementById("item-add") as HTMLButtonElement).click();
+    await settle();
+
+    const cartId = localStorage.getItem("fishchips.cartId");
+
+    // `/order` with no table is the counter entry point: fall through to the
+    // generic flow rather than wiping what the customer already chose.
+    await bootPageKeepingStorage("/order");
+
+    expect(localStorage.getItem("fishchips.cartId")).toBe(cartId);
+    expect(document.getElementById("cart-count")!.textContent).toBe("1");
+    expect(document.getElementById("table-badge")!.hidden).toBe(true);
+  });
+
+  it("carries the table onto the order", async () => {
+    await bootPage("/order?table=12");
+    const dory = [...document.querySelectorAll("button.item")].find((item) =>
+      item.textContent?.includes("Classic Battered Dory"),
+    ) as HTMLButtonElement;
+    dory.click();
+    await settle(2);
+    (document.getElementById("item-add") as HTMLButtonElement).click();
+    await settle();
+
+    const cartId = localStorage.getItem("fishchips.cartId")!;
+    const response = await fetch(`${base}/api/orders`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cartId }),
+    });
+    const { order } = (await response.json()) as { order: { tableNumber?: string } };
+
+    expect(order.tableNumber).toBe("12");
+  });
+
+  it("refuses a mis-printed table without stranding the customer", async () => {
+    await bootPage("/order?table=..%2Fadmin");
+
+    // The menu still renders; the counter flow is not blocked by a bad sticker.
+    expect(document.getElementById("view")!.textContent).toContain("table");
+    expect(window.location.pathname).toBe("/");
   });
 });
 
