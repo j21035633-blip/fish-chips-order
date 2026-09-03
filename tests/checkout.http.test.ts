@@ -76,6 +76,12 @@ async function post(path: string, body?: unknown): Promise<Response> {
   });
 }
 
+/** Opens a cart, optionally for a table, and returns its id. */
+async function openCart(body?: { table?: string }): Promise<string> {
+  const { cartId } = await json(await post("/api/carts", body ?? {}));
+  return cartId as string;
+}
+
 /** Walks the happy path up to a pending order. */
 async function placeOrder(method: "card" | "ewallet" = "card") {
   const { cartId } = await json(await post("/api/carts"));
@@ -375,6 +381,65 @@ describe("checkout flow", async () => {
     const bad = await post("/api/carts", { table: "../admin" });
     expect(bad.status).toBe(400);
     await expect(bad.json()).resolves.toMatchObject({ error: "invalid_table_number" });
+  });
+
+  it("serves the staff dashboard only at its own path", async () => {
+    const dashboard = await fetch(`${base}/staff`);
+    expect(dashboard.status).toBe(200);
+    expect(dashboard.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    await expect(dashboard.text()).resolves.toContain("Kitchen &amp; counter");
+
+    // It lives outside the customer web root, so express.static cannot serve it
+    // under its own filename and the configurable path actually means something.
+    expect((await fetch(`${base}/staff.html`)).status).toBe(404);
+    expect((await fetch(`${base}/staff-web/staff.html`)).status).toBe(404);
+  });
+
+  it("reports the board and the day's takings", async () => {
+    const cartId = await openCart({ table: "6" });
+    await post(`/api/carts/${cartId}/lines`, { itemId: "fish-dory-classic", quantity: 2 });
+    const placed = (await json(await post("/api/orders", { cartId }))) as { order: { id: string } };
+    const orderId = placed.order.id;
+
+    type Overview = {
+      orders: { id: string; lines: unknown[]; total: string }[];
+      sales: { count: number; timeZone: string };
+    };
+    const before = (await json(await fetch(`${base}/api/staff/overview`))) as Overview;
+    expect(before.orders.some((order) => order.id === orderId)).toBe(true);
+    const ticket = before.orders.find((order) => order.id === orderId)!;
+    expect(ticket).toMatchObject({ tableNumber: "6", kitchenStatus: "received", paymentStatus: "pending" });
+    expect(ticket.lines).toHaveLength(1);
+    expect(ticket.total).toBe("RM33.80");
+
+    // Pending orders are on the board but not in the takings.
+    const countBefore = before.sales.count;
+
+    await post(`/api/orders/${orderId}/payment`, { method: "card" });
+    await post(`/api/payments/simulate/${orderId}`, {});
+
+    const after = (await json(await fetch(`${base}/api/staff/overview`))) as Overview;
+    expect(after.sales.count).toBe(countBefore + 1);
+    expect(after.sales.timeZone).toBeTruthy();
+  });
+
+  it("advances an order across the board", async () => {
+    const cartId = await openCart({ table: "7" });
+    await post(`/api/carts/${cartId}/lines`, { itemId: "fish-dory-classic" });
+    const placed = (await json(await post("/api/orders", { cartId }))) as { order: { id: string } };
+    const orderId = placed.order.id;
+
+    const cooking = await post(`/api/staff/orders/${orderId}/status`, { status: "cooking" });
+    await expect(cooking.json()).resolves.toMatchObject({ order: { kitchenStatus: "cooking" }, changed: true });
+
+    const ready = await post(`/api/staff/orders/${orderId}/status`, { status: "ready" });
+    await expect(ready.json()).resolves.toMatchObject({ order: { kitchenStatus: "ready" } });
+
+    const bad = await post(`/api/staff/orders/${orderId}/status`, { status: "incinerated" });
+    expect(bad.status).toBe(400);
+
+    const missing = await post("/api/staff/orders/nope/status", { status: "cooking" });
+    expect(missing.status).toBe(404);
   });
 
   it("serves the page assets", async () => {

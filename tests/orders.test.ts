@@ -340,9 +340,11 @@ describe("orders", async () => {
     ).rejects.toThrow(OrderValidationError);
   });
 
-  it("does not model kitchen status", async () => {
+  it("starts on the kitchen board, and models nothing else", async () => {
     const order = await orders.confirm({ cartId: await cartWithDory() });
-    expect(order).not.toHaveProperty("kitchenStatus");
+    // Kitchen status arrived with the staff dashboard; a generic `status` still
+    // does not exist, because payment and kitchen progress are separate fields.
+    expect(order.kitchenStatus).toBe("received");
     expect(order).not.toHaveProperty("status");
   });
 });

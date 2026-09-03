@@ -125,6 +125,7 @@ export class MongoStorage {
     await this.db.collection("orders").createIndex({ reference: 1 }, { unique: true });
     await this.db.collection("orders").createIndex({ "payment.providerPaymentId": 1 });
     await this.db.collection("orders").createIndex({ createdAt: -1 });
+    await this.db.collection("orders").createIndex({ paymentStatus: 1, "payment.paidAt": 1 });
   }
 }
 
@@ -172,6 +173,26 @@ class MongoOrderRepository implements OrderRepository {
 
   async all(): Promise<Order[]> {
     const docs = await this.orders().find({}).sort({ createdAt: -1 }).toArray();
+    return docs.map(toOrder);
+  }
+
+  async createdSince(iso: string): Promise<Order[]> {
+    // ISO-8601 UTC strings sort lexicographically, so a string range is a time
+    // range and the createdAt index serves it.
+    const docs = await this.orders()
+      .find({ createdAt: { $gte: iso } } as Filter<StoredOrder>)
+      .sort({ createdAt: -1 })
+      .toArray();
+    return docs.map(toOrder);
+  }
+
+  async paidBetween(startIso: string, endIso: string): Promise<Order[]> {
+    const docs = await this.orders()
+      .find({
+        paymentStatus: "paid",
+        "payment.paidAt": { $gte: startIso, $lt: endIso },
+      } as Filter<StoredOrder>)
+      .toArray();
     return docs.map(toOrder);
   }
 

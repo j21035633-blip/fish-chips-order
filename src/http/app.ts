@@ -3,10 +3,11 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import express, { type Request, type Response } from "express";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 
 import { services, type Services } from "../app/container.js";
-import { OrderValidationError, PAYMENT_METHODS, PAYMENT_PROVIDERS } from "../orders/types.js";
+import { config } from "../config/env.js";
+import { KITCHEN_STATUSES, OrderValidationError, PAYMENT_METHODS, PAYMENT_PROVIDERS } from "../orders/types.js";
 import { PaymentProviderError } from "../payments/types.js";
 import { menuTools } from "../tools/menuTools.js";
 import { createOrderTools } from "../tools/orderTools.js";
@@ -165,6 +166,31 @@ export function createServer(app: Services = services) {
     });
   });
 
+  // --------------------------------------------------------------- staff view
+  /**
+   * The kitchen/counter board.
+   *
+   * No login yet, so the only thing keeping customers off it is the path, which
+   * `STAFF_DASHBOARD_PATH` should override on any public deployment. Be honest
+   * about the limit of that: the data routes below are as open as every other
+   * route here, and obscurity only hides the page, not the API. Real staff auth
+   * is a later phase.
+   */
+  server.get("/api/staff/overview", (_req, res) => {
+    void runAsync(res, async () => {
+      const [orders, sales] = await Promise.all([app.orders.feed(), app.orders.dailySales()]);
+      return { orders, sales };
+    });
+  });
+
+  server.post("/api/staff/orders/:orderId/status", (req, res) => {
+    void runAsync(res, async () => {
+      const { status } = staffStatusInput.parse(req.body ?? {});
+      const result = await app.orders.setKitchenStatus(req.params.orderId, status);
+      return { order: result.order, changed: result.changed };
+    });
+  });
+
   // ------------------------------------------------------------- agent tools
   const toolRegistry = { ...menuTools, ...tools };
 
@@ -187,6 +213,19 @@ export function createServer(app: Services = services) {
     });
   }
 
+  // The dashboard is served from its own directory, never through
+  // `express.static`: a file under the customer's web root stays reachable at
+  // its own filename whatever path the dashboard is mounted at.
+  const staffFile = resolveStaffPage();
+  if (staffFile) {
+    server.get(config.staffDashboardPath, (_req, res) => {
+      // Belt and braces on top of the meta tag — a crawler that reaches this
+      // page should not put the kitchen board in a search index.
+      res.setHeader("x-robots-tag", "noindex, nofollow");
+      res.sendFile(staffFile);
+    });
+  }
+
   return server;
 }
 
@@ -205,6 +244,23 @@ function resolveWebDir(): string | undefined {
 
   return candidates.find((candidate) => existsSync(join(candidate, "index.html")));
 }
+
+/** Same resolution dance as `resolveWebDir`, for the staff page's own directory. */
+function resolveStaffPage(): string | undefined {
+  const candidates: string[] = [];
+
+  try {
+    candidates.push(fileURLToPath(new URL("../staff-web/staff.html", import.meta.url)));
+    candidates.push(fileURLToPath(new URL("../../src/staff-web/staff.html", import.meta.url)));
+  } catch {
+    // As in resolveWebDir: import.meta.url is not always a file: URL.
+  }
+  candidates.push(resolve(process.cwd(), "src/staff-web/staff.html"));
+
+  return candidates.find((candidate) => existsSync(candidate));
+}
+
+const staffStatusInput = z.object({ status: z.enum(KITCHEN_STATUSES) });
 
 function isProvider(value: string): value is (typeof PAYMENT_PROVIDERS)[number] {
   return (PAYMENT_PROVIDERS as readonly string[]).includes(value);

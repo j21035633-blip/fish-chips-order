@@ -226,6 +226,7 @@ SCREAMING_SNAKE_CASE, no spaces around `=`. See `.env.example`; all provider val
 
 ```
 PORT, PUBLIC_BASE_URL
+BUSINESS_TIMEZONE, STAFF_DASHBOARD_PATH
 MONGODB_URI, MONGODB_DB
 STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 REVENUE_MONSTER_API_KEY, REVENUE_MONSTER_CLIENT_ID, REVENUE_MONSTER_CLIENT_SECRET,
@@ -274,8 +275,15 @@ third. The table rides on the cart and is copied onto the order at confirmation;
 takes no table of its own, so nobody can check out as a table they never scanned. `/order` with no
 `table` is the counter/takeaway entry point and keeps whatever cart is already there.
 
-**Orders carry no kitchen status.** Received / Cooking / Ready belongs to the POS and to a later
-phase; the only lifecycle modelled here is payment. A test asserts the field's absence.
+**Payment and kitchen progress are separate fields.** `paymentStatus` moves only on a provider
+webhook; `kitchenStatus` (Received / Cooking / Ready) moves only from the staff board. Money and
+food travel independently, and the board shows both so the counter can decide whether to cook an
+order that has not paid yet. There is still no generic `status`.
+
+**The daily total is keyed on when the money landed**, not when the order was placed: an order taken
+at 23:55 and paid at 00:05 is tomorrow's takings. Business days are calendar days in
+`BUSINESS_TIMEZONE`, compared as `YYYY-MM-DD` strings, with the UTC bounds found by search rather
+than by assuming an offset — the offset for a zone is itself a function of the date.
 
 ## Known gaps
 
@@ -290,6 +298,27 @@ phase; the only lifecycle modelled here is payment. A test asserts the field's a
   out doesn't mark the Trawler Platter unavailable. Worth fixing when the POS feed lands.
 - **No migration for orders placed before persistence landed.** Anything created while the app was
   running in memory is gone; there was nowhere to read it from.
+
+## Staff dashboard
+
+Kitchen and counter board at `STAFF_DASHBOARD_PATH` (default `/staff`): today's orders in three
+columns, each ticket showing table, items, total, payment status and kitchen status, with buttons to
+move it along. Header carries the running **Today's Sales Total** — paid orders only, with a count.
+
+Updates by short polling every 2s rather than a websocket: one shop, one process, and a dropped
+socket on a kitchen tablet that silently stops updating is worse than a request every two seconds.
+The header shows `not updating` if the feed stalls, so a frozen board is visible rather than quietly
+wrong.
+
+**It has no login.** That is a later phase. Two things follow, and neither is a substitute for auth:
+
+- The page lives in `src/staff-web/`, outside the customer web root, so `express.static` cannot
+  serve it under its own filename and `STAFF_DASHBOARD_PATH` genuinely controls where it is. Set
+  that to something unguessable on any public deployment, and do not link it from anywhere.
+- It is served with `X-Robots-Tag: noindex, nofollow` and a matching meta tag.
+
+The data routes it uses — `GET /api/staff/overview` and `POST /api/staff/orders/:id/status` — are as
+open as every other route in this app. Path obscurity hides the page, not the API.
 
 ## Table QR codes
 
@@ -307,8 +336,9 @@ URL they should carry.
 ## Not built yet
 
 Stages 4–6 of the skill: bonus chances (`register_account`, `submit_review_proof`,
-`submit_social_proof`, `get_chances`), the fishing mini-game (`play_fishing_game`), and kitchen
-status tracking (`get_order_status`), plus the POS adapter.
+`submit_social_proof`, `get_chances`), the fishing mini-game (`play_fishing_game`), and the
+customer-facing side of status tracking (`get_order_status` — staff can set the status, but the
+customer's order page does not show it yet), plus the POS adapter and staff auth.
 
 Two things in the skill are still TBD and need a decision before the phases that depend on them:
 the spend threshold for the bonus chance (written as "e.g. RM30+"), and the fishing game's win rate

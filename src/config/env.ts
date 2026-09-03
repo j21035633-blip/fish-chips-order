@@ -60,6 +60,14 @@ export interface MongoConfig {
 export interface AppConfig {
   port: number;
   publicBaseUrl: string;
+  /** Which day "today's sales" means. The shop's zone, not the server's. */
+  businessTimeZone: string;
+  /**
+   * Where the staff dashboard is mounted. Overridable because the dashboard has
+   * no login yet: on a public deployment, set this to something unguessable
+   * rather than leaving it at the default a customer might try.
+   */
+  staffDashboardPath: string;
   mongo: MongoConfig;
   stripe: StripeConfig;
   revenueMonster: RevenueMonsterConfig;
@@ -69,6 +77,8 @@ export function loadConfig(): AppConfig {
   return {
     port: int("PORT", 3000),
     publicBaseUrl: str("PUBLIC_BASE_URL") ?? `http://localhost:${int("PORT", 3000)}`,
+    businessTimeZone: str("BUSINESS_TIMEZONE") ?? "Asia/Kuala_Lumpur",
+    staffDashboardPath: normalisePath(str("STAFF_DASHBOARD_PATH") ?? "/staff"),
     mongo: {
       // Railway's own MongoDB service publishes MONGO_URL; accept it so the
       // variable that is already there works without being renamed.
@@ -96,6 +106,12 @@ export function loadConfig(): AppConfig {
  * A placeholder value copied straight out of .env.example is worse than nothing —
  * it makes the adapter think it is live and then fail against the provider.
  */
+/** Leading slash, no trailing one, so route building stays predictable. */
+function normalisePath(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
 export function isPlaceholder(value: string | undefined): boolean {
   if (value === undefined) return true;
   return value === "xxx" || value.endsWith("_xxx");

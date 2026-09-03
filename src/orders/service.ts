@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 
+import { config } from "../config/env.js";
 import { menuService, type MenuService } from "../menu/service.js";
+import { formatSen } from "../menu/money.js";
+import { businessDay, businessDayRange } from "./businessDay.js";
 import { priceCart } from "./pricing.js";
 import {
   InMemoryCartRepository,
@@ -9,11 +12,13 @@ import {
   type OrderRepository,
 } from "./repository.js";
 import {
+  KITCHEN_STATUSES,
   OrderValidationError,
   parseTableNumber,
   type Cart,
   type CartLine,
   type OptionSelection,
+  type KitchenStatus,
   type Order,
   type OrderPayment,
   type PricedCart,
@@ -132,6 +137,15 @@ export interface ConfirmOrderInput {
   customerName?: string | undefined;
 }
 
+export interface DailySales {
+  /** `YYYY-MM-DD` in the shop's own timezone. */
+  day: string;
+  timeZone: string;
+  count: number;
+  totalSen: number;
+  total: string;
+}
+
 export interface MarkPaidResult {
   order: Order;
   /** False when the order was already paid — a redelivered webhook, not a second payment. */
@@ -171,6 +185,9 @@ export class OrderService {
       subtotal: priced.subtotal,
       total: priced.total,
       paymentStatus: "pending",
+      // The kitchen has the ticket the moment the order exists; whether to cook
+      // it before it is paid is the counter's call, not this service's.
+      kitchenStatus: "received",
       createdAt: now,
       updatedAt: now,
     };
@@ -251,6 +268,51 @@ export class OrderService {
     }
     await this.orders.save(order);
     return { order, changed: true };
+  }
+
+  /**
+   * Moves an order along the kitchen board.
+   *
+   * Any of the three is accepted rather than forward-only: a mis-tap on a busy
+   * pass needs to be undoable, and there is no auth to make an audit trail of
+   * anyway. Idempotent, so a double-tap is not an error.
+   */
+  async setKitchenStatus(orderId: string, status: KitchenStatus): Promise<MarkPaidResult> {
+    if (!(KITCHEN_STATUSES as readonly string[]).includes(status)) {
+      throw new OrderValidationError(`"${status}" is not a kitchen status.`, "invalid_kitchen_status", {
+        orderId,
+        status,
+      });
+    }
+
+    const order = await this.get(orderId);
+    if (order.kitchenStatus === status) return { order, changed: false };
+
+    order.kitchenStatus = status;
+    order.updatedAt = new Date().toISOString();
+    await this.orders.save(order);
+    return { order, changed: true };
+  }
+
+  /** Today's orders, newest first — what the staff board shows. */
+  async feed(timeZone: string = config.businessTimeZone): Promise<Order[]> {
+    const { start } = businessDayRange(businessDay(new Date(), timeZone), timeZone);
+    return this.orders.createdSince(start);
+  }
+
+  /**
+   * Takings for the current business day.
+   *
+   * Counts an order once its payment settled, which is the only status the
+   * webhook can move it to — so this cannot drift from what was actually paid.
+   */
+  async dailySales(timeZone: string = config.businessTimeZone): Promise<DailySales> {
+    const day = businessDay(new Date(), timeZone);
+    const { start, end } = businessDayRange(day, timeZone);
+    const paid = await this.orders.paidBetween(start, end);
+
+    const totalSen = paid.reduce((sum, order) => sum + order.totalSen, 0);
+    return { day, timeZone, count: paid.length, totalSen, total: formatSen(totalSen) };
   }
 
   /** "AB-4821" — short enough to read out at the counter. */

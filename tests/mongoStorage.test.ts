@@ -178,6 +178,7 @@ describe("MongoStorage", () => {
       subtotal: "RM0.00",
       total: "RM0.00",
       paymentStatus: "pending",
+      kitchenStatus: "received",
       createdAt: now,
       updatedAt: now,
     });
@@ -217,6 +218,7 @@ describe("MongoStorage", () => {
         subtotal: "RM0.00",
         total: "RM0.00",
         paymentStatus: "pending",
+        kitchenStatus: "received",
         createdAt: now,
         updatedAt: now,
       });
@@ -226,6 +228,36 @@ describe("MongoStorage", () => {
       await late.stop();
     }
   }, 120_000);
+
+  it("serves the staff board's queries", async () => {
+    const db = "staff_queries";
+    const { storage, carts, orders } = await boot(db);
+    const repository = storage.orders();
+
+    const cart = await carts.create("6");
+    await carts.addLine(cart.id, { itemId: "fish-dory-classic" });
+    const order = await orders.confirm({ cartId: cart.id });
+    await orders.attachPayment(order.id, aPayment("cs_staff"));
+    const paid = (await orders.markPaid(order.id)).order;
+    const paidAt = paid.payment!.paidAt!;
+
+    // createdSince: the feed's window.
+    expect((await repository.createdSince("2000-01-01T00:00:00.000Z")).map((o) => o.id)).toContain(order.id);
+    expect(await repository.createdSince("2999-01-01T00:00:00.000Z")).toHaveLength(0);
+
+    // paidBetween: half-open, keyed on when the money landed.
+    const justAfter = new Date(new Date(paidAt).getTime() + 1).toISOString();
+    expect((await repository.paidBetween(paidAt, justAfter)).map((o) => o.id)).toEqual([order.id]);
+    expect(await repository.paidBetween(justAfter, "2999-01-01T00:00:00.000Z")).toHaveLength(0);
+    // The lower bound is inclusive and the upper exclusive.
+    expect(await repository.paidBetween("2000-01-01T00:00:00.000Z", paidAt)).toHaveLength(0);
+
+    // Kitchen status survives the round trip.
+    await orders.setKitchenStatus(order.id, "cooking");
+    expect((await repository.get(order.id))?.kitchenStatus).toBe("cooking");
+
+    await storage.close();
+  });
 
   it("deletes a cart", async () => {
     const db = "cart_delete";

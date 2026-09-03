@@ -16,6 +16,13 @@ export const PAYMENT_METHODS = ["card", "ewallet"] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
 export const PAYMENT_PROVIDERS = ["stripe", "revenue_monster"] as const;
+
+/**
+ * How far along the kitchen is. Separate from `paymentStatus` on purpose: money
+ * and food move independently, and the counter needs to see both at once.
+ */
+export const KITCHEN_STATUSES = ["received", "cooking", "ready"] as const;
+export type KitchenStatus = (typeof KITCHEN_STATUSES)[number];
 export type PaymentProvider = (typeof PAYMENT_PROVIDERS)[number];
 
 /** A customer's choice within one option group, before pricing. */
@@ -145,6 +152,8 @@ export interface Order {
   customerName?: string;
   /** Carried from the cart, so the kitchen knows where the food goes. */
   tableNumber?: string;
+  /** Kitchen progress. Every order starts `received`; staff move it on. */
+  kitchenStatus: KitchenStatus;
   createdAt: string;
   updatedAt: string;
 }

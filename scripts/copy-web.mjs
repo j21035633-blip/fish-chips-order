@@ -3,13 +3,17 @@
 // deploy that has no src/ directory.
 import { cpSync, existsSync } from "node:fs";
 
-const from = "src/web";
-const to = "dist/web";
+for (const [from, to] of [
+  ["src/web", "dist/web"],
+  // The staff page is kept out of the customer web root so it is only ever
+  // reachable at the path the dashboard is mounted at.
+  ["src/staff-web", "dist/staff-web"],
+]) {
+  if (!existsSync(from)) {
+    console.error(`copy-web: ${from} not found`);
+    process.exit(1);
+  }
 
-if (!existsSync(from)) {
-  console.error(`copy-web: ${from} not found`);
-  process.exit(1);
+  cpSync(from, to, { recursive: true });
+  console.log(`copy-web: ${from} -> ${to}`);
 }
-
-cpSync(from, to, { recursive: true });
-console.log(`copy-web: ${from} -> ${to}`);

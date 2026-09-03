@@ -26,6 +26,15 @@ export interface OrderRepository {
   findByProviderPaymentId(providerPaymentId: string): Promise<Order | undefined>;
   save(order: Order): Promise<void>;
   all(): Promise<Order[]>;
+  /** Orders placed at or after `iso`, newest first. The staff feed. */
+  createdSince(iso: string): Promise<Order[]>;
+  /**
+   * Orders whose payment settled in `[startIso, endIso)`, for the daily total.
+   *
+   * Keyed on when the money landed, not when the order was placed: an order
+   * taken at 23:55 and paid at 00:05 is tomorrow's takings.
+   */
+  paidBetween(startIso: string, endIso: string): Promise<Order[]>;
 }
 
 function copy<T>(value: T): T {
@@ -72,6 +81,20 @@ export class InMemoryOrderRepository implements OrderRepository {
 
   async all(): Promise<Order[]> {
     return [...this.orders.values()].map(copy);
+  }
+
+  async createdSince(iso: string): Promise<Order[]> {
+    return (await this.all())
+      .filter((order) => order.createdAt >= iso)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  async paidBetween(startIso: string, endIso: string): Promise<Order[]> {
+    return (await this.all()).filter((order) => {
+      if (order.paymentStatus !== "paid") return false;
+      const settled = order.payment?.paidAt ?? order.updatedAt;
+      return settled >= startIso && settled < endIso;
+    });
   }
 
   private find(match: (order: Order) => boolean): Order | undefined {
