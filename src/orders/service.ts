@@ -40,29 +40,29 @@ export class CartService {
     private readonly menu: MenuService = menuService,
   ) {}
 
-  create(): Cart {
+  async create(): Promise<Cart> {
     const now = new Date().toISOString();
     const cart: Cart = { id: randomUUID(), lines: [], createdAt: now, updatedAt: now };
-    this.carts.save(cart);
+    await this.carts.save(cart);
     return cart;
   }
 
-  get(cartId: string): Cart {
-    const cart = this.carts.get(cartId);
+  async get(cartId: string): Promise<Cart> {
+    const cart = await this.carts.get(cartId);
     if (!cart) {
       throw new OrderValidationError(`No cart "${cartId}".`, "unknown_cart", { cartId });
     }
     return cart;
   }
 
-  price(cartId: string): PricedCart {
-    const cart = this.get(cartId);
+  async price(cartId: string): Promise<PricedCart> {
+    const cart = await this.get(cartId);
     return priceCart(cart.id, cart.lines, this.menu);
   }
 
   /** Adds a line. Prices it first, so an invalid selection never reaches the cart. */
-  addLine(cartId: string, input: AddLineInput): PricedCart {
-    const cart = this.get(cartId);
+  async addLine(cartId: string, input: AddLineInput): Promise<PricedCart> {
+    const cart = await this.get(cartId);
     if (cart.lines.length >= MAX_CART_LINES) {
       throw new OrderValidationError(`A cart holds at most ${MAX_CART_LINES} lines.`, "cart_full", { cartId });
     }
@@ -78,13 +78,13 @@ export class CartService {
     const next = [...cart.lines, line];
     const priced = priceCart(cart.id, next, this.menu);
 
-    this.commit(cart, next);
+    await this.commit(cart, next);
     return priced;
   }
 
   /** Changes a line's quantity. Quantity 0 removes it, which is what a customer means. */
-  updateQuantity(cartId: string, lineId: string, quantity: number): PricedCart {
-    const cart = this.get(cartId);
+  async updateQuantity(cartId: string, lineId: string, quantity: number): Promise<PricedCart> {
+    const cart = await this.get(cartId);
     if (quantity === 0) return this.removeLine(cartId, lineId);
 
     const existing = cart.lines.find((line) => line.lineId === lineId);
@@ -95,12 +95,12 @@ export class CartService {
     const next = cart.lines.map((line) => (line.lineId === lineId ? { ...line, quantity } : line));
     const priced = priceCart(cart.id, next, this.menu);
 
-    this.commit(cart, next);
+    await this.commit(cart, next);
     return priced;
   }
 
-  removeLine(cartId: string, lineId: string): PricedCart {
-    const cart = this.get(cartId);
+  async removeLine(cartId: string, lineId: string): Promise<PricedCart> {
+    const cart = await this.get(cartId);
     if (!cart.lines.some((line) => line.lineId === lineId)) {
       throw new OrderValidationError(`No line "${lineId}" in this cart.`, "unknown_line", { cartId, lineId });
     }
@@ -108,20 +108,20 @@ export class CartService {
     const next = cart.lines.filter((line) => line.lineId !== lineId);
     const priced = priceCart(cart.id, next, this.menu);
 
-    this.commit(cart, next);
+    await this.commit(cart, next);
     return priced;
   }
 
-  clear(cartId: string): PricedCart {
-    const cart = this.get(cartId);
-    this.commit(cart, []);
+  async clear(cartId: string): Promise<PricedCart> {
+    const cart = await this.get(cartId);
+    await this.commit(cart, []);
     return priceCart(cart.id, [], this.menu);
   }
 
-  private commit(cart: Cart, lines: CartLine[]): void {
+  private async commit(cart: Cart, lines: CartLine[]): Promise<void> {
     cart.lines = lines;
     cart.updatedAt = new Date().toISOString();
-    this.carts.save(cart);
+    await this.carts.save(cart);
   }
 }
 
@@ -150,8 +150,8 @@ export class OrderService {
   ) {}
 
   /** Re-prices the cart at confirmation time, so a menu change mid-session cannot be exploited. */
-  confirm(input: ConfirmOrderInput): Order {
-    const cart = this.carts.get(input.cartId);
+  async confirm(input: ConfirmOrderInput): Promise<Order> {
+    const cart = await this.carts.get(input.cartId);
     if (cart.lines.length === 0) {
       throw new OrderValidationError("The cart is empty.", "empty_cart", { cartId: input.cartId });
     }
@@ -161,7 +161,7 @@ export class OrderService {
 
     const order: Order = {
       id: randomUUID(),
-      reference: this.nextReference(),
+      reference: await this.nextReference(),
       lines: priced.lines,
       itemCount: priced.itemCount,
       subtotalSen: priced.subtotalSen,
@@ -174,32 +174,32 @@ export class OrderService {
     };
     if (input.customerName !== undefined) order.customerName = input.customerName;
 
-    this.orders.save(order);
+    await this.orders.save(order);
     // The cart is spent. Emptying it stops a double-submit from creating a twin order.
-    this.carts.clear(cart.id);
+    await this.carts.clear(cart.id);
 
     return order;
   }
 
-  get(orderId: string): Order {
-    const order = this.orders.get(orderId);
+  async get(orderId: string): Promise<Order> {
+    const order = await this.orders.get(orderId);
     if (!order) {
       throw new OrderValidationError(`No order "${orderId}".`, "unknown_order", { orderId });
     }
     return order;
   }
 
-  findByReference(reference: string): Order | undefined {
+  async findByReference(reference: string): Promise<Order | undefined> {
     return this.orders.findByReference(reference);
   }
 
-  findByProviderPaymentId(providerPaymentId: string): Order | undefined {
+  async findByProviderPaymentId(providerPaymentId: string): Promise<Order | undefined> {
     return this.orders.findByProviderPaymentId(providerPaymentId);
   }
 
   /** Records the payment attempt returned by an adapter. */
-  attachPayment(orderId: string, payment: OrderPayment): Order {
-    const order = this.get(orderId);
+  async attachPayment(orderId: string, payment: OrderPayment): Promise<Order> {
+    const order = await this.get(orderId);
     if (order.paymentStatus === "paid") {
       throw new OrderValidationError("That order is already paid.", "already_paid", { orderId });
     }
@@ -207,7 +207,7 @@ export class OrderService {
     order.payment = payment;
     order.paymentStatus = payment.status;
     order.updatedAt = new Date().toISOString();
-    this.orders.save(order);
+    await this.orders.save(order);
     return order;
   }
 
@@ -215,8 +215,8 @@ export class OrderService {
    * Idempotent. Providers retry webhooks, and a redelivery must not look like a
    * second payment — `changed: false` says we had already seen it.
    */
-  markPaid(orderId: string, paidAt = new Date().toISOString()): MarkPaidResult {
-    const order = this.get(orderId);
+  async markPaid(orderId: string, paidAt = new Date().toISOString()): Promise<MarkPaidResult> {
+    const order = await this.get(orderId);
     if (order.paymentStatus === "paid") {
       return { order, changed: false };
     }
@@ -227,12 +227,12 @@ export class OrderService {
       order.payment.status = "paid";
       order.payment.paidAt = paidAt;
     }
-    this.orders.save(order);
+    await this.orders.save(order);
     return { order, changed: true };
   }
 
-  markFailed(orderId: string, reason: string): MarkPaidResult {
-    const order = this.get(orderId);
+  async markFailed(orderId: string, reason: string): Promise<MarkPaidResult> {
+    const order = await this.get(orderId);
     // A late failure for an order already paid is noise; never downgrade a paid order.
     if (order.paymentStatus === "paid") {
       return { order, changed: false };
@@ -244,17 +244,17 @@ export class OrderService {
       order.payment.status = "failed";
       order.payment.failureReason = reason;
     }
-    this.orders.save(order);
+    await this.orders.save(order);
     return { order, changed: true };
   }
 
   /** "AB-4821" — short enough to read out at the counter. */
-  private nextReference(): string {
+  private async nextReference(): Promise<string> {
     for (let attempt = 0; attempt < 50; attempt += 1) {
       const letters = randomLetters(2);
       const digits = String(Math.floor(Math.random() * 10000)).padStart(4, "0");
       const reference = `${letters}-${digits}`;
-      if (!this.orders.findByReference(reference)) return reference;
+      if (!(await this.orders.findByReference(reference))) return reference;
     }
     // Vanishingly unlikely; fall back to something guaranteed unique over pretty.
     return `ZZ-${Date.now().toString().slice(-6)}`;

@@ -29,7 +29,7 @@ export function createServer(app: Services = services) {
   server.post(
     "/api/payments/webhook/:provider",
     express.raw({ type: "*/*", limit: "1mb" }),
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       const provider = req.params.provider ?? "";
       if (!isProvider(provider)) {
         res.status(404).json({ error: "unknown_provider", provider });
@@ -37,7 +37,7 @@ export function createServer(app: Services = services) {
       }
 
       const rawBody = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : String(req.body ?? "");
-      const outcome = app.payments.handleWebhook(provider, rawBody, req.headers);
+      const outcome = await app.payments.handleWebhook(provider, rawBody, req.headers);
 
       if (!outcome.handled) {
         // 400 tells the provider to retry. That is what we want for a missing
@@ -59,7 +59,8 @@ export function createServer(app: Services = services) {
 
   // ------------------------------------------------------------------ health
   server.get("/health", (_req, res) => {
-    res.json({ ok: true, phase: 2 });
+    // `storage` makes an accidental in-memory deploy visible from outside.
+    res.json({ ok: true, phase: 2, storage: app.storage.kind });
   });
 
   // -------------------------------------------------------------------- menu
@@ -104,19 +105,19 @@ export function createServer(app: Services = services) {
 
   // ------------------------------------------------------------------- carts
   server.post("/api/carts", (_req, res) => {
-    run(res, () => tools.create_cart());
+    void runAsync(res, () => tools.create_cart());
   });
 
   server.get("/api/carts/:cartId", (req, res) => {
-    run(res, () => tools.view_cart({ cartId: req.params.cartId }));
+    void runAsync(res, () => tools.view_cart({ cartId: req.params.cartId }));
   });
 
   server.post("/api/carts/:cartId/lines", (req, res) => {
-    run(res, () => tools.add_to_cart({ ...req.body, cartId: req.params.cartId }));
+    void runAsync(res, () => tools.add_to_cart({ ...req.body, cartId: req.params.cartId }));
   });
 
   server.patch("/api/carts/:cartId/lines/:lineId", (req, res) => {
-    run(res, () =>
+    void runAsync(res, () =>
       tools.update_cart_line({
         cartId: req.params.cartId,
         lineId: req.params.lineId,
@@ -126,16 +127,16 @@ export function createServer(app: Services = services) {
   });
 
   server.delete("/api/carts/:cartId/lines/:lineId", (req, res) => {
-    run(res, () => tools.remove_from_cart({ cartId: req.params.cartId, lineId: req.params.lineId }));
+    void runAsync(res, () => tools.remove_from_cart({ cartId: req.params.cartId, lineId: req.params.lineId }));
   });
 
   // ------------------------------------------------------------------ orders
   server.post("/api/orders", (req, res) => {
-    run(res, () => tools.confirm_order(req.body ?? {}));
+    void runAsync(res, () => tools.confirm_order(req.body ?? {}));
   });
 
   server.get("/api/orders/:orderId", (req, res) => {
-    run(res, () => tools.get_order({ orderId: req.params.orderId }));
+    void runAsync(res, () => tools.get_order({ orderId: req.params.orderId }));
   });
 
   // ---------------------------------------------------------------- payments
@@ -151,8 +152,8 @@ export function createServer(app: Services = services) {
 
   /** Development only — refuses any order whose provider has real credentials. */
   server.post("/api/payments/simulate/:orderId", (req, res) => {
-    run(res, () => {
-      const order = app.payments.settleSimulated(req.params.orderId);
+    void runAsync(res, async () => {
+      const order = await app.payments.settleSimulated(req.params.orderId);
       return { order, paymentStatus: order.paymentStatus };
     });
   });
@@ -166,7 +167,7 @@ export function createServer(app: Services = services) {
       res.status(404).json({ error: "unknown_tool", name });
       return;
     }
-    void runAsync(res, async () => toolRegistry[name](req.body ?? {}));
+    void runAsync(res, () => toolRegistry[name](req.body ?? {}));
   });
 
   // --------------------------------------------------------------- web pages
@@ -216,7 +217,7 @@ function run(res: Response, handler: () => unknown): void {
   }
 }
 
-async function runAsync(res: Response, handler: () => Promise<unknown>): Promise<void> {
+async function runAsync(res: Response, handler: () => unknown): Promise<void> {
   try {
     const body = await handler();
     if (body === undefined) return;

@@ -51,10 +51,10 @@ beforeEach(() => {
   orders = new OrderService(new InMemoryOrderRepository(), carts, menuService);
 });
 
-function anOrder(): Order {
-  const cart = carts.create();
-  carts.addLine(cart.id, { itemId: "fish-dory-classic" });
-  return orders.confirm({ cartId: cart.id });
+async function anOrder(): Promise<Order> {
+  const cart = await carts.create();
+  await carts.addLine(cart.id, { itemId: "fish-dory-classic" });
+  return await orders.confirm({ cartId: cart.id });
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -88,7 +88,7 @@ function stripeEvent(order: Order, overrides: Record<string, unknown> = {}) {
 
 // ---------------------------------------------------------------- adapters
 
-describe("StripeAdapter", () => {
+describe("StripeAdapter", async () => {
   it("reports itself unconfigured without a secret key", () => {
     expect(new StripeAdapter(unconfiguredStripe, BASE_URL).isConfigured()).toBe(false);
     expect(new StripeAdapter(liveStripe, BASE_URL).isConfigured()).toBe(true);
@@ -103,7 +103,7 @@ describe("StripeAdapter", () => {
     const fetchImpl = vi.fn();
     const adapter = new StripeAdapter(unconfiguredStripe, BASE_URL, fetchImpl as unknown as typeof fetch);
 
-    const session = await adapter.createPayment(request(anOrder()));
+    const session = await adapter.createPayment(request((await anOrder())));
 
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(session.simulated).toBe(true);
@@ -112,7 +112,7 @@ describe("StripeAdapter", () => {
   });
 
   it("creates a checkout session with our own line prices", async () => {
-    const order = anOrder();
+    const order = (await anOrder());
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ id: "cs_test_1", url: "https://pay.stripe/x" }));
     const adapter = new StripeAdapter(liveStripe, BASE_URL, fetchImpl as unknown as typeof fetch);
 
@@ -142,7 +142,7 @@ describe("StripeAdapter", () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ error: { message: "No such price" } }, 400));
     const adapter = new StripeAdapter(liveStripe, BASE_URL, fetchImpl as unknown as typeof fetch);
 
-    await expect(adapter.createPayment(request(anOrder()))).rejects.toThrow("No such price");
+    await expect(adapter.createPayment(request((await anOrder())))).rejects.toThrow("No such price");
   });
 
   // Stripe answering with `"url": null` used to be stored as a checkout URL,
@@ -152,15 +152,15 @@ describe("StripeAdapter", () => {
       const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(body));
       const adapter = new StripeAdapter(liveStripe, BASE_URL, fetchImpl as unknown as typeof fetch);
 
-      const session = await adapter.createPayment(request(anOrder()));
+      const session = await adapter.createPayment(request((await anOrder())));
 
       expect(session.providerPaymentId).toBe("cs_test_1");
       expect(session.checkoutUrl).toBeUndefined();
     }
   });
 
-  it("accepts a correctly signed webhook", () => {
-    const order = anOrder();
+  it("accepts a correctly signed webhook", async () => {
+    const order = (await anOrder());
     const body = stripeEvent(order);
     const adapter = new StripeAdapter(liveStripe, BASE_URL);
 
@@ -173,8 +173,8 @@ describe("StripeAdapter", () => {
     expect(result.event.amountSen).toBe(order.totalSen);
   });
 
-  it("rejects a tampered body", () => {
-    const order = anOrder();
+  it("rejects a tampered body", async () => {
+    const order = (await anOrder());
     const body = stripeEvent(order);
     const signature = stripeSignature(body);
     const adapter = new StripeAdapter(liveStripe, BASE_URL);
@@ -185,8 +185,8 @@ describe("StripeAdapter", () => {
     expect(result).toEqual({ valid: false, reason: "signature mismatch" });
   });
 
-  it("rejects a signature from the wrong secret", () => {
-    const body = stripeEvent(anOrder());
+  it("rejects a signature from the wrong secret", async () => {
+    const body = stripeEvent((await anOrder()));
     const adapter = new StripeAdapter(liveStripe, BASE_URL);
 
     const result = adapter.verifyAndParseWebhook(body, {
@@ -195,8 +195,8 @@ describe("StripeAdapter", () => {
     expect(result.valid).toBe(false);
   });
 
-  it("rejects a replayed old signature", () => {
-    const body = stripeEvent(anOrder());
+  it("rejects a replayed old signature", async () => {
+    const body = stripeEvent((await anOrder()));
     const stale = Math.floor(Date.now() / 1000) - 600;
     const adapter = new StripeAdapter(liveStripe, BASE_URL);
 
@@ -206,16 +206,16 @@ describe("StripeAdapter", () => {
     expect(result).toEqual({ valid: false, reason: "signature timestamp outside tolerance" });
   });
 
-  it("rejects a missing or malformed signature header", () => {
-    const body = stripeEvent(anOrder());
+  it("rejects a missing or malformed signature header", async () => {
+    const body = stripeEvent((await anOrder()));
     const adapter = new StripeAdapter(liveStripe, BASE_URL);
 
     expect(adapter.verifyAndParseWebhook(body, {}).valid).toBe(false);
     expect(adapter.verifyAndParseWebhook(body, { "stripe-signature": "garbage" }).valid).toBe(false);
   });
 
-  it("maps event types", () => {
-    const order = anOrder();
+  it("maps event types", async () => {
+    const order = (await anOrder());
     const adapter = new StripeAdapter(liveStripe, BASE_URL);
 
     const check = (raw: string) => {
@@ -239,7 +239,7 @@ describe("StripeAdapter", () => {
   });
 });
 
-describe("RevenueMonsterAdapter", () => {
+describe("RevenueMonsterAdapter", async () => {
   it("simulates when credentials are missing", async () => {
     const fetchImpl = vi.fn();
     const adapter = new RevenueMonsterAdapter(
@@ -248,7 +248,7 @@ describe("RevenueMonsterAdapter", () => {
       fetchImpl as unknown as typeof fetch,
     );
 
-    const session = await adapter.createPayment(request(anOrder(), "ewallet"));
+    const session = await adapter.createPayment(request((await anOrder()), "ewallet"));
 
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(session.simulated).toBe(true);
@@ -257,7 +257,7 @@ describe("RevenueMonsterAdapter", () => {
   });
 
   it("fetches a token then creates the payment", async () => {
-    const order = anOrder();
+    const order = (await anOrder());
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ accessToken: "tok_1", expiresIn: 3600 }))
@@ -297,15 +297,15 @@ describe("RevenueMonsterAdapter", () => {
       .mockImplementation(async () => jsonResponse({ item: { checkoutId: "chk_n" } }));
 
     const adapter = new RevenueMonsterAdapter(liveRevenueMonster, BASE_URL, fetchImpl as unknown as typeof fetch);
-    await adapter.createPayment(request(anOrder(), "ewallet"));
-    await adapter.createPayment(request(anOrder(), "ewallet"));
+    await adapter.createPayment(request((await anOrder()), "ewallet"));
+    await adapter.createPayment(request((await anOrder()), "ewallet"));
 
     const tokenCalls = fetchImpl.mock.calls.filter(([url]) => String(url).endsWith("/v1/token"));
     expect(tokenCalls).toHaveLength(1);
   });
 
-  it("verifies an HMAC-signed callback", () => {
-    const order = anOrder();
+  it("verifies an HMAC-signed callback", async () => {
+    const order = (await anOrder());
     const body = JSON.stringify({
       eventId: "rm_evt_1",
       eventType: "PAYMENT",
@@ -349,7 +349,7 @@ describe("RevenueMonsterAdapter", () => {
 
 // --------------------------------------------------------- payment service
 
-describe("PaymentService", () => {
+describe("PaymentService", async () => {
   function simulatedService() {
     return new PaymentService(
       orders,
@@ -386,7 +386,7 @@ describe("PaymentService", () => {
       BASE_URL,
     );
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    const order = anOrder();
+    const order = (await anOrder());
 
     const updated = await payments.initiate(order.id, "card");
 
@@ -407,7 +407,7 @@ describe("PaymentService", () => {
 
   it("attaches the payment attempt to the order", async () => {
     const payments = simulatedService();
-    const order = anOrder();
+    const order = (await anOrder());
 
     const updated = await payments.initiate(order.id, "ewallet");
 
@@ -416,10 +416,10 @@ describe("PaymentService", () => {
     expect(updated.paymentStatus).toBe("pending");
   });
 
-  it("moves the order to paid on a verified webhook", () => {
+  it("moves the order to paid on a verified webhook", async () => {
     const payments = liveService();
-    const order = anOrder();
-    orders.attachPayment(order.id, {
+    const order = (await anOrder());
+    await orders.attachPayment(order.id, {
       method: "card",
       provider: "stripe",
       providerPaymentId: "cs_test_1",
@@ -429,51 +429,51 @@ describe("PaymentService", () => {
     });
 
     const body = stripeEvent(order);
-    const outcome = payments.handleWebhook("stripe", body, { "stripe-signature": stripeSignature(body) });
+    const outcome = await payments.handleWebhook("stripe", body, { "stripe-signature": stripeSignature(body) });
 
     expect(outcome.handled).toBe(true);
     expect(outcome.changed).toBe(true);
-    expect(orders.get(order.id).paymentStatus).toBe("paid");
+    expect((await orders.get(order.id)).paymentStatus).toBe("paid");
   });
 
-  it("treats a redelivered webhook as a no-op", () => {
+  it("treats a redelivered webhook as a no-op", async () => {
     const payments = liveService();
-    const order = anOrder();
+    const order = (await anOrder());
     const body = stripeEvent(order);
     const headers = { "stripe-signature": stripeSignature(body) };
 
-    expect(payments.handleWebhook("stripe", body, headers).changed).toBe(true);
-    const second = payments.handleWebhook("stripe", body, headers);
+    expect((await payments.handleWebhook("stripe", body, headers)).changed).toBe(true);
+    const second = await payments.handleWebhook("stripe", body, headers);
 
     expect(second.handled).toBe(true);
     expect(second.changed).toBe(false);
     expect(second.reason).toBe("duplicate event");
   });
 
-  it("refuses an unverified webhook and leaves the order pending", () => {
+  it("refuses an unverified webhook and leaves the order pending", async () => {
     const payments = liveService();
-    const order = anOrder();
+    const order = (await anOrder());
     const body = stripeEvent(order);
 
-    const outcome = payments.handleWebhook("stripe", body, { "stripe-signature": "t=1,v1=bad" });
+    const outcome = await payments.handleWebhook("stripe", body, { "stripe-signature": "t=1,v1=bad" });
 
     expect(outcome.handled).toBe(false);
-    expect(orders.get(order.id).paymentStatus).toBe("pending");
+    expect((await orders.get(order.id)).paymentStatus).toBe("pending");
   });
 
-  it("refuses to settle when the amount does not match the order", () => {
+  it("refuses to settle when the amount does not match the order", async () => {
     const payments = liveService();
-    const order = anOrder();
+    const order = (await anOrder());
     const body = stripeEvent(order, { amount_total: 1 });
 
-    const outcome = payments.handleWebhook("stripe", body, { "stripe-signature": stripeSignature(body) });
+    const outcome = await payments.handleWebhook("stripe", body, { "stripe-signature": stripeSignature(body) });
 
     expect(outcome.handled).toBe(false);
     expect(outcome.reason).toContain("amount mismatch");
-    expect(orders.get(order.id).paymentStatus).toBe("pending");
+    expect((await orders.get(order.id)).paymentStatus).toBe("pending");
   });
 
-  it("does not mark an unmatched event as seen, so a retry can still land", () => {
+  it("does not mark an unmatched event as seen, so a retry can still land", async () => {
     const payments = liveService();
     const body = JSON.stringify({
       id: "evt_orphan",
@@ -483,15 +483,15 @@ describe("PaymentService", () => {
     });
     const headers = { "stripe-signature": stripeSignature(body) };
 
-    expect(payments.handleWebhook("stripe", body, headers).reason).toBe("no matching order");
+    expect((await payments.handleWebhook("stripe", body, headers)).reason).toBe("no matching order");
     // Same event again still gets a real attempt rather than "duplicate".
-    expect(payments.handleWebhook("stripe", body, headers).reason).toBe("no matching order");
+    expect((await payments.handleWebhook("stripe", body, headers)).reason).toBe("no matching order");
   });
 
-  it("marks an order failed on a failure event", () => {
+  it("marks an order failed on a failure event", async () => {
     const payments = liveService();
-    const order = anOrder();
-    orders.attachPayment(order.id, {
+    const order = (await anOrder());
+    await orders.attachPayment(order.id, {
       method: "card",
       provider: "stripe",
       providerPaymentId: "cs_test_1",
@@ -507,39 +507,39 @@ describe("PaymentService", () => {
       data: { object: { id: "cs_test_1", metadata: { order_id: order.id } } },
     });
 
-    payments.handleWebhook("stripe", body, { "stripe-signature": stripeSignature(body) });
-    expect(orders.get(order.id).paymentStatus).toBe("failed");
+    await payments.handleWebhook("stripe", body, { "stripe-signature": stripeSignature(body) });
+    expect((await orders.get(order.id)).paymentStatus).toBe("failed");
   });
 
   it("settles a simulated payment locally", async () => {
     const payments = simulatedService();
-    const order = await payments.initiate(anOrder().id, "card");
+    const order = await payments.initiate((await anOrder()).id, "card");
 
-    expect(payments.settleSimulated(order.id).paymentStatus).toBe("paid");
+    expect((await payments.settleSimulated(order.id)).paymentStatus).toBe("paid");
   });
 
-  it("refuses to settle an order that has no payment attempt", () => {
+  it("refuses to settle an order that has no payment attempt", async () => {
     const payments = simulatedService();
-    expect(() => payments.settleSimulated(anOrder().id)).toThrow(OrderValidationError);
+    await expect(payments.settleSimulated((await anOrder()).id)).rejects.toThrow(OrderValidationError);
   });
 
   it("disables simulated settlement once real credentials exist", async () => {
     // Start the payment while unconfigured, then bring the provider online.
     const simulated = simulatedService();
-    const order = await simulated.initiate(anOrder().id, "card");
+    const order = await simulated.initiate((await anOrder()).id, "card");
 
     const live = liveService();
     try {
-      live.settleSimulated(order.id);
+      await live.settleSimulated(order.id);
       throw new Error("should have thrown");
     } catch (error) {
       expect((error as OrderValidationError).code).toBe("simulation_disabled");
     }
-    expect(orders.get(order.id).paymentStatus).toBe("pending");
+    expect((await orders.get(order.id)).paymentStatus).toBe("pending");
   });
 
-  it("ignores an unknown provider", () => {
-    const outcome = simulatedService().handleWebhook(
+  it("ignores an unknown provider", async () => {
+    const outcome = await simulatedService().handleWebhook(
       "paypal" as never,
       "{}",
       {},

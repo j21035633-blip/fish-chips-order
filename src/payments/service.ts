@@ -80,7 +80,7 @@ export class PaymentService {
    * tab needs a fresh link — but a paid order is refused by `attachPayment`.
    */
   async initiate(orderId: string, method: PaymentMethod): Promise<Order> {
-    const order = this.orders.get(orderId);
+    const order = await this.orders.get(orderId);
     const adapter = this.adapterFor(method);
 
     const session = await adapter.createPayment({
@@ -123,7 +123,11 @@ export class PaymentService {
    * Verifies the provider's signature, drops redeliveries, checks the amount
    * matches what we charged, then transitions the order.
    */
-  handleWebhook(provider: PaymentProvider, rawBody: string, headers: WebhookHeaders): WebhookOutcome {
+  async handleWebhook(
+    provider: PaymentProvider,
+    rawBody: string,
+    headers: WebhookHeaders,
+  ): Promise<WebhookOutcome> {
     const adapter = this.byProvider.get(provider);
     if (!adapter) {
       return { handled: false, reason: `unknown provider "${provider}"`, changed: false };
@@ -145,7 +149,7 @@ export class PaymentService {
       return { handled: true, reason: "event type not actionable", event, changed: false };
     }
 
-    const order = this.findOrder(event);
+    const order = await this.findOrder(event);
     if (!order) {
       // Do not mark seen: the order may simply not have been saved yet, and the
       // provider will retry.
@@ -167,12 +171,12 @@ export class PaymentService {
     this.seenEvents.add(event.eventId);
 
     if (event.type === "payment_succeeded") {
-      const result = this.orders.markPaid(order.id, event.occurredAt);
+      const result = await this.orders.markPaid(order.id, event.occurredAt);
       return { handled: true, event, order: result.order, changed: result.changed };
     }
 
     const reason = event.type === "payment_expired" ? "payment expired" : "payment failed";
-    const result = this.orders.markFailed(order.id, reason);
+    const result = await this.orders.markFailed(order.id, reason);
     return { handled: true, reason, event, order: result.order, changed: result.changed };
   }
 
@@ -182,8 +186,8 @@ export class PaymentService {
    * Refuses anything that is not a simulated session, so this can never settle a
    * real order even if the route is left mounted.
    */
-  settleSimulated(orderId: string): Order {
-    const order = this.orders.get(orderId);
+  async settleSimulated(orderId: string): Promise<Order> {
+    const order = await this.orders.get(orderId);
     const payment = order.payment;
 
     if (!payment || !payment.simulated || !isSimulatedPaymentId(payment.providerPaymentId)) {
@@ -203,15 +207,15 @@ export class PaymentService {
       );
     }
 
-    return this.orders.markPaid(order.id).order;
+    return (await this.orders.markPaid(order.id)).order;
   }
 
-  private findOrder(event: PaymentEvent): Order | undefined {
+  private async findOrder(event: PaymentEvent): Promise<Order | undefined> {
     if (event.orderId !== undefined) {
-      const byId = this.orders.findByProviderPaymentId(event.providerPaymentId);
+      const byId = await this.orders.findByProviderPaymentId(event.providerPaymentId);
       if (byId) return byId;
       try {
-        return this.orders.get(event.orderId);
+        return await this.orders.get(event.orderId);
       } catch {
         // Fall through to the payment-id lookup below.
       }

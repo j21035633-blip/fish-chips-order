@@ -178,11 +178,11 @@ const signedConfig: RevenueMonsterConfig = {
   privateKeyPath: keyPath,
 };
 
-function anOrder(): Order {
+async function anOrder(): Promise<Order> {
   const carts = new CartService(new InMemoryCartRepository(), menuService);
   const orders = new OrderService(new InMemoryOrderRepository(), carts, menuService);
-  const cart = carts.create();
-  carts.addLine(cart.id, { itemId: "fish-dory-classic" });
+  const cart = await carts.create();
+  await carts.addLine(cart.id, { itemId: "fish-dory-classic" });
   return orders.confirm({ cartId: cart.id });
 }
 
@@ -211,14 +211,14 @@ function fetchStub() {
     );
 }
 
-describe("RevenueMonsterAdapter request signing", () => {
+describe("RevenueMonsterAdapter request signing", async () => {
   beforeEach(clearPrivateKeyCache);
 
   it("signs the v3 call, and the signature verifies against the body actually sent", async () => {
     const fetchImpl = fetchStub();
     const adapter = new RevenueMonsterAdapter(signedConfig, "http://localhost:3000", fetchImpl as never);
 
-    await adapter.createPayment(paymentRequest(anOrder()));
+    await adapter.createPayment(paymentRequest((await anOrder())));
 
     const [url, init] = fetchImpl.mock.calls[1] as [string, RequestInit];
     const headers = init.headers as Record<string, string>;
@@ -243,7 +243,7 @@ describe("RevenueMonsterAdapter request signing", () => {
     const fetchImpl = fetchStub();
     const adapter = new RevenueMonsterAdapter(signedConfig, "http://localhost:3000", fetchImpl as never);
 
-    await adapter.createPayment(paymentRequest(anOrder()));
+    await adapter.createPayment(paymentRequest((await anOrder())));
 
     const headers = (fetchImpl.mock.calls[1] as [string, RequestInit])[1].headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer tok_1");
@@ -258,7 +258,7 @@ describe("RevenueMonsterAdapter request signing", () => {
       fetchImpl as never,
     );
 
-    await adapter.createPayment(paymentRequest(anOrder()));
+    await adapter.createPayment(paymentRequest((await anOrder())));
 
     const headers = (fetchImpl.mock.calls[1] as [string, RequestInit])[1].headers as Record<string, string>;
     expect(headers["x-signature"]).toBeUndefined();
@@ -273,7 +273,7 @@ describe("RevenueMonsterAdapter request signing", () => {
       fetchImpl as never,
     );
 
-    await adapter.createPayment(paymentRequest(anOrder()));
+    await adapter.createPayment(paymentRequest((await anOrder())));
 
     const headers = (fetchImpl.mock.calls[1] as [string, RequestInit])[1].headers as Record<string, string>;
     expect(headers["x-signature"]).toBeUndefined();
@@ -288,7 +288,7 @@ describe("RevenueMonsterAdapter request signing", () => {
     );
 
     // Better to fail here than to send RM a request it will reject unsigned.
-    await expect(adapter.createPayment(paymentRequest(anOrder()))).rejects.toThrow(
+    await expect(adapter.createPayment(paymentRequest((await anOrder())))).rejects.toThrow(
       /REVENUE_MONSTER_PRIVATE_KEY_PATH/,
     );
   });

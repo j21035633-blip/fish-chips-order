@@ -51,9 +51,16 @@ export interface RevenueMonsterConfig {
   privateKeyPath: string | undefined;
 }
 
+export interface MongoConfig {
+  /** Undefined falls back to in-memory storage, which does not survive a restart. */
+  uri: string | undefined;
+  dbName: string;
+}
+
 export interface AppConfig {
   port: number;
   publicBaseUrl: string;
+  mongo: MongoConfig;
   stripe: StripeConfig;
   revenueMonster: RevenueMonsterConfig;
 }
@@ -62,6 +69,12 @@ export function loadConfig(): AppConfig {
   return {
     port: int("PORT", 3000),
     publicBaseUrl: str("PUBLIC_BASE_URL") ?? `http://localhost:${int("PORT", 3000)}`,
+    mongo: {
+      // Railway's own MongoDB service publishes MONGO_URL; accept it so the
+      // variable that is already there works without being renamed.
+      uri: str("MONGODB_URI") ?? str("MONGO_URL"),
+      dbName: str("MONGODB_DB") ?? "fish_chips_order",
+    },
     stripe: {
       secretKey: str("STRIPE_SECRET_KEY"),
       webhookSecret: str("STRIPE_WEBHOOK_SECRET"),

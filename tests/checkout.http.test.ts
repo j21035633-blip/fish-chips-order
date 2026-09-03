@@ -51,7 +51,7 @@ function buildServices(): Services {
     [new StripeAdapter(stripeConfig, BASE_URL), new RevenueMonsterAdapter(revenueMonsterConfig, BASE_URL)],
     BASE_URL,
   );
-  return { carts, orders, payments };
+  return { carts, orders, payments, storage: { kind: "memory", async connect() {}, async close() {} } };
 }
 
 beforeAll(async () => {
@@ -98,9 +98,9 @@ function stripeSigned(body: string) {
   return { "stripe-signature": `t=${timestamp},v1=${hmacHex(STRIPE_WEBHOOK_SECRET, `${timestamp}.${body}`)}` };
 }
 
-describe("checkout flow", () => {
+describe("checkout flow", async () => {
   it("reports phase 2 on health", async () => {
-    await expect(json(await fetch(`${base}/health`))).resolves.toEqual({ ok: true, phase: 2 });
+    await expect(json(await fetch(`${base}/health`))).resolves.toEqual({ ok: true, phase: 2, storage: "memory" });
   });
 
   it("builds a cart with a running total", async () => {
@@ -367,7 +367,7 @@ describe("checkout flow", () => {
   });
 });
 
-describe("isolation", () => {
+describe("isolation", async () => {
   // Guards the container wiring: OrderService and the HTTP layer must share one
   // CartService, or confirming an order would not clear the browser's cart.
   beforeEach(() => {
@@ -379,6 +379,6 @@ describe("isolation", () => {
     await post(`/api/carts/${cartId}/lines`, { itemId: "chips-classic" });
     await post("/api/orders", { cartId });
 
-    expect(app.carts.price(cartId).lines).toHaveLength(0);
+    expect((await app.carts.price(cartId)).lines).toHaveLength(0);
   });
 });

@@ -23,11 +23,11 @@ const get = (path: string) => fetch(`${base}${path}`);
 /** Response bodies are checked field by field in the assertions below. */
 const json = (res: Response): Promise<any> => res.json() as Promise<any>;
 
-describe("menu api", () => {
+describe("menu api", async () => {
   it("serves health", async () => {
     const res = await get("/health");
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ ok: true, phase: 2 });
+    await expect(res.json()).resolves.toEqual({ ok: true, phase: 2, storage: "memory" });
   });
 
   it("serves the full menu", async () => {

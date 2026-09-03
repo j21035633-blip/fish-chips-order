@@ -226,6 +226,7 @@ SCREAMING_SNAKE_CASE, no spaces around `=`. See `.env.example`; all provider val
 
 ```
 PORT, PUBLIC_BASE_URL
+MONGODB_URI, MONGODB_DB
 STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 REVENUE_MONSTER_API_KEY, REVENUE_MONSTER_CLIENT_ID, REVENUE_MONSTER_CLIENT_SECRET,
 REVENUE_MONSTER_WEBHOOK_SECRET, REVENUE_MONSTER_STORE_ID, REVENUE_MONSTER_API_BASE,
@@ -234,6 +235,10 @@ REVENUE_MONSTER_PRIVATE_KEY_PATH
 
 A value left as the literal `xxx` from `.env.example` counts as unset — a placeholder that made an
 adapter think it was live would fail against the provider instead of falling back cleanly.
+
+`MONGODB_URI` is the one worth getting right. Without it the app falls back to in-memory storage,
+which loses every order on restart; it says so loudly at startup and `GET /health` reports
+`"storage": "memory"` so an accidental in-memory deploy is visible from outside.
 
 ## Design decisions worth knowing
 
@@ -251,9 +256,16 @@ item doesn't exist.
 
 **Confirming an order empties its cart**, so a double submit cannot create a twin order.
 
-**Repositories are interfaces.** Menu, carts and orders are all in-memory behind
-`MenuRepository` / `CartRepository` / `OrderRepository`. Swapping in SQLite — or the POS, for menu
-and orders — is a constructor change.
+**Repositories are interfaces.** Carts and orders sit behind `CartRepository` / `OrderRepository`,
+implemented once against MongoDB (`src/storage/mongo.ts`) and once in memory for tests and for a
+local run with no `MONGODB_URI`. Swapping either — or the POS, for menu and orders — is a
+constructor change. The menu stays in-process; it is static data.
+
+**Documents are keyed by the domain id**, so `_id` *is* `order.id` and every write is an idempotent
+upsert: a retried save cannot produce a second row. `reference` is uniquely indexed because the
+short code is read out at the counter and two customers must never share one. Carts carry a TTL so
+abandoned ones are reaped; orders never expire. `MongoStorage.db` is public so the game and voucher
+collections a later phase adds share the same connection.
 
 **Orders carry no kitchen status.** Received / Cooking / Ready belongs to the POS and to a later
 phase; the only lifecycle modelled here is payment. A test asserts the field's absence.
@@ -269,9 +281,8 @@ phase; the only lifecycle modelled here is payment. A test asserts the field's a
   signatures instead, only `verifyAndParseWebhook` changes.
 - **Combos are flat items** — they don't reference their components, so Popcorn Prawns being sold
   out doesn't mark the Trawler Platter unavailable. Worth fixing when the POS feed lands.
-- **In-memory storage.** A restart drops carts and orders. The web app handles a dropped cart
-  gracefully; a dropped *order* would strand a paid customer, so this needs real persistence before
-  any live traffic.
+- **No migration for orders placed before persistence landed.** Anything created while the app was
+  running in memory is gone; there was nowhere to read it from.
 
 ## Not built yet
 

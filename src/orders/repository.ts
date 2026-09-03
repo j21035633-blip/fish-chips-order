@@ -3,39 +3,48 @@ import type { Cart, Order } from "./types.js";
 /**
  * Storage for carts and orders.
  *
- * In-memory for Phase 2 — the shop runs one process and an abandoned cart is
- * worth nothing. Both interfaces exist so swapping in SQLite (or the POS, for
- * orders) is a constructor change and nothing more, the same way
- * `MenuRepository` is written.
+ * Async because the shipped implementation talks to MongoDB (see
+ * `src/storage/mongo.ts`). The in-memory pair below is what tests use, and what
+ * a local run falls back to when `MONGODB_URI` is unset.
+ *
+ * Both clone on the way in and out. A store that hands back live references lets
+ * a caller mutate saved state without saving it, which works in memory and then
+ * silently does nothing against a database — the in-memory pair has to behave
+ * like a database or it is not a useful stand-in for one.
  */
 
 export interface CartRepository {
-  get(cartId: string): Cart | undefined;
-  save(cart: Cart): void;
-  delete(cartId: string): void;
+  get(cartId: string): Promise<Cart | undefined>;
+  save(cart: Cart): Promise<void>;
+  delete(cartId: string): Promise<void>;
 }
 
 export interface OrderRepository {
-  get(orderId: string): Order | undefined;
-  findByReference(reference: string): Order | undefined;
+  get(orderId: string): Promise<Order | undefined>;
+  findByReference(reference: string): Promise<Order | undefined>;
   /** Look an order up from a provider's payment id, for webhook handling. */
-  findByProviderPaymentId(providerPaymentId: string): Order | undefined;
-  save(order: Order): void;
-  all(): Order[];
+  findByProviderPaymentId(providerPaymentId: string): Promise<Order | undefined>;
+  save(order: Order): Promise<void>;
+  all(): Promise<Order[]>;
+}
+
+function copy<T>(value: T): T {
+  return structuredClone(value);
 }
 
 export class InMemoryCartRepository implements CartRepository {
   private readonly carts = new Map<string, Cart>();
 
-  get(cartId: string): Cart | undefined {
-    return this.carts.get(cartId);
+  async get(cartId: string): Promise<Cart | undefined> {
+    const cart = this.carts.get(cartId);
+    return cart === undefined ? undefined : copy(cart);
   }
 
-  save(cart: Cart): void {
-    this.carts.set(cart.id, cart);
+  async save(cart: Cart): Promise<void> {
+    this.carts.set(cart.id, copy(cart));
   }
 
-  delete(cartId: string): void {
+  async delete(cartId: string): Promise<void> {
     this.carts.delete(cartId);
   }
 }
@@ -43,24 +52,32 @@ export class InMemoryCartRepository implements CartRepository {
 export class InMemoryOrderRepository implements OrderRepository {
   private readonly orders = new Map<string, Order>();
 
-  get(orderId: string): Order | undefined {
-    return this.orders.get(orderId);
+  async get(orderId: string): Promise<Order | undefined> {
+    const order = this.orders.get(orderId);
+    return order === undefined ? undefined : copy(order);
   }
 
-  findByReference(reference: string): Order | undefined {
+  async findByReference(reference: string): Promise<Order | undefined> {
     const wanted = reference.toUpperCase();
-    return this.all().find((order) => order.reference === wanted);
+    return this.find((order) => order.reference === wanted);
   }
 
-  findByProviderPaymentId(providerPaymentId: string): Order | undefined {
-    return this.all().find((order) => order.payment?.providerPaymentId === providerPaymentId);
+  async findByProviderPaymentId(providerPaymentId: string): Promise<Order | undefined> {
+    return this.find((order) => order.payment?.providerPaymentId === providerPaymentId);
   }
 
-  save(order: Order): void {
-    this.orders.set(order.id, order);
+  async save(order: Order): Promise<void> {
+    this.orders.set(order.id, copy(order));
   }
 
-  all(): Order[] {
-    return [...this.orders.values()];
+  async all(): Promise<Order[]> {
+    return [...this.orders.values()].map(copy);
+  }
+
+  private find(match: (order: Order) => boolean): Order | undefined {
+    for (const order of this.orders.values()) {
+      if (match(order)) return copy(order);
+    }
+    return undefined;
   }
 }

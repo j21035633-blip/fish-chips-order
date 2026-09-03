@@ -77,7 +77,7 @@ async function settle(rounds = 12) {
   }
 }
 
-describe("customer page", () => {
+describe("customer page", async () => {
   it("renders the menu with categories, prices and tags", async () => {
     await bootPage("/");
 
@@ -228,8 +228,9 @@ describe("customer page", () => {
   // the order carried an attempt that the customer could not act on.
   it("offers a way to pay when the provider returned no checkout link", async () => {
     const orderId = await placeOrder();
-    await services.payments.initiate(orderId, "card");
-    delete services.orders.get(orderId).payment!.checkoutUrl;
+    const attempted = await services.payments.initiate(orderId, "card");
+    delete attempted.payment!.checkoutUrl;
+    await services.orders.attachPayment(orderId, attempted.payment!);
 
     await bootPage(`/order/${orderId}`);
 

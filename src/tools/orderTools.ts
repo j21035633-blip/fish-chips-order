@@ -55,40 +55,40 @@ export const orderRefInput = z.object({ orderId: z.string().min(1) });
 export function createOrderTools(app: Services = services) {
   return {
     /** Opens a cart. One per QR scan / browser session. */
-    create_cart() {
-      const cart = app.carts.create();
+    async create_cart() {
+      const cart = await app.carts.create();
       return { cartId: cart.id, text: "Cart's open — what can I get you?" };
     },
 
-    add_to_cart(rawInput: unknown) {
+    async add_to_cart(rawInput: unknown) {
       const input = addToCartInput.parse(rawInput);
       const { cartId, ...line } = input;
-      const cart = app.carts.addLine(cartId, line);
+      const cart = await app.carts.addLine(cartId, line);
       return { cart, text: renderCart(cart) };
     },
 
-    view_cart(rawInput: unknown) {
+    async view_cart(rawInput: unknown) {
       const { cartId } = z.object({ cartId: z.string().min(1) }).parse(rawInput);
-      const cart = app.carts.price(cartId);
+      const cart = await app.carts.price(cartId);
       return { cart, text: renderCart(cart) };
     },
 
-    update_cart_line(rawInput: unknown) {
+    async update_cart_line(rawInput: unknown) {
       const { cartId, lineId, quantity } = updateQuantityInput.parse(rawInput);
-      const cart = app.carts.updateQuantity(cartId, lineId, quantity);
+      const cart = await app.carts.updateQuantity(cartId, lineId, quantity);
       return { cart, text: renderCart(cart) };
     },
 
-    remove_from_cart(rawInput: unknown) {
+    async remove_from_cart(rawInput: unknown) {
       const { cartId, lineId } = cartLineRefInput.parse(rawInput);
-      const cart = app.carts.removeLine(cartId, lineId);
+      const cart = await app.carts.removeLine(cartId, lineId);
       return { cart, text: renderCart(cart) };
     },
 
     /** Stage 3: lock the order in. Payment is a separate, explicit step. */
-    confirm_order(rawInput: unknown) {
+    async confirm_order(rawInput: unknown) {
       const input = confirmOrderInput.parse(rawInput);
-      const order = app.orders.confirm(input);
+      const order = await app.orders.confirm(input);
       return { order, text: renderOrder(order) };
     },
 
@@ -120,9 +120,9 @@ export function createOrderTools(app: Services = services) {
      * Payment status only. Kitchen status (Received/Cooking/Ready) is a later
      * phase — this tool does not report it.
      */
-    get_order(rawInput: unknown) {
+    async get_order(rawInput: unknown) {
       const { orderId } = orderRefInput.parse(rawInput);
-      const order = app.orders.get(orderId);
+      const order = await app.orders.get(orderId);
       return { order, text: renderOrder(order) };
     },
   };

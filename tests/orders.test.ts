@@ -16,9 +16,9 @@ beforeEach(() => {
 });
 
 /** Adds a dory and returns the cart id. */
-function cartWithDory(quantity = 1) {
-  const cart = carts.create();
-  carts.addLine(cart.id, { itemId: "fish-dory-classic", quantity });
+async function cartWithDory(quantity = 1) {
+  const cart = await carts.create();
+  await carts.addLine(cart.id, { itemId: "fish-dory-classic", quantity });
   return cart.id;
 }
 
@@ -203,60 +203,60 @@ describe("pricing", () => {
   });
 });
 
-describe("cart", () => {
-  it("adds lines and keeps a running total", () => {
-    const cartId = cartWithDory();
-    const cart = carts.addLine(cartId, { itemId: "chips-classic", quantity: 2 });
+describe("cart", async () => {
+  it("adds lines and keeps a running total", async () => {
+    const cartId = await cartWithDory();
+    const cart = await carts.addLine(cartId, { itemId: "chips-classic", quantity: 2 });
 
     expect(cart.itemCount).toBe(3);
     expect(cart.subtotalSen).toBe(1690 + 790 * 2);
     expect(cart.total).toBe("RM32.70");
   });
 
-  it("updates a line quantity", () => {
-    const cartId = cartWithDory();
-    const lineId = carts.price(cartId).lines[0]!.lineId;
+  it("updates a line quantity", async () => {
+    const cartId = await cartWithDory();
+    const lineId = (await carts.price(cartId)).lines[0]!.lineId;
 
-    const cart = carts.updateQuantity(cartId, lineId, 3);
+    const cart = await carts.updateQuantity(cartId, lineId, 3);
     expect(cart.itemCount).toBe(3);
     expect(cart.subtotalSen).toBe(1690 * 3);
   });
 
-  it("treats quantity 0 as removal", () => {
-    const cartId = cartWithDory();
-    const lineId = carts.price(cartId).lines[0]!.lineId;
+  it("treats quantity 0 as removal", async () => {
+    const cartId = await cartWithDory();
+    const lineId = (await carts.price(cartId)).lines[0]!.lineId;
 
-    expect(carts.updateQuantity(cartId, lineId, 0).lines).toHaveLength(0);
+    expect((await carts.updateQuantity(cartId, lineId, 0)).lines).toHaveLength(0);
   });
 
-  it("removes and clears", () => {
-    const cartId = cartWithDory();
-    carts.addLine(cartId, { itemId: "chips-classic" });
-    const lineId = carts.price(cartId).lines[0]!.lineId;
+  it("removes and clears", async () => {
+    const cartId = await cartWithDory();
+    await carts.addLine(cartId, { itemId: "chips-classic" });
+    const lineId = (await carts.price(cartId)).lines[0]!.lineId;
 
-    expect(carts.removeLine(cartId, lineId).lines).toHaveLength(1);
-    expect(carts.clear(cartId).lines).toHaveLength(0);
+    expect((await carts.removeLine(cartId, lineId)).lines).toHaveLength(1);
+    expect((await carts.clear(cartId)).lines).toHaveLength(0);
   });
 
-  it("rejects an invalid add without mutating the cart", () => {
-    const cartId = cartWithDory();
-    expect(() => carts.addLine(cartId, { itemId: "fish-prawn-popcorn" })).toThrow(OrderValidationError);
-    expect(carts.price(cartId).lines).toHaveLength(1);
+  it("rejects an invalid add without mutating the cart", async () => {
+    const cartId = await cartWithDory();
+    await expect(carts.addLine(cartId, { itemId: "fish-prawn-popcorn" })).rejects.toThrow(OrderValidationError);
+    expect((await carts.price(cartId)).lines).toHaveLength(1);
   });
 
-  it("404s an unknown cart", () => {
+  it("404s an unknown cart", async () => {
     try {
-      carts.price("nope");
+      await carts.price("nope");
       throw new Error("should have thrown");
     } catch (error) {
       expect((error as OrderValidationError).code).toBe("unknown_cart");
     }
   });
 
-  it("rejects an unknown line", () => {
-    const cartId = cartWithDory();
+  it("rejects an unknown line", async () => {
+    const cartId = await cartWithDory();
     try {
-      carts.removeLine(cartId, "nope");
+      await carts.removeLine(cartId, "nope");
       throw new Error("should have thrown");
     } catch (error) {
       expect((error as OrderValidationError).code).toBe("unknown_line");
@@ -264,10 +264,10 @@ describe("cart", () => {
   });
 });
 
-describe("orders", () => {
-  it("confirms a cart into a pending order", () => {
-    const cartId = cartWithDory(2);
-    const order = orders.confirm({ cartId, customerName: "Aisyah" });
+describe("orders", async () => {
+  it("confirms a cart into a pending order", async () => {
+    const cartId = await cartWithDory(2);
+    const order = await orders.confirm({ cartId, customerName: "Aisyah" });
 
     expect(order.paymentStatus).toBe("pending");
     expect(order.totalSen).toBe(3380);
@@ -277,58 +277,58 @@ describe("orders", () => {
     expect(order.payment).toBeUndefined();
   });
 
-  it("empties the cart so a double submit cannot twin the order", () => {
-    const cartId = cartWithDory();
-    orders.confirm({ cartId });
+  it("empties the cart so a double submit cannot twin the order", async () => {
+    const cartId = await cartWithDory();
+    await orders.confirm({ cartId });
 
-    expect(carts.price(cartId).lines).toHaveLength(0);
+    expect((await carts.price(cartId)).lines).toHaveLength(0);
     try {
-      orders.confirm({ cartId });
+      await orders.confirm({ cartId });
       throw new Error("should have thrown");
     } catch (error) {
       expect((error as OrderValidationError).code).toBe("empty_cart");
     }
   });
 
-  it("refuses an empty cart", () => {
-    const cart = carts.create();
-    expect(() => orders.confirm({ cartId: cart.id })).toThrow(OrderValidationError);
+  it("refuses an empty cart", async () => {
+    const cart = await carts.create();
+    await expect(orders.confirm({ cartId: cart.id })).rejects.toThrow(OrderValidationError);
   });
 
-  it("issues distinct references", () => {
+  it("issues distinct references", async () => {
     const references = new Set<string>();
     for (let index = 0; index < 25; index += 1) {
-      references.add(orders.confirm({ cartId: cartWithDory() }).reference);
+      references.add((await orders.confirm({ cartId: await cartWithDory() })).reference);
     }
     expect(references.size).toBe(25);
   });
 
-  it("marks paid idempotently", () => {
-    const order = orders.confirm({ cartId: cartWithDory() });
+  it("marks paid idempotently", async () => {
+    const order = await orders.confirm({ cartId: await cartWithDory() });
 
-    const first = orders.markPaid(order.id);
+    const first = await orders.markPaid(order.id);
     expect(first.changed).toBe(true);
     expect(first.order.paymentStatus).toBe("paid");
 
-    const second = orders.markPaid(order.id);
+    const second = await orders.markPaid(order.id);
     expect(second.changed).toBe(false);
     expect(second.order.paymentStatus).toBe("paid");
   });
 
-  it("never downgrades a paid order to failed", () => {
-    const order = orders.confirm({ cartId: cartWithDory() });
-    orders.markPaid(order.id);
+  it("never downgrades a paid order to failed", async () => {
+    const order = await orders.confirm({ cartId: await cartWithDory() });
+    await orders.markPaid(order.id);
 
-    const result = orders.markFailed(order.id, "late failure");
+    const result = await orders.markFailed(order.id, "late failure");
     expect(result.changed).toBe(false);
     expect(result.order.paymentStatus).toBe("paid");
   });
 
-  it("refuses to attach a payment to a paid order", () => {
-    const order = orders.confirm({ cartId: cartWithDory() });
-    orders.markPaid(order.id);
+  it("refuses to attach a payment to a paid order", async () => {
+    const order = await orders.confirm({ cartId: await cartWithDory() });
+    await orders.markPaid(order.id);
 
-    expect(() =>
+    await expect(
       orders.attachPayment(order.id, {
         method: "card",
         provider: "stripe",
@@ -337,43 +337,43 @@ describe("orders", () => {
         simulated: false,
         createdAt: new Date().toISOString(),
       }),
-    ).toThrow(OrderValidationError);
+    ).rejects.toThrow(OrderValidationError);
   });
 
-  it("does not model kitchen status", () => {
-    const order = orders.confirm({ cartId: cartWithDory() });
+  it("does not model kitchen status", async () => {
+    const order = await orders.confirm({ cartId: await cartWithDory() });
     expect(order).not.toHaveProperty("kitchenStatus");
     expect(order).not.toHaveProperty("status");
   });
 });
 
-describe("rendering", () => {
-  it("renders a cart with its total", () => {
-    const cartId = cartWithDory(2);
-    const text = renderCart(carts.price(cartId));
+describe("rendering", async () => {
+  it("renders a cart with its total", async () => {
+    const cartId = await cartWithDory(2);
+    const text = renderCart(await carts.price(cartId));
 
     expect(text).toContain("2x Classic Battered Dory");
     expect(text).toContain("Total: RM33.80");
   });
 
-  it("omits no-cost default options but keeps paid upgrades", () => {
-    const cart = carts.create();
-    carts.addLine(cart.id, {
+  it("omits no-cost default options but keeps paid upgrades", async () => {
+    const cart = await carts.create();
+    await carts.addLine(cart.id, {
       itemId: "chips-classic",
       selections: [{ groupId: "seasoning", choiceId: "salted_egg" }],
     });
 
-    const text = renderCart(carts.price(cart.id));
+    const text = renderCart(await carts.price(cart.id));
     expect(text).toContain("Salted egg dust");
     expect(text).not.toContain("Sea salt");
   });
 
-  it("says so when the cart is empty", () => {
-    expect(renderCart(carts.price(carts.create().id))).toBe("Cart's empty.");
+  it("says so when the cart is empty", async () => {
+    expect(renderCart(await carts.price((await carts.create()).id))).toBe("Cart's empty.");
   });
 
-  it("renders an order with its reference and payment state", () => {
-    const order = orders.confirm({ cartId: cartWithDory() });
+  it("renders an order with its reference and payment state", async () => {
+    const order = await orders.confirm({ cartId: await cartWithDory() });
     const text = renderOrder(order);
 
     expect(text).toContain(`Order ${order.reference}`);

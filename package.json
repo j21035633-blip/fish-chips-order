@@ -20,12 +20,14 @@
   "dependencies": {
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
+    "mongodb": "^6.21.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.5",
     "jsdom": "^29.1.1",
+    "mongodb-memory-server": "^10.4.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
