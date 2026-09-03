@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Anchor &amp; Batter — Order</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/">
+          <span class="brand-mark" aria-hidden="true">&#9875;</span>
+          <span class="brand-name">Anchor &amp; Batter</span>
+        </a>
+        <button id="cart-toggle" class="cart-toggle" type="button" hidden>
+          Cart <span id="cart-count" class="pill">0</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="view" class="view">
+      <p class="loading">Loading the menu…</p>
+    </main>
+
+    <!-- Cart drawer, menu view only -->
+    <aside id="cart-panel" class="cart-panel" hidden aria-label="Your order">
+      <div class="cart-head">
+        <h2>Your order</h2>
+        <button id="cart-close" class="icon-button" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div id="cart-body" class="cart-body"></div>
+      <div class="cart-foot">
+        <div class="cart-total">
+          <span>Total</span>
+          <strong id="cart-total">RM0.00</strong>
+        </div>
+        <button id="checkout-button" class="primary wide" type="button" disabled>Checkout</button>
+      </div>
+    </aside>
+    <div id="scrim" class="scrim" hidden></div>
+
+    <!-- Item options -->
+    <dialog id="item-dialog" class="dialog">
+      <form method="dialog" id="item-form">
+        <div id="item-dialog-body"></div>
+        <footer class="dialog-foot">
+          <div class="qty">
+            <button type="button" class="icon-button" data-qty="-1" aria-label="Fewer">&minus;</button>
+            <output id="item-qty">1</output>
+            <button type="button" class="icon-button" data-qty="1" aria-label="More">+</button>
+          </div>
+          <button type="button" id="item-add" class="primary">Add — <span id="item-price"></span></button>
+        </footer>
+      </form>
+    </dialog>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
