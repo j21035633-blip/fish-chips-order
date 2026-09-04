@@ -1,4 +1,5 @@
-import { menuService } from "../menu/service.js";
+import { MenuService } from "../menu/service.js";
+import { MenuStore } from "../menu/store.js";
 import { config } from "../config/env.js";
 import {
   InMemoryCartRepository,
@@ -38,6 +39,10 @@ export interface Services {
   orders: OrderService;
   payments: PaymentService;
   storage: Storage;
+  /** Reads, for the customer app and the agent tools. */
+  menu: MenuService;
+  /** Writes, for the staff menu page. Backs `menu` above — same snapshot. */
+  menuStore: MenuStore;
 }
 
 export function createServices(): Services {
@@ -46,11 +51,17 @@ export function createServices(): Services {
   const cartRepository: CartRepository = mongo ? mongo.carts() : new InMemoryCartRepository();
   const orderRepository: OrderRepository = mongo ? mongo.orders() : new InMemoryOrderRepository();
 
-  const carts = new CartService(cartRepository, menuService);
-  const orders = new OrderService(orderRepository, carts, menuService);
+  // One store, read through one service. Staff edits have to be visible to
+  // pricing and to the customer app immediately, and they are because both read
+  // the same in-memory snapshot the store writes through.
+  const menuStore = new MenuStore(mongo?.menu());
+  const menu = new MenuService(menuStore);
+
+  const carts = new CartService(cartRepository, menu);
+  const orders = new OrderService(orderRepository, carts, menu);
   const payments = createPaymentService(orders);
 
-  return { carts, orders, payments, storage: mongo ?? memoryStorage() };
+  return { carts, orders, payments, storage: mongo ?? memoryStorage(), menu, menuStore };
 }
 
 /** Nothing to open or close; the maps live and die with the process. */

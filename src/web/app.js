@@ -228,29 +228,62 @@ async function renderMenuView() {
           el("h2", { text: category.name }),
           el("p", { text: category.blurb }),
         ]),
-        ...category.items.map((item) =>
-          el("button", { class: "item", type: "button", onClick: () => openItem(item) }, [
-            el("div", { class: "item-main" }, [
-              el("div", { class: "item-name", text: item.name }),
-              el("div", { class: "item-desc", text: item.description }),
-              item.tags.length > 0
-                ? el(
-                    "div",
-                    { class: "tags" },
-                    item.tags
-                      .filter((tag) => ["signature", "popular", "new", "spicy"].includes(tag))
-                      .map((tag) => el("span", { class: `tag ${tag}`, text: tag })),
-                  )
-                : null,
-            ]),
-            el("div", { class: "item-price", text: item.price }),
-          ]),
-        ),
+        ...category.items.map((item) => menuRow(item)),
       ]),
     ),
   );
 
   renderCart();
+}
+
+/**
+ * One row of the menu.
+ *
+ * A sold-out item is still listed — hiding it only moves "do you still do the
+ * cod?" to the counter. It is greyed, not clickable, and where the price would
+ * be it says why, so nobody taps it expecting a dialog.
+ */
+function menuRow(item) {
+  const sellable = item.available !== false;
+
+  return el(
+    "button",
+    {
+      class: "item",
+      type: "button",
+      // Not `disabled`: a disabled button is skipped by the keyboard and reads
+      // as nothing at all to a screen reader. aria-disabled keeps it in the
+      // page and announced, and the handler below declines the tap.
+      "aria-disabled": sellable ? undefined : "true",
+      onClick: () => sellable && openItem(item),
+    },
+    [
+      item.imageUrl
+        ? el("img", { class: "item-thumb", src: item.imageUrl, alt: "", loading: "lazy" })
+        : null,
+      el("div", { class: "item-main" }, [
+        el("div", { class: "item-name", text: item.name }),
+        el("div", { class: "item-desc", text: item.description }),
+        item.tags.length > 0
+          ? el(
+              "div",
+              { class: "tags" },
+              item.tags
+                .filter((tag) => ["signature", "popular", "new", "spicy"].includes(tag))
+                .map((tag) => el("span", { class: `tag ${tag}`, text: tag })),
+            )
+          : null,
+      ]),
+      sellable
+        ? el("div", { class: "item-price", text: item.price })
+        : el("div", { class: "item-unavailable" }, [
+            document.createTextNode("Currently unavailable"),
+            item.unavailableReason
+              ? el("span", { class: "item-unavailable-reason", text: item.unavailableReason })
+              : null,
+          ]),
+    ],
+  );
 }
 
 // ------------------------------------------------------------ item dialog

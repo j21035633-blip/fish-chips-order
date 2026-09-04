@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Kitchen &amp; counter — Anchor &amp; Batter</title>
+    <link rel="stylesheet" href="{{STAFF_BASE}}/assets/staff.css" />
+  </head>
+  <body data-staff-base="{{STAFF_BASE}}" data-staff-view="kitchen">
+    <p id="error" class="error" hidden></p>
+
+    <main>
+      <div id="cards" class="cards"></div>
+      <p id="empty" class="empty" hidden>Nothing on the pass.</p>
+    </main>
+
+    <script type="module">
+      import { api, el, errorBanner, orderFeed } from "{{STAFF_BASE}}/assets/common.js";
+      import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
+
+      // One card per order still on the pass, each showing the single action its
+      // status calls for. Ordered so the oldest ticket is the first one a cook
+      // sees, which is the opposite of the dashboard's newest-first feed.
+      const ACTIVE = ["received", "cooking", "ready"];
+      const ACTION = {
+        received: { next: "cooking", label: "Start Cooking" },
+        cooking: { next: "ready", label: "Mark Ready" },
+        ready: { next: "collected", label: "Mark Collected" },
+      };
+      const STATUS_NAME = { received: "Received", cooking: "Cooking", ready: "Ready" };
+
+      const { slot } = mountStaffChrome({ title: "Kitchen & Counter" });
+      const feedState = el("span", { id: "feed-state", class: "feed-state", text: "connecting…" });
+      const count = el("span", { class: "card-count", text: "—" });
+      slot.append(feedState, count);
+
+      const cardsEl = document.getElementById("cards");
+      const emptyEl = document.getElementById("empty");
+      const showError = errorBanner();
+      const busy = new Set();
+
+      function card(order) {
+        const action = ACTION[order.kitchenStatus];
+        const paid = order.paymentStatus === "paid";
+
+        return el("article", { class: `card ${order.kitchenStatus}` }, [
+          el("div", { class: "ticket-head" }, [
+            order.tableNumber
+              ? el("span", { class: "table", text: `Table ${order.tableNumber}` })
+              : el("span", { class: "table takeaway", text: "Counter / takeaway" }),
+            el("span", { class: "reference", text: order.reference }),
+          ]),
+          order.customerName ? el("div", { class: "opts", text: order.customerName }) : null,
+          el(
+            "ul",
+            { class: "lines" },
+            order.lines.map((line) =>
+              el("li", {}, [
+                el("span", {}, [
+                  el("span", { text: `${line.quantity}× ${line.name}` }),
+                  line.options?.length
+                    ? el("div", { class: "opts", text: line.options.map((o) => o.choiceName).join(", ") })
+                    : null,
+                  line.note ? el("div", { class: "opts", text: `Note: ${line.note}` }) : null,
+                ]),
+                el("span", { text: line.lineTotal }),
+              ]),
+            ),
+          ),
+          el("div", { class: "status-line" }, [
+            el("span", { class: "status-name", text: STATUS_NAME[order.kitchenStatus] }),
+            el("span", { class: "total", text: order.total }),
+            el("span", { class: `tag ${order.paymentStatus}`, text: paid ? "Paid" : order.paymentStatus }),
+          ]),
+          el("button", {
+            class: "advance",
+            type: "button",
+            text: action.label,
+            disabled: busy.has(order.id),
+            onClick: () => move(order.id, action.next),
+          }),
+        ]);
+      }
+
+      async function move(orderId, status) {
+        busy.add(orderId);
+        try {
+          await api(`/api/staff/orders/${orderId}/status`, {
+            method: "PATCH",
+            body: JSON.stringify({ status }),
+          });
+          // Redraw from the server rather than locally: the same order may have
+          // been moved on another tablet a second ago, and the feed is the truth.
+          await feed.refresh();
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          busy.delete(orderId);
+        }
+      }
+
+      function draw({ orders }) {
+        showError();
+        const active = orders
+          .filter((order) => ACTIVE.includes(order.kitchenStatus))
+          .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+
+        count.textContent = `${active.length} on the pass`;
+        cardsEl.replaceChildren(...active.map(card));
+        emptyEl.hidden = active.length > 0;
+      }
+
+      const feed = orderFeed({
+        onData: draw,
+        onError: (error) => showError(error.message),
+        onState: (state) => {
+          feedState.textContent = state === "stale" ? "not updating" : "live";
+          feedState.className = state === "stale" ? "feed-state stale" : "feed-state";
+        },
+      });
+    </script>
+  </body>
+</html>

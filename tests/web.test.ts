@@ -96,11 +96,30 @@ describe("customer page", async () => {
     expect(view.textContent).toContain("Classic Battered Dory");
     expect(view.textContent).toContain("RM16.90");
 
-    // Sold-out items must not be offerable.
-    expect(view.textContent).not.toContain("Popcorn Prawns");
-
     expect(view.querySelectorAll("button.item").length).toBeGreaterThan(10);
     expect(view.querySelector(".tag.signature")?.textContent).toBe("signature");
+  });
+
+  it("lists a sold-out item, greyed out and not orderable", async () => {
+    await bootPage("/");
+
+    const view = document.getElementById("view")!;
+    // Listed rather than hidden: hiding it only moves the question to the counter.
+    const row = [...view.querySelectorAll("button.item")].find((item) =>
+      item.textContent?.includes("Popcorn Prawns"),
+    ) as HTMLButtonElement;
+    expect(row).toBeTruthy();
+
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.querySelector(".item-unavailable")?.textContent).toContain("Currently unavailable");
+    expect(row.querySelector(".item-unavailable")?.textContent).toContain("Sold out for today");
+    // The price is replaced, not shown alongside — there is nothing to pay.
+    expect(row.querySelector(".item-price")).toBeNull();
+
+    // And tapping it opens nothing.
+    row.click();
+    await settle(2);
+    expect(document.getElementById("item-dialog")!.hasAttribute("open")).toBe(false);
   });
 
   it("opens an item, shows its options, and prices them live", async () => {

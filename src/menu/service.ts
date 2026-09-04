@@ -1,5 +1,7 @@
 import { formatDelta, formatSen } from "./money.js";
-import { defaultMenuRepository, type MenuRepository } from "./repository.js";
+import type { MenuRepository } from "./repository.js";
+import { defaultMenuStore } from "./store.js";
+import { MenuValidationError } from "./types.js";
 import type {
   Allergen,
   CategoryId,
@@ -73,6 +75,8 @@ export interface MenuItemView {
   optionGroups: OptionGroupView[];
   available: boolean;
   unavailableReason?: string;
+  /** Served path to the item's photo, when staff have uploaded one. */
+  imageUrl?: string;
 }
 
 export interface CategoryView {
@@ -135,12 +139,25 @@ const TAG_REASON: Partial<Record<ItemTag, string>> = {
 };
 
 export class MenuService {
-  constructor(private readonly repo: MenuRepository = defaultMenuRepository) {}
+  constructor(private readonly repo: MenuRepository = defaultMenuStore) {}
 
   /** The whole menu, optionally filtered. Empty query returns everything available. */
   getMenu(query: MenuQuery = {}): MenuResult {
     const menu = this.repo.load();
     const withheld: WithheldItem[] = [];
+
+    // Checked against the menu as it stands rather than against a fixed enum:
+    // staff add sections from the menu page, so the valid set is only knowable
+    // at call time. Still an error rather than an empty result — an agent that
+    // asks for "desserts" needs telling we have none, not silence.
+    for (const requested of query.categories ?? []) {
+      if (!menu.categories.some((category) => category.id === requested)) {
+        throw new MenuValidationError(`No menu section "${requested}".`, "unknown_category", {
+          category: requested,
+          known: menu.categories.map((category) => category.id),
+        });
+      }
+    }
 
     const kept = menu.items.filter((item) => this.matches(item, query, withheld));
 
@@ -345,6 +362,7 @@ export function toItemView(item: MenuItem): MenuItemView {
     available: item.available,
   };
   if (item.unavailableReason !== undefined) view.unavailableReason = item.unavailableReason;
+  if (item.imageUrl !== undefined) view.imageUrl = item.imageUrl;
   return view;
 }
 

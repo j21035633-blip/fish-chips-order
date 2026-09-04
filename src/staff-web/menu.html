@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Menu — Anchor &amp; Batter</title>
+    <link rel="stylesheet" href="{{STAFF_BASE}}/assets/staff.css" />
+  </head>
+  <body data-staff-base="{{STAFF_BASE}}" data-staff-view="menu">
+    <p id="error" class="error" hidden></p>
+
+    <main>
+      <div id="groups"></div>
+      <p id="empty" class="empty" hidden>Nothing on the menu yet.</p>
+    </main>
+
+    <dialog id="form-dialog" class="form-dialog" aria-labelledby="form-title">
+      <form id="item-form" novalidate>
+        <h2 id="form-title">Add item</h2>
+
+        <div class="form-grid">
+          <div class="image-field">
+            <img id="preview" class="image-preview" alt="" />
+            <div class="image-actions">
+              <input id="image" name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" />
+              <button id="clear-image" class="ghost" type="button" hidden>Remove photo</button>
+              <span class="hint">JPEG, PNG, WebP, GIF or AVIF, up to 5&nbsp;MB.</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="name">Name</label>
+            <input id="name" name="name" type="text" maxlength="80" required />
+          </div>
+
+          <div class="field">
+            <label for="description">Description</label>
+            <textarea id="description" name="description" maxlength="300"></textarea>
+          </div>
+
+          <div class="form-two">
+            <div class="field">
+              <label for="price">Price (RM)</label>
+              <input id="price" name="price" type="number" min="0" max="10000" step="0.01" required />
+            </div>
+            <div class="field">
+              <label for="category">Category</label>
+              <input id="category" name="category" type="text" maxlength="40" list="categories" required />
+              <datalist id="categories"></datalist>
+            </div>
+          </div>
+
+          <label class="checkbox">
+            <input id="available" name="available" type="checkbox" checked />
+            <span>Available to order</span>
+          </label>
+        </div>
+
+        <p id="form-error" class="form-error" hidden></p>
+
+        <div class="form-foot">
+          <button id="cancel" class="ghost" type="button">Cancel</button>
+          <button id="save" class="advance" type="submit">Save item</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module">
+      import { api, el, errorBanner } from "{{STAFF_BASE}}/assets/common.js";
+      import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
+
+      const { slot } = mountStaffChrome({ title: "Menu" });
+      const countEl = el("span", { class: "card-count", text: "—" });
+      slot.append(
+        countEl,
+        el("button", { class: "advance", type: "button", text: "Add Item", onClick: () => openForm(null) }),
+      );
+
+      const groupsEl = document.getElementById("groups");
+      const emptyEl = document.getElementById("empty");
+      const dialog = document.getElementById("form-dialog");
+      const form = document.getElementById("item-form");
+      const imageInput = document.getElementById("image");
+      const previewEl = document.getElementById("preview");
+      const clearImageButton = document.getElementById("clear-image");
+      const formError = document.getElementById("form-error");
+      const saveButton = document.getElementById("save");
+      const showError = errorBanner();
+
+      // The item being edited, or null when adding. `removeImage` is separate
+      // from the file input: clearing a photo is its own instruction, not the
+      // absence of a new one.
+      let editing = null;
+      let removeImage = false;
+      let busy = new Set();
+      // Which row is one tap from being deleted. Names the confirm step rather
+      // than a modal, so a mis-tap costs nothing.
+      let confirmingDelete = null;
+
+      // ------------------------------------------------------------- listing
+
+      async function refresh() {
+        try {
+          const { items, categories } = await api("/api/staff/menu-items");
+          showError();
+          draw(items, categories);
+        } catch (error) {
+          showError(error.message);
+        }
+      }
+
+      function draw(items, categories) {
+        const available = items.filter((item) => item.available).length;
+        countEl.textContent = `${items.length} item${items.length === 1 ? "" : "s"} · ${available} available`;
+
+        // Grouped by category, in the order the categories are presented to
+        // customers, so this page reads the way the menu does.
+        const groups = categories
+          .map((category) => ({ category, items: items.filter((item) => item.categoryId === category.id) }))
+          .filter((group) => group.items.length > 0);
+
+        groupsEl.replaceChildren(
+          ...groups.map((group) =>
+            el("section", { class: "menu-group" }, [
+              el("h2", { class: "menu-group-head" }, [
+                el("span", { text: group.category.name }),
+                el("span", { text: String(group.items.length) }),
+              ]),
+              ...group.items.map(row),
+            ]),
+          ),
+        );
+        emptyEl.hidden = items.length > 0;
+
+        // Suggest what is already in use, so staff reuse a section rather than
+        // creating "Sides" beside "sides".
+        document
+          .getElementById("categories")
+          .replaceChildren(...categories.map((category) => el("option", { value: category.name })));
+      }
+
+      function row(item) {
+        const locked = busy.has(item.id);
+
+        return el("article", { class: `menu-row ${item.available ? "" : "off"}` }, [
+          item.imageUrl
+            ? el("img", { class: "thumb", src: item.imageUrl, alt: "", loading: "lazy" })
+            : el("div", { class: "thumb placeholder", text: "🍽", "aria-hidden": "true" }),
+          el("div", {}, [
+            el("div", { class: "row-name", text: item.name }),
+            item.description ? el("div", { class: "row-desc", text: item.description }) : null,
+          ]),
+          el("div", { class: "row-price", text: item.price }),
+          el("div", { class: "row-category", text: item.categoryId }),
+          el("div", { class: "switch-cell" }, [
+            el("button", {
+              class: "switch",
+              type: "button",
+              role: "switch",
+              "aria-checked": item.available ? "true" : "false",
+              "aria-label": `${item.name} available to order`,
+              disabled: locked,
+              onClick: () => toggle(item),
+            }),
+            el("span", { class: "switch-label", text: item.available ? "Available" : "Sold out" }),
+            el("div", { class: "row-actions" }, [
+              el("button", { type: "button", text: "Edit", disabled: locked, onClick: () => openForm(item) }),
+              el("button", {
+                class: confirmingDelete === item.id ? "destroy confirming" : "destroy",
+                type: "button",
+                text: confirmingDelete === item.id ? "Really delete?" : "Delete",
+                disabled: locked,
+                onClick: () => remove(item),
+              }),
+            ]),
+          ]),
+        ]);
+      }
+
+      // ------------------------------------------------------------- actions
+
+      /** Fires on the tap, with no save button — this is the 86 switch. */
+      async function toggle(item) {
+        busy.add(item.id);
+        try {
+          await api(`/api/staff/menu-items/${item.id}/availability`, {
+            method: "PATCH",
+            body: JSON.stringify({ available: !item.available }),
+          });
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          busy.delete(item.id);
+          await refresh();
+        }
+      }
+
+      /** Two taps: the first arms the row, the second deletes it. */
+      async function remove(item) {
+        if (confirmingDelete !== item.id) {
+          confirmingDelete = item.id;
+          await refresh();
+          return;
+        }
+
+        confirmingDelete = null;
+        busy.add(item.id);
+        try {
+          await api(`/api/staff/menu-items/${item.id}`, { method: "DELETE" });
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          busy.delete(item.id);
+          await refresh();
+        }
+      }
+
+      // ---------------------------------------------------------------- form
+
+      function openForm(item) {
+        editing = item;
+        removeImage = false;
+        confirmingDelete = null;
+
+        document.getElementById("form-title").textContent = item ? `Edit ${item.name}` : "Add item";
+        form.reset();
+        formError.hidden = true;
+
+        document.getElementById("name").value = item?.name ?? "";
+        document.getElementById("description").value = item?.description ?? "";
+        // The API speaks sen; the form speaks ringgit. Converted in both
+        // directions here so nothing else has to think about it.
+        document.getElementById("price").value = item ? (item.priceSen / 100).toFixed(2) : "";
+        document.getElementById("category").value = item ? categoryName(item.categoryId) : "";
+        document.getElementById("available").checked = item ? item.available : true;
+
+        showPreview(item?.imageUrl ?? null);
+        saveButton.textContent = item ? "Save changes" : "Add item";
+        dialog.showModal();
+      }
+
+      function categoryName(categoryId) {
+        const option = [...document.getElementById("categories").options].find(
+          (candidate) => candidate.value.toLowerCase().replace(/[^a-z0-9]+/g, "-") === categoryId,
+        );
+        return option?.value ?? categoryId;
+      }
+
+      function showPreview(url) {
+        previewEl.src = url ?? "";
+        previewEl.hidden = !url;
+        clearImageButton.hidden = !url;
+      }
+
+      imageInput.addEventListener("change", () => {
+        const [file] = imageInput.files;
+        if (!file) return;
+        removeImage = false;
+        // A local preview before anything is uploaded, so a wrong file is
+        // obvious before it is saved.
+        showPreview(URL.createObjectURL(file));
+      });
+
+      clearImageButton.addEventListener("click", () => {
+        imageInput.value = "";
+        removeImage = true;
+        showPreview(null);
+      });
+
+      document.getElementById("cancel").addEventListener("click", () => dialog.close());
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        formError.hidden = true;
+
+        const price = Number(document.getElementById("price").value);
+        if (!Number.isFinite(price) || price < 0) {
+          formError.textContent = "Give a price in ringgit, e.g. 16.90.";
+          formError.hidden = false;
+          return;
+        }
+
+        const body = new FormData();
+        body.set("name", document.getElementById("name").value.trim());
+        body.set("description", document.getElementById("description").value.trim());
+        // Rounded to whole sen: money is an integer count of sen everywhere
+        // behind this form, and 16.90 * 100 is not exactly 1690 in binary.
+        body.set("priceSen", String(Math.round(price * 100)));
+        body.set("category", document.getElementById("category").value.trim());
+        body.set("available", document.getElementById("available").checked ? "true" : "false");
+        if (removeImage) body.set("removeImage", "true");
+
+        const [file] = imageInput.files;
+        if (file) body.set("image", file);
+
+        saveButton.disabled = true;
+        try {
+          // No content-type header: the browser has to set the multipart
+          // boundary itself, and naming the type without it breaks the parse.
+          const response = await fetch(
+            editing ? `/api/staff/menu-items/${editing.id}` : "/api/staff/menu-items",
+            { method: editing ? "PUT" : "POST", body },
+          );
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(payload.message ?? payload.error ?? `Save failed (${response.status})`);
+          }
+
+          dialog.close();
+          await refresh();
+        } catch (error) {
+          formError.textContent = error.message;
+          formError.hidden = false;
+        } finally {
+          saveButton.disabled = false;
+        }
+      });
+
+      void refresh();
+    </script>
+  </body>
+</html>

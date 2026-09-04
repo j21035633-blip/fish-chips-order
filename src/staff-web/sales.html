@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Sales report — Anchor &amp; Batter</title>
+    <link rel="stylesheet" href="{{STAFF_BASE}}/assets/staff.css" />
+  </head>
+  <body data-staff-base="{{STAFF_BASE}}" data-staff-view="sales">
+    <p id="error" class="error" hidden></p>
+
+    <main>
+      <form id="range" class="controls">
+        <div class="field">
+          <label for="start">From</label>
+          <input id="start" name="start" type="date" required />
+        </div>
+        <div class="field">
+          <label for="end">To</label>
+          <input id="end" name="end" type="date" required />
+        </div>
+        <button class="advance" type="submit">Show</button>
+        <div class="presets">
+          <button type="button" data-days="1">Today</button>
+          <button type="button" data-days="7">Last 7 days</button>
+          <button type="button" data-days="30">Last 30 days</button>
+        </div>
+      </form>
+
+      <div class="summary">
+        <div class="stat hero">
+          <div class="stat-label">Total sales</div>
+          <div id="total-value" class="stat-value">—</div>
+          <div id="total-note" class="stat-note">Paid orders only</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Orders</div>
+          <div id="count-value" class="stat-value">—</div>
+          <div id="count-note" class="stat-note">&nbsp;</div>
+        </div>
+      </div>
+
+      <section class="panel">
+        <h2>Sales by day</h2>
+        <p id="chart-sub" class="sub">&nbsp;</p>
+        <div class="chart-scroll"><div id="chart"></div></div>
+        <div id="tooltip" class="tooltip" role="status" hidden></div>
+        <div id="table"></div>
+      </section>
+    </main>
+
+    <script type="module">
+      import { api, el, errorBanner, shortDay, svgEl } from "{{STAFF_BASE}}/assets/common.js";
+      import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
+
+      mountStaffChrome({ title: "Sales Report" });
+
+      const startInput = document.getElementById("start");
+      const endInput = document.getElementById("end");
+      const chartEl = document.getElementById("chart");
+      const tableEl = document.getElementById("table");
+      const tooltipEl = document.getElementById("tooltip");
+      const panelEl = tooltipEl.parentElement;
+      const showError = errorBanner();
+
+      // The shop's own "today", learned from the first (undated) response rather
+      // than from the tablet's clock — the two disagree either side of midnight,
+      // and the report's days are the shop's.
+      let shopToday = null;
+      let lastReport = null;
+
+      // ------------------------------------------------------------- fetching
+
+      async function load(params = "") {
+        try {
+          const report = await api(`/api/staff/sales-report${params}`);
+          shopToday ??= report.endDate;
+          startInput.value = report.startDate;
+          endInput.value = report.endDate;
+          showError();
+          draw(report);
+        } catch (error) {
+          showError(error.message);
+        }
+      }
+
+      document.getElementById("range").addEventListener("submit", (event) => {
+        event.preventDefault();
+        if (!startInput.value || !endInput.value) return;
+        void load(`?start_date=${startInput.value}&end_date=${endInput.value}`);
+      });
+
+      for (const button of document.querySelectorAll(".presets button")) {
+        button.addEventListener("click", () => {
+          const end = shopToday ?? endInput.value;
+          if (!end) return;
+          void load(`?start_date=${daysBefore(end, Number(button.dataset.days) - 1)}&end_date=${end}`);
+        });
+      }
+
+      /** Steps back whole days from midday UTC, which no offset change can cross. */
+      function daysBefore(day, count) {
+        const date = new Date(`${day}T12:00:00Z`);
+        date.setUTCDate(date.getUTCDate() - count);
+        return date.toISOString().slice(0, 10);
+      }
+
+      // ------------------------------------------------------------ rendering
+
+      function draw(report) {
+        lastReport = report;
+        const span =
+          report.startDate === report.endDate
+            ? shortDay(report.startDate)
+            : `${shortDay(report.startDate)} – ${shortDay(report.endDate)}`;
+
+        document.getElementById("total-value").textContent = report.total;
+        document.getElementById("total-note").textContent = `Paid orders only · ${span}`;
+        document.getElementById("count-value").textContent = String(report.count);
+        document.getElementById("count-note").textContent =
+          `Over ${report.days.length} day${report.days.length === 1 ? "" : "s"}`;
+        document.getElementById("chart-sub").textContent = `${span} · ${report.timeZone}`;
+
+        chartEl.replaceChildren(barChart(report.days));
+        tableEl.replaceChildren(breakdown(report));
+        hideTooltip();
+      }
+
+      /**
+       * A column per day, one series, so no legend — the panel heading names
+       * what is plotted. Zero days are drawn as gaps rather than dropped: a week
+       * missing its quiet Monday reads as a six-day week.
+       */
+      function barChart(days) {
+        const BAR_MAX = 24; // never fill the band; the leftover is air
+        const BAR_GAP = 2; // surface between neighbours does the separating
+        const RADIUS = 4; // rounded at the data end, square on the baseline
+        const pad = { top: 26, right: 14, bottom: 34, left: 60 };
+        const plotHeight = 220;
+        const band = Math.max(BAR_MAX + 14, Math.min(64, 760 / days.length));
+        const plotWidth = Math.max(320, band * days.length);
+        const width = pad.left + plotWidth + pad.right;
+        const height = pad.top + plotHeight + pad.bottom;
+
+        const peakSen = Math.max(...days.map((day) => day.totalSen), 0);
+        const axisMax = niceMax(peakSen);
+        const y = (sen) => pad.top + plotHeight - (sen / axisMax) * plotHeight;
+
+        const gridlines = ticks(axisMax).flatMap((sen) => [
+          svgEl("line", {
+            class: "grid-line",
+            x1: pad.left,
+            x2: pad.left + plotWidth,
+            y1: y(sen),
+            y2: y(sen),
+          }),
+          svgEl("text", {
+            class: "axis-text",
+            x: pad.left - 10,
+            y: y(sen) + 4,
+            "text-anchor": "end",
+            text: ringgit(sen),
+          }),
+        ]);
+
+        // Label every day when they fit, otherwise thin out to roughly ten.
+        const every = Math.ceil(days.length / 10);
+        const bars = days.map((day, index) => {
+          const barWidth = Math.min(BAR_MAX, band - BAR_GAP);
+          const x = pad.left + index * band + (band - barWidth) / 2;
+          const top = y(day.totalSen);
+          const isPeak = peakSen > 0 && day.totalSen === peakSen;
+
+          const group = svgEl(
+            "g",
+            {
+              class: "bar-group",
+              tabindex: "0",
+              role: "listitem",
+              "aria-label": `${day.day}: ${day.total} from ${day.count} order${day.count === 1 ? "" : "s"}`,
+              onFocus: (event) => showTooltip(event.currentTarget, day),
+              onBlur: hideTooltip,
+              onMouseenter: (event) => showTooltip(event.currentTarget, day),
+              onMouseleave: hideTooltip,
+            },
+            [
+              // A full-height transparent target, so a quiet day is still hoverable.
+              svgEl("rect", {
+                class: "bar-hit",
+                x: pad.left + index * band,
+                y: pad.top,
+                width: band,
+                height: plotHeight,
+              }),
+              day.totalSen > 0
+                ? svgEl("path", { class: "bar", d: barPath(x, top, barWidth, pad.top + plotHeight - top, RADIUS) })
+                : null,
+              // Label the peak alone; a number over every column goes unread.
+              isPeak
+                ? svgEl("text", {
+                    class: "peak-label",
+                    x: x + barWidth / 2,
+                    y: top - 8,
+                    "text-anchor": "middle",
+                    text: day.total,
+                  })
+                : null,
+            ],
+          );
+
+          const label =
+            index % every === 0 || index === days.length - 1
+              ? svgEl("text", {
+                  class: "axis-text",
+                  x: pad.left + index * band + band / 2,
+                  y: pad.top + plotHeight + 20,
+                  "text-anchor": "middle",
+                  text: shortDay(day.day),
+                })
+              : null;
+
+          return [group, label];
+        });
+
+        return svgEl(
+          "svg",
+          {
+            class: "chart",
+            width,
+            height,
+            viewBox: `0 0 ${width} ${height}`,
+            role: "list",
+            "aria-label": "Sales by day. The same figures are in the table below.",
+          },
+          [
+            ...gridlines,
+            ...bars.flat(),
+            // The baseline, drawn last so bars sit on it rather than under it.
+            svgEl("line", {
+              class: "grid-line",
+              x1: pad.left,
+              x2: pad.left + plotWidth,
+              y1: pad.top + plotHeight,
+              y2: pad.top + plotHeight,
+            }),
+          ],
+        );
+      }
+
+      /** Rounded at the top two corners, square where it meets the baseline. */
+      function barPath(x, top, width, height, radius) {
+        const r = Math.min(radius, width / 2, height);
+        const bottom = top + height;
+        return [
+          `M${x} ${bottom}`,
+          `L${x} ${top + r}`,
+          `Q${x} ${top} ${x + r} ${top}`,
+          `L${x + width - r} ${top}`,
+          `Q${x + width} ${top} ${x + width} ${top + r}`,
+          `L${x + width} ${bottom}`,
+          "Z",
+        ].join(" ");
+      }
+
+      /** Rounds the axis up to a clean number, so the ticks read 0 / 50 / 100. */
+      function niceMax(maxSen) {
+        if (maxSen <= 0) return 10_000;
+        const rough = maxSen / 4;
+        const magnitude = 10 ** Math.floor(Math.log10(rough));
+        const step = [1, 2, 2.5, 5, 10].map((m) => magnitude * m).find((candidate) => candidate >= rough);
+        return Math.ceil(maxSen / step) * step;
+      }
+
+      function ticks(axisMax) {
+        return [0, 0.25, 0.5, 0.75, 1].map((fraction) => axisMax * fraction);
+      }
+
+      function ringgit(sen) {
+        return `RM${(sen / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+      }
+
+      function showTooltip(group, day) {
+        tooltipEl.replaceChildren(
+          el("div", {}, [el("b", { text: day.total })]),
+          el("div", { text: `${shortDay(day.day)} · ${day.count} order${day.count === 1 ? "" : "s"}` }),
+        );
+        tooltipEl.hidden = false;
+
+        const mark = group.getBoundingClientRect();
+        const panel = panelEl.getBoundingClientRect();
+        tooltipEl.style.left = `${mark.left - panel.left + mark.width / 2}px`;
+        tooltipEl.style.top = `${mark.top - panel.top - 8}px`;
+      }
+
+      function hideTooltip() {
+        tooltipEl.hidden = true;
+      }
+
+      /** The same numbers as the chart, reachable without hovering anything. */
+      function breakdown(report) {
+        return el("table", { class: "breakdown" }, [
+          el("caption", { text: "Daily breakdown" }),
+          el("thead", {}, [
+            el("tr", {}, [
+              el("th", { scope: "col", text: "Day" }),
+              el("th", { scope: "col", text: "Orders" }),
+              el("th", { scope: "col", text: "Sales" }),
+            ]),
+          ]),
+          el(
+            "tbody",
+            {},
+            report.days.map((day) =>
+              el("tr", {}, [
+                el("th", { scope: "row", text: shortDay(day.day) }),
+                el("td", { text: String(day.count) }),
+                el("td", { text: day.total }),
+              ]),
+            ),
+          ),
+          el("tfoot", {}, [
+            el("tr", {}, [
+              el("td", { text: "Total" }),
+              el("td", { text: String(report.count) }),
+              el("td", { text: report.total }),
+            ]),
+          ]),
+        ]);
+      }
+
+      // A resize changes how many columns fit, so redraw from the last response
+      // rather than asking the server for numbers that have not changed.
+      let resizeTimer;
+      window.addEventListener("resize", () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => lastReport && draw(lastReport), 150);
+      });
+
+      // No dates: the server answers with today in the shop's own timezone.
+      void load();
+    </script>
+  </body>
+</html>

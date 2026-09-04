@@ -16,14 +16,30 @@ export const PAYMENT_METHODS = ["card", "ewallet"] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
 export const PAYMENT_PROVIDERS = ["stripe", "revenue_monster"] as const;
+export type PaymentProvider = (typeof PAYMENT_PROVIDERS)[number];
 
 /**
  * How far along the kitchen is. Separate from `paymentStatus` on purpose: money
  * and food move independently, and the counter needs to see both at once.
+ *
+ * In order: an order is `received` when it is placed, and staff walk it along
+ * the pass to `collected` — handed to the customer, and off the board.
  */
-export const KITCHEN_STATUSES = ["received", "cooking", "ready"] as const;
+export const KITCHEN_STATUSES = ["received", "cooking", "ready", "collected"] as const;
 export type KitchenStatus = (typeof KITCHEN_STATUSES)[number];
-export type PaymentProvider = (typeof PAYMENT_PROVIDERS)[number];
+
+/**
+ * The statuses that still need someone to do something — the columns on the
+ * board. `collected` is deliberately not one of them: the food has left the
+ * counter, so the ticket leaves the view rather than piling up on it.
+ */
+export const ACTIVE_KITCHEN_STATUSES = ["received", "cooking", "ready"] as const;
+export type ActiveKitchenStatus = (typeof ACTIVE_KITCHEN_STATUSES)[number];
+
+/** The status one step further along the pass, or undefined at the end of it. */
+export function nextKitchenStatus(status: KitchenStatus): KitchenStatus | undefined {
+  return KITCHEN_STATUSES[KITCHEN_STATUSES.indexOf(status) + 1];
+}
 
 /** A customer's choice within one option group, before pricing. */
 export interface OptionSelection {
@@ -156,6 +172,16 @@ export interface Order {
   kitchenStatus: KitchenStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * When an order's money landed.
+ *
+ * `payment.paidAt` is the truth; `updatedAt` covers an order marked paid without
+ * a provider payment attached, which is what a counter-settled order looks like.
+ */
+export function settledAt(order: Order): string {
+  return order.payment?.paidAt ?? order.updatedAt;
 }
 
 /** Thrown for anything the customer could fix by choosing differently. */

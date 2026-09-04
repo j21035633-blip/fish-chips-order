@@ -6,7 +6,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Services } from "../src/app/container.js";
 import type { RevenueMonsterConfig, StripeConfig } from "../src/config/env.js";
 import { createServer } from "../src/http/app.js";
-import { menuService } from "../src/menu/service.js";
+import { MenuService } from "../src/menu/service.js";
+import { MenuStore } from "../src/menu/store.js";
 import { InMemoryCartRepository, InMemoryOrderRepository } from "../src/orders/repository.js";
 import { CartService, OrderService } from "../src/orders/service.js";
 import { RevenueMonsterAdapter } from "../src/payments/revenueMonsterAdapter.js";
@@ -44,14 +45,24 @@ let base: string;
 let app: Services;
 
 function buildServices(): Services {
-  const carts = new CartService(new InMemoryCartRepository(), menuService);
-  const orders = new OrderService(new InMemoryOrderRepository(), carts, menuService);
+  // Its own store, so a menu edit in one suite cannot leak into another.
+  const menuStore = new MenuStore();
+  const menu = new MenuService(menuStore);
+  const carts = new CartService(new InMemoryCartRepository(), menu);
+  const orders = new OrderService(new InMemoryOrderRepository(), carts, menu);
   const payments = new PaymentService(
     orders,
     [new StripeAdapter(stripeConfig, BASE_URL), new RevenueMonsterAdapter(revenueMonsterConfig, BASE_URL)],
     BASE_URL,
   );
-  return { carts, orders, payments, storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} } as const };
+  return {
+    carts,
+    orders,
+    payments,
+    menu,
+    menuStore,
+    storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} } as const,
+  };
 }
 
 beforeAll(async () => {
@@ -69,8 +80,16 @@ afterAll(async () => {
 const json = (res: Response): Promise<any> => res.json() as Promise<any>;
 
 async function post(path: string, body?: unknown): Promise<Response> {
+  return send("POST", path, body);
+}
+
+async function patch(path: string, body?: unknown): Promise<Response> {
+  return send("PATCH", path, body);
+}
+
+async function send(method: string, path: string, body?: unknown): Promise<Response> {
   return fetch(`${base}${path}`, {
-    method: "POST",
+    method,
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
@@ -383,16 +402,40 @@ describe("checkout flow", async () => {
     await expect(bad.json()).resolves.toMatchObject({ error: "invalid_table_number" });
   });
 
-  it("serves the staff dashboard only at its own path", async () => {
-    const dashboard = await fetch(`${base}/staff`);
-    expect(dashboard.status).toBe(200);
-    expect(dashboard.headers.get("x-robots-tag")).toBe("noindex, nofollow");
-    await expect(dashboard.text()).resolves.toContain("Kitchen &amp; counter");
+  it("serves every staff view only under the staff path", async () => {
+    for (const [path, marker] of [
+      ["/staff", "Dashboard — Anchor &amp; Batter"],
+      ["/staff/kitchen", "Kitchen &amp; counter — Anchor &amp; Batter"],
+      ["/staff/sales", "Sales report — Anchor &amp; Batter"],
+      ["/staff/menu", "Menu — Anchor &amp; Batter"],
+    ]) {
+      const page = await fetch(`${base}${path}`);
+      expect(page.status, path).toBe(200);
+      expect(page.headers.get("x-robots-tag"), path).toBe("noindex, nofollow");
 
-    // It lives outside the customer web root, so express.static cannot serve it
-    // under its own filename and the configurable path actually means something.
-    expect((await fetch(`${base}/staff.html`)).status).toBe(404);
-    expect((await fetch(`${base}/staff-web/staff.html`)).status).toBe(404);
+      const html = await page.text();
+      expect(html, path).toContain(marker);
+      // The mount path is substituted in, so nothing is left pointing nowhere.
+      expect(html, path).not.toContain("{{STAFF_BASE}}");
+      expect(html, path).toContain(`href="/staff/assets/staff.css"`);
+    }
+
+    // They live outside the customer web root, so express.static cannot serve
+    // them under their own filenames and the configurable path means something.
+    for (const path of ["/staff.html", "/staff-web/staff.html", "/kitchen.html", "/sales.html", "/menu.html"]) {
+      expect((await fetch(`${base}${path}`)).status, path).toBe(404);
+    }
+  });
+
+  it("serves the shared staff assets under the staff path and nowhere else", async () => {
+    for (const file of ["staff.css", "nav.js", "common.js"]) {
+      const asset = await fetch(`${base}/staff/assets/${file}`);
+      expect(asset.status, file).toBe(200);
+      expect((await fetch(`${base}/assets/${file}`)).status, file).toBe(404);
+    }
+
+    // The nav is defined once, in the shared file the three pages import.
+    await expect((await fetch(`${base}/staff/assets/nav.js`)).text()).resolves.toContain("Kitchen & Counter");
   });
 
   it("reports the board and the day's takings", async () => {
@@ -440,6 +483,90 @@ describe("checkout flow", async () => {
 
     const missing = await post("/api/staff/orders/nope/status", { status: "cooking" });
     expect(missing.status).toBe(404);
+  });
+
+  it("takes the same status change over PATCH, which is what the pages call", async () => {
+    const cartId = await openCart({ table: "8" });
+    await post(`/api/carts/${cartId}/lines`, { itemId: "fish-dory-classic" });
+    const placed = (await json(await post("/api/orders", { cartId }))) as { order: { id: string } };
+    const orderId = placed.order.id;
+
+    for (const status of ["cooking", "ready", "collected"]) {
+      const moved = await patch(`/api/staff/orders/${orderId}/status`, { status });
+      expect(moved.status, status).toBe(200);
+      await expect(moved.json()).resolves.toMatchObject({ order: { kitchenStatus: status }, changed: true });
+    }
+
+    // Collected leaves the pass, but the ticket is still today's trade.
+    const overview = (await json(await fetch(`${base}/api/staff/overview`))) as {
+      orders: { id: string; kitchenStatus: string }[];
+    };
+    expect(overview.orders.find((order) => order.id === orderId)?.kitchenStatus).toBe("collected");
+
+    expect((await patch(`/api/staff/orders/${orderId}/status`, { status: "eaten" })).status).toBe(400);
+    expect((await patch("/api/staff/orders/nope/status", { status: "cooking" })).status).toBe(404);
+  });
+
+  it("reports sales for a day and for a range", async () => {
+    const cartId = await openCart({ table: "9" });
+    await post(`/api/carts/${cartId}/lines`, { itemId: "fish-dory-classic" });
+    const placed = (await json(await post("/api/orders", { cartId }))) as { order: { id: string } };
+    await post(`/api/orders/${placed.order.id}/payment`, { method: "card" });
+    await post(`/api/payments/simulate/${placed.order.id}`, {});
+
+    type Report = {
+      startDate: string;
+      endDate: string;
+      timeZone: string;
+      count: number;
+      totalSen: number;
+      total: string;
+      days: { day: string; count: number; totalSen: number; total: string }[];
+    };
+
+    // No dates at all: today, in the shop's own timezone.
+    const today = (await json(await fetch(`${base}/api/staff/sales-report`))) as Report;
+    expect(today.days).toHaveLength(1);
+    expect(today.startDate).toBe(today.endDate);
+    expect(today.days[0]!.day).toBe(today.startDate);
+    expect(today.count).toBeGreaterThan(0);
+    expect(today.totalSen).toBe(today.days[0]!.totalSen);
+
+    // A range returns a row per day, quiet days included as zeroes.
+    const range = (await json(
+      await fetch(`${base}/api/staff/sales-report?start_date=2020-01-01&end_date=2020-01-07`),
+    )) as Report;
+    expect(range.days.map((day) => day.day)).toEqual([
+      "2020-01-01",
+      "2020-01-02",
+      "2020-01-03",
+      "2020-01-04",
+      "2020-01-05",
+      "2020-01-06",
+      "2020-01-07",
+    ]);
+    expect(range.count).toBe(0);
+    expect(range.total).toBe("RM0.00");
+
+    // One date means one day, whichever end it was given as.
+    const single = (await json(await fetch(`${base}/api/staff/sales-report?end_date=2020-01-01`))) as Report;
+    expect(single.startDate).toBe("2020-01-01");
+    expect(single.days).toHaveLength(1);
+  });
+
+  it("refuses a range it cannot report on", async () => {
+    const cases: [string, string][] = [
+      ["?start_date=not-a-date", "invalid_date"],
+      ["?start_date=2020-02-31", "invalid_date"],
+      ["?start_date=2020-01-08&end_date=2020-01-01", "invalid_date_range"],
+      ["?start_date=2020-01-01&end_date=2024-01-01", "range_too_long"],
+    ];
+
+    for (const [query, error] of cases) {
+      const response = await fetch(`${base}/api/staff/sales-report${query}`);
+      expect(response.status, query).toBe(400);
+      await expect(response.json(), query).resolves.toMatchObject({ error });
+    }
   });
 
   it("serves the page assets", async () => {

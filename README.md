@@ -169,6 +169,7 @@ src/tools/         agent tools, Zod-validated
 src/app/           service container
 src/http/          routes (app.ts) and listener (server.ts)
 src/web/           customer page
+src/staff-web/     staff area — three views plus the shared nav in assets/
 src/cli/           menu stdout harness
 ```
 
@@ -209,6 +210,17 @@ GET    /api/orders/:orderId
 GET    /api/payments/methods
 POST   /api/orders/:orderId/payment          { method: "card" | "ewallet" }
 
+GET    /api/staff/overview                   # board + today's takings
+PATCH  /api/staff/orders/:orderId/status     { status: "received"|"cooking"|"ready"|"collected" }
+GET    /api/staff/sales-report?start_date=2026-09-01&end_date=2026-09-07
+
+GET    /api/staff/menu-items                 # every item, sold-out ones included
+POST   /api/staff/menu-items                 # multipart: image? + name, priceSen, category, …
+PUT    /api/staff/menu-items/:id             # multipart; patches whatever is sent
+PATCH  /api/staff/menu-items/:id/availability  { available }
+DELETE /api/staff/menu-items/:id
+GET    /uploads/menu-items/:file             # uploaded photos, read-only
+
 POST   /api/payments/webhook/stripe
 POST   /api/payments/webhook/revenue_monster
 POST   /api/payments/simulate/:orderId       # dev only; refuses configured providers
@@ -216,9 +228,17 @@ POST   /api/payments/simulate/:orderId       # dev only; refuses configured prov
 POST   /api/tools/:name                      # every tool above, for the agent runtime
 ```
 
+`GET /api/menu` **includes** sold-out items, with `categoryId` and `available` on each, because the
+customer page lists them greyed out rather than hiding them — hiding one only moves "do you still do
+the cod?" to the counter. The agent's own `get_menu` tool still hides them by default, since it must
+never offer something the fryer cannot make.
+
+Prices are an integer count of sen everywhere, including the staff form (`priceSen`). Nothing on the
+wire is a float.
+
 Validation failures return 400 with a machine-readable code (`unknown_option_choice`,
-`empty_cart`, `item_unavailable`, …) so the UI can branch on it. A provider failure is 502 — that
-one is not the customer's fault.
+`empty_cart`, `item_unavailable`, `missing_field`, `invalid_price`, `unsupported_image_type`, …) so
+the UI can branch on it. A provider failure is 502 — that one is not the customer's fault.
 
 ## Environment
 
@@ -226,7 +246,7 @@ SCREAMING_SNAKE_CASE, no spaces around `=`. See `.env.example`; all provider val
 
 ```
 PORT, PUBLIC_BASE_URL
-BUSINESS_TIMEZONE, STAFF_DASHBOARD_PATH
+BUSINESS_TIMEZONE, STAFF_DASHBOARD_PATH, UPLOADS_DIR
 MONGODB_URI, MONGODB_DB
 STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 REVENUE_MONSTER_API_KEY, REVENUE_MONSTER_CLIENT_ID, REVENUE_MONSTER_CLIENT_SECRET,
@@ -240,6 +260,10 @@ adapter think it was live would fail against the provider instead of falling bac
 `MONGODB_URI` is the one worth getting right. Without it the app falls back to in-memory storage,
 which loses every order on restart; it says so loudly at startup and `GET /health` reports
 `"storage": "memory"` so an accidental in-memory deploy is visible from outside.
+
+`UPLOADS_DIR` defaults to `uploads` beside the working directory, which on Railway resolves to
+`/app/uploads`. **That path needs a persistent volume mounted on it** — see the menu management
+section below.
 
 ## Design decisions worth knowing
 
@@ -299,11 +323,51 @@ than by assuming an offset — the offset for a zone is itself a function of the
 - **No migration for orders placed before persistence landed.** Anything created while the app was
   running in memory is gone; there was nowhere to read it from.
 
-## Staff dashboard
+## Staff area
 
-Kitchen and counter board at `STAFF_DASHBOARD_PATH` (default `/staff`): today's orders in three
-columns, each ticket showing table, items, total, payment status and kitchen status, with buttons to
-move it along. Header carries the running **Today's Sales Total** — paid orders only, with a count.
+Four views under `STAFF_DASHBOARD_PATH` (default `/staff`), sharing one nav and one stylesheet:
+
+| Path | View |
+| --- | --- |
+| `/` | **Dashboard** — today's orders in Received / Cooking / Ready columns, running Today's Sales Total |
+| `/kitchen` | **Kitchen & Counter** — the same active orders as cards, one action button each |
+| `/sales` | **Sales Report** — date range, summary cards, sales-by-day chart, daily breakdown table |
+| `/menu` | **Menu** — add, edit, delete items; photo upload; one-tap availability toggle |
+
+Each view is its own document rather than a client-side router, so a tablet on the pass reloads into
+the view it was showing. The nav lives once in `src/staff-web/assets/nav.js`; the mount path is
+substituted into each page at serve time, because relative asset URLs would resolve differently on
+`/staff` and `/staff/kitchen`.
+
+**Kitchen status** runs Received → Cooking → Ready → **Collected**. Collected is a real status but
+not a column: the food has been handed over, so the ticket drops off both boards while staying in
+the day's trade for the sales report. Any status is accepted rather than forward-only — a mis-tap on
+a busy pass has to be undoable — and the change is idempotent, so a double-tap is not an error.
+
+**Sales report** buckets paid orders by the day their money landed, in the shop's own timezone, one
+query for the whole window. Quiet days come back as zeroes rather than gaps: a week missing its
+quiet Monday reads as a six-day week. Range is capped at 366 days.
+
+**Menu management** edits the live menu. The menu is one document in Mongo, held in memory and
+written through on every edit, so pricing and the customer page see a change immediately and reads
+stay synchronous. Categories are staff-editable free text, slugged to an id (`Sides & Dips` →
+`sides-dips`) and reused rather than duplicated; a section empties out and disappears, except the
+four the shop opened with. The availability toggle is deliberately its own endpoint that can touch
+nothing else — it fires on a single tap during service, so it must not be able to carry a stale
+price with it. With no database configured the seed menu still serves; edits just do not survive a
+restart.
+
+### Uploaded photos need a Railway volume — manual step
+
+Photos are written to `UPLOADS_DIR/menu-items/` and served read-only at `/uploads/...`; the item
+stores the served path, not the disk path. A container filesystem is wiped on every redeploy, so
+**attach a persistent volume mounted at `/app/uploads`** to the service in the Railway dashboard
+(Service → Settings → Volumes), the same pattern as the volume behind the MongoDB service.
+
+Nothing in the code does this, and nothing checks for it: a missing volume looks exactly like a
+working directory until the next deploy, when every stored image URL starts 404ing while the menu
+still lists the items. Uploads are capped at 5 MB and JPEG/PNG/WebP/GIF/AVIF only — SVG is refused
+because it can carry script and these files are served from the same origin as the app.
 
 Updates by short polling every 2s rather than a websocket: one shop, one process, and a dropped
 socket on a kitchen tablet that silently stops updating is worse than a request every two seconds.
@@ -312,13 +376,16 @@ wrong.
 
 **It has no login.** That is a later phase. Two things follow, and neither is a substitute for auth:
 
-- The page lives in `src/staff-web/`, outside the customer web root, so `express.static` cannot
-  serve it under its own filename and `STAFF_DASHBOARD_PATH` genuinely controls where it is. Set
-  that to something unguessable on any public deployment, and do not link it from anywhere.
-- It is served with `X-Robots-Tag: noindex, nofollow` and a matching meta tag.
+- The pages live in `src/staff-web/`, outside the customer web root, so `express.static` cannot
+  serve them under their own filenames and `STAFF_DASHBOARD_PATH` genuinely controls where they are.
+  Their shared assets are mounted under the same path. Set it to something unguessable on any public
+  deployment, and do not link it from anywhere.
+- Every staff page is served with `X-Robots-Tag: noindex, nofollow` and a matching meta tag.
 
-The data routes it uses — `GET /api/staff/overview` and `POST /api/staff/orders/:id/status` — are as
-open as every other route in this app. Path obscurity hides the page, not the API.
+The data routes it uses — everything under `/api/staff/` — are as open as every other route in this
+app. Path obscurity hides the pages, not the API, and that now includes routes that **write the menu
+and accept file uploads**, which is a bigger thing to leave open than a status toggle was. Staff
+auth is the next thing this needs.
 
 ## Table QR codes
 

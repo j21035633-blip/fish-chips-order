@@ -5,6 +5,10 @@ dist/
 # Generated table QR codes and their print sheet.
 qr/
 
+# Menu-item photos staff have uploaded. On Railway this is a mounted volume;
+# locally it is whatever UPLOADS_DIR points at. Never source.
+uploads/
+
 # Credentials. .env.example is the only one that ships.
 .env
 .env.*

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { config } from "../config/env.js";
 import { menuService, type MenuService } from "../menu/service.js";
 import { formatSen } from "../menu/money.js";
-import { businessDay, businessDayRange } from "./businessDay.js";
+import { businessDay, businessDayRange, businessDaysBetween, isBusinessDay } from "./businessDay.js";
 import { priceCart } from "./pricing.js";
 import {
   InMemoryCartRepository,
@@ -15,6 +15,7 @@ import {
   KITCHEN_STATUSES,
   OrderValidationError,
   parseTableNumber,
+  settledAt,
   type Cart,
   type CartLine,
   type OptionSelection,
@@ -146,6 +147,46 @@ export interface DailySales {
   total: string;
 }
 
+/** One row of the sales report — a single business day's takings. */
+export interface SalesReportDay {
+  /** `YYYY-MM-DD` in the shop's own timezone. */
+  day: string;
+  count: number;
+  totalSen: number;
+  total: string;
+}
+
+/**
+ * Takings over a range of days, with the per-day breakdown a chart needs.
+ *
+ * `days` covers every day in the range, quiet ones included as zeroes — a chart
+ * with gaps in its x-axis lies about the shape of a week.
+ */
+export interface SalesReport {
+  startDate: string;
+  endDate: string;
+  timeZone: string;
+  /** Totals across the whole range, for the summary cards. */
+  count: number;
+  totalSen: number;
+  total: string;
+  days: SalesReportDay[];
+}
+
+export interface SalesReportInput {
+  /** `YYYY-MM-DD`. Defaults to today in `timeZone`. */
+  startDate?: string | undefined;
+  /** `YYYY-MM-DD`. Defaults to `startDate`, so one date means one day. */
+  endDate?: string | undefined;
+  timeZone?: string | undefined;
+}
+
+/**
+ * A year and a day. Long enough for "last 12 months", short enough that a typo
+ * in a URL cannot ask the database to scan everything the shop has ever sold.
+ */
+export const MAX_SALES_REPORT_DAYS = 366;
+
 export interface MarkPaidResult {
   order: Order;
   /** False when the order was already paid — a redelivered webhook, not a second payment. */
@@ -271,11 +312,12 @@ export class OrderService {
   }
 
   /**
-   * Moves an order along the kitchen board.
+   * Moves an order along the pass: Received → Cooking → Ready → Collected.
    *
-   * Any of the three is accepted rather than forward-only: a mis-tap on a busy
-   * pass needs to be undoable, and there is no auth to make an audit trail of
-   * anyway. Idempotent, so a double-tap is not an error.
+   * Any of the four is accepted rather than forward-only: a mis-tap on a busy
+   * pass needs to be undoable — including un-collecting an order handed to the
+   * wrong table — and there is no auth to make an audit trail of anyway.
+   * Idempotent, so a double-tap is not an error.
    */
   async setKitchenStatus(orderId: string, status: KitchenStatus): Promise<MarkPaidResult> {
     if (!(KITCHEN_STATUSES as readonly string[]).includes(status)) {
@@ -308,11 +350,81 @@ export class OrderService {
    */
   async dailySales(timeZone: string = config.businessTimeZone): Promise<DailySales> {
     const day = businessDay(new Date(), timeZone);
-    const { start, end } = businessDayRange(day, timeZone);
+    // One day is just the narrowest report there is; sharing the implementation
+    // is what keeps the header total and the sales page from ever disagreeing.
+    const report = await this.salesReport({ startDate: day, endDate: day, timeZone });
+    const today = report.days[0]!;
+
+    return { day, timeZone, count: today.count, totalSen: today.totalSen, total: today.total };
+  }
+
+  /**
+   * Takings per business day across a range, for the sales report.
+   *
+   * One query for the whole window rather than one per day: paid orders are
+   * bucketed here by the day their money landed, using the same rule as
+   * `dailySales`. Days with no takings are still returned, as zeroes.
+   */
+  async salesReport(input: SalesReportInput = {}): Promise<SalesReport> {
+    const timeZone = input.timeZone ?? config.businessTimeZone;
+    const today = businessDay(new Date(), timeZone);
+    // A single date means a single day, whichever end of the range it was given as.
+    const startDate = input.startDate ?? input.endDate ?? today;
+    const endDate = input.endDate ?? startDate;
+
+    for (const [name, value] of [["start_date", startDate], ["end_date", endDate]] as const) {
+      if (!isBusinessDay(value)) {
+        throw new OrderValidationError(`"${value}" is not a date (YYYY-MM-DD).`, "invalid_date", {
+          field: name,
+          value,
+        });
+      }
+    }
+    if (endDate < startDate) {
+      throw new OrderValidationError("The range ends before it starts.", "invalid_date_range", {
+        startDate,
+        endDate,
+      });
+    }
+
+    const days = businessDaysBetween(startDate, endDate);
+    if (days.length > MAX_SALES_REPORT_DAYS) {
+      throw new OrderValidationError(
+        `A report covers at most ${MAX_SALES_REPORT_DAYS} days; that range is ${days.length}.`,
+        "range_too_long",
+        { startDate, endDate, days: days.length, maxDays: MAX_SALES_REPORT_DAYS },
+      );
+    }
+
+    const { start } = businessDayRange(startDate, timeZone);
+    const { end } = businessDayRange(endDate, timeZone);
     const paid = await this.orders.paidBetween(start, end);
 
-    const totalSen = paid.reduce((sum, order) => sum + order.totalSen, 0);
-    return { day, timeZone, count: paid.length, totalSen, total: formatSen(totalSen) };
+    const takings = new Map(days.map((day) => [day, { count: 0, totalSen: 0 }]));
+    for (const order of paid) {
+      // The query bounds the range, so every settled order lands in a bucket —
+      // but a clock skewed past the last boundary should be dropped, not thrown.
+      const bucket = takings.get(businessDay(settledAt(order), timeZone));
+      if (!bucket) continue;
+      bucket.count += 1;
+      bucket.totalSen += order.totalSen;
+    }
+
+    const breakdown: SalesReportDay[] = days.map((day) => {
+      const { count, totalSen } = takings.get(day)!;
+      return { day, count, totalSen, total: formatSen(totalSen) };
+    });
+    const totalSen = breakdown.reduce((sum, day) => sum + day.totalSen, 0);
+
+    return {
+      startDate,
+      endDate,
+      timeZone,
+      count: breakdown.reduce((sum, day) => sum + day.count, 0),
+      totalSen,
+      total: formatSen(totalSen),
+      days: breakdown,
+    };
   }
 
   /** "AB-4821" — short enough to read out at the counter. */

@@ -134,6 +134,48 @@ h1, h2, h3 { line-height: 1.25; margin: 0; }
 .item-desc { color: var(--ink-soft); font-size: 14px; margin-top: 2px; }
 .item-price { font-variant-numeric: tabular-nums; font-weight: 620; white-space: nowrap; }
 
+/* The photo staff uploaded on the menu page, when there is one. */
+.item-thumb {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--paper);
+}
+
+/*
+ * Sold out, but still listed.
+ *
+ * Hiding it just moves the question to the counter, so the row stays and says
+ * so. Greyed rather than removed, not clickable, and the price is replaced by
+ * the reason — there is nothing to pay until it is back.
+ */
+.item[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+.item[aria-disabled="true"]:hover { border-color: var(--line); }
+.item[aria-disabled="true"] .item-thumb { filter: grayscale(1); }
+.item-unavailable {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--danger);
+  white-space: nowrap;
+  text-align: right;
+}
+.item-unavailable-reason {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-soft);
+}
+
 .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .tag {
   font-size: 11px;

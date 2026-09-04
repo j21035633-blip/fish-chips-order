@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { renderItem, renderMenu, renderSuggestions } from "../menu/render.js";
 import { MenuService, menuService } from "../menu/service.js";
-import { ALLERGENS, CATEGORY_IDS, DIETARY_TAGS, ITEM_TAGS } from "../menu/types.js";
+import { ALLERGENS, DIETARY_TAGS, ITEM_TAGS } from "../menu/types.js";
 
 /**
  * The Phase 1 tool surface for the Order & Track agent.
@@ -18,7 +18,9 @@ import { ALLERGENS, CATEGORY_IDS, DIETARY_TAGS, ITEM_TAGS } from "../menu/types.
  */
 
 const allergenSchema = z.enum(ALLERGENS);
-const categorySchema = z.enum(CATEGORY_IDS);
+// Staff can add sections from the menu page, so this cannot be a closed enum
+// any more. An id that matches nothing simply returns no items.
+const categorySchema = z.string().min(1);
 const dietarySchema = z.enum(DIETARY_TAGS);
 const tagSchema = z.enum(ITEM_TAGS);
 

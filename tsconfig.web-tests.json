@@ -5,6 +5,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["tests/web.test.ts", "src/web/**/*"],
+  "include": ["tests/web.test.ts", "tests/staffNav.test.ts", "src/web/**/*", "src/staff-web/**/*"],
   "exclude": []
 }

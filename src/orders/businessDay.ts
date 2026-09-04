@@ -40,6 +40,27 @@ export function businessDayRange(day: string, timeZone: string): { start: string
   };
 }
 
+/** True for a `YYYY-MM-DD` that names a real day. Rejects "2026-02-31". */
+export function isBusinessDay(day: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+  const parsed = new Date(`${day}T00:00:00Z`);
+  // A round-trip catches the dates the regex lets through but the calendar has
+  // not got — Date rolls "2026-02-31" forward to March rather than refusing it.
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === day;
+}
+
+/**
+ * Every day from `start` to `end` inclusive, as `YYYY-MM-DD`.
+ *
+ * Walked a day at a time in UTC from midday, which no offset change can push
+ * across a date boundary — so the sequence is the calendar's, not a timezone's.
+ */
+export function businessDaysBetween(start: string, end: string): string[] {
+  const days: string[] = [];
+  for (let day = start; day <= end; day = nextDay(day)) days.push(day);
+  return days;
+}
+
 /** Midnight at the start of `day` in `timeZone`, as a UTC ISO string. */
 function firstInstantOf(day: string, timeZone: string): string {
   // Midnight local is within a day of midnight UTC for every real zone, so start

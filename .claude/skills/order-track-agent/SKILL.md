@@ -6,36 +6,167 @@ description: QR scan-to-order system for a fish & chips shop, with POS integrati
 ## Project Overview
 QR-scan-to-order system for a fish & chips shop. Customer scans a table QR, orders from a web menu, order goes to the POS/kitchen, and after checkout the customer can play a short fishing mini-game for a chance at a reward voucher (discount, free drink, or free chips) redeemable on their next visit.
 
-## Stack
-Same pattern as `cattery-care`:
-- **Backend:** Python FastAPI + MongoDB (Beanie ODM)
-- **Web:** Next.js 15 + React 19 + Tailwind — mobile-first PWA
-- **Auth:** JWT for staff/admin only; customers order without logging in, tracked by table/session
+## Stack — as built
+The plan called for FastAPI + Next.js. What actually shipped is Node, and new work should match it:
+
+- **Backend:** Node 20 + TypeScript (ESM, strict) + Express 4 + MongoDB (the driver, no ODM)
+- **Web:** no framework and no build step — hand-written HTML/CSS/JS served by Express.
+  `src/web/` is the customer app (one client-rendered document); `src/staff-web/` is the staff area.
+  The customer page is opened by scanning a QR at the table, so it has to load on a bad connection.
+- **Validation:** Zod at every edge (HTTP query/body, agent tool input)
+- **Uploads:** `multer` to local disk, served read-only — see *Menu management* below
+- **Auth:** none yet. Staff pages sit behind an unguessable path (`STAFF_DASHBOARD_PATH`) and that
+  is **not** auth: every `/api/staff/*` route is as open as the rest of the API. Real staff auth is
+  the next thing this needs, and it now gates menu writes and file uploads, not just a status toggle.
 - **Hosting:** Railway
+- **Tests:** Vitest. `npm test` and `npm run typecheck` both have to pass; the web tests boot the
+  real page against the real server in jsdom.
 - **Optional later:** React Native/Expo for a staff kitchen-display (KDS) app
 
-## Current Status — BUILD PHASE 1 ONLY
+## Current Status
 
-Only build what's listed under Phase 1 below. Do not implement payment, POS integration, order status tracking, or the fishing game yet — those are scoped for later phases and listed here for context only.
+### Built
+1. **Menu** — categories, items, option groups (fish type, chips size, sauces, ice, sugar), allergen
+   and dietary filtering, portion info, suggestions for the undecided customer
+2. **Ordering** — QR-linked order page at `/order?table=<table_id>`, cart with running total,
+   confirmed orders, table carried from the scan onto the ticket
+3. **Payments** — Stripe (cards) + Revenue Monster (e-wallets/DuitNow) behind a `PaymentAdapter`,
+   webhooks with real signature verification, simulated when no credentials are configured
+4. **Staff area** — four views, kitchen status, daily sales total, sales reporting, menu management.
+   See *Staff area* below.
 
-### Phase 1 (active)
-- Project setup: FastAPI + Beanie/MongoDB backend, Next.js 15 + React 19 + Tailwind frontend — same structure as cattery-care
-- QR-linked order page at `/order?table=<table_id>`
-- Menu display: categories, items, options (fish type, chips size, sauces), prices
-- Cart: add/remove items, adjust quantities, running total
-- Mock checkout: "Place Order" button creates an `Order` record, returns an `order_id` — no real payment, no POS call yet
-- Confirmation screen showing `order_id` and items ordered
+### Not built yet
+5. POS adapter — behind a `POSAdapter` interface so the backend is swappable. **[DECISION NEEDED]**
+   Loyverse, Square, something local, or none yet — start with a mock adapter that logs + prints a ticket
+6. Customer-facing order status tracking (`get_order_status`) — staff set the status, but the
+   customer cannot yet watch it. Reuses the same field the staff pages update.
+7. Fishing mini-game + voucher generation. **[DECISION NEEDED]** guaranteed reward per order vs.
+   true random chance of nothing
+8. Staff voucher redemption screen
+9. AI agent conversational layer ("Order & Track") on top of the above
+10. **Staff auth** — see the note in the stack section. This is the most overdue item.
 
 Ask before deciding anything not specified here (exact menu items, styling details, etc.).
 
-### Later phases (do not build yet)
-2. Live staff dashboard (kitchen + cashier) — real-time order feed, mark Received/Cooking/Ready, running daily sales total
-3. Real payment integration — dual gateway: **Stripe** (cards) + **Revenue Monster** (local e-wallets/DuitNow), behind a `PaymentAdapter` interface, customer picks a method at checkout
-4. POS adapter — behind a `POSAdapter` interface so the backend is swappable. **[DECISION NEEDED]** Loyverse, Square, something local, or none yet — start with a mock adapter that logs + prints a ticket
-5. Customer-facing order status tracking (Received / Cooking / Ready) via polling or websocket — reuses the same status field the staff dashboard updates
-6. Fishing mini-game + voucher generation. **[DECISION NEEDED]** guaranteed reward per order vs. true random chance of nothing
-7. Staff voucher redemption screen
-8. AI agent conversational layer ("Order & Track") on top of the above
+## Staff area
+
+Four views under `STAFF_DASHBOARD_PATH` (default `/staff`), sharing one nav component and one
+stylesheet in `src/staff-web/assets/`:
+
+| Path | View | What it does |
+| --- | --- | --- |
+| `/` | **Dashboard** | Today's orders in Received / Cooking / Ready columns; running Today's Sales Total in the header |
+| `/kitchen` | **Kitchen & Counter** | The same active orders as cards, each with the one action its status calls for |
+| `/sales` | **Sales Report** | Date range (defaults to today), summary cards, sales-by-day chart, daily breakdown table |
+| `/menu` | **Menu** | Add / edit / delete items, upload photos, one-tap availability toggle |
+
+Each view is its own document rather than a client-side router, so a tablet on the pass reloads into
+the view it was showing. Add a fifth view by adding one entry to `STAFF_VIEWS` in
+`src/staff-web/assets/nav.js`, one HTML file, and one route — the nav is defined once.
+
+The mount path is substituted into each page at serve time (`{{STAFF_BASE}}` → the configured path),
+because relative asset URLs would resolve differently on `/staff` and `/staff/kitchen`. Live updates
+are short polling of `GET /api/staff/overview` every 2s, not a websocket: one shop, one process, and
+a dropped socket on a kitchen tablet that silently stops updating is worse than a request every two
+seconds. The header shows `not updating` when the feed stalls.
+
+### Kitchen status: Received → Cooking → Ready → Collected
+
+`collected` means handed to the customer. It is a real status but **not a column**: the ticket drops
+off both boards, while staying in the day's trade so the sales report still counts it. The Kitchen &
+Counter view is where it is set ("Mark Collected"); the Dashboard's chain still ends at Ready.
+
+Any status is accepted rather than forward-only — a mis-tap on a busy pass has to be undoable, and
+there is no auth to make an audit trail of anyway. The change is idempotent, so a double-tap is not
+an error. Kitchen status never touches payment status: money and food move independently.
+
+### Menu management
+
+The menu is editable from `/menu`. It is **one document** in Mongo (collection `menu`, `_id:
+"current"`), held in memory by `MenuStore` and written through on every edit. That shape is
+deliberate:
+
+- Reads stay **synchronous**. `MenuService.getMenu`, `priceCart` and every cart mutation read the
+  snapshot, and making that async would turn the whole pricing path into promises for no gain.
+- Staff edits are visible to pricing and to the customer page immediately, because both read the
+  same snapshot.
+- One document keeps `items`, `categories` and `version` consistent with each other. At tens of
+  items a per-item collection buys nothing.
+- With no `MONGODB_URI`, the seed menu in `src/menu/data/menu.ts` still serves — edits just do not
+  survive a restart.
+
+**Categories are staff-editable free text**, not the closed enum they used to be. A typed name is
+slugged to an id (`Sides & Dips` → `sides-dips`) and reused rather than duplicated, so "Sides" and
+"sides " are one section. A section that empties out disappears, except the four the shop opened
+with. The form's `datalist` suggests sections already in use.
+
+**The availability toggle is its own endpoint** that can touch nothing else. It fires on a single tap
+during service, so it must not be able to carry a stale price with it. Turning an item back on clears
+any `unavailableReason`, which described the old state.
+
+**Prices are an integer count of sen everywhere**, including the staff form (`priceSen`). The form
+converts from ringgit and back; nothing on the wire is a float.
+
+Deleting an item leaves a cart that still holds it failing to price with `unknown_item` — the same
+400 an unavailable item already produced.
+
+### Image upload storage — and the Railway volume it needs
+
+- Photos are written to `UPLOADS_DIR/menu-items/`, and `UPLOADS_DIR` defaults to `uploads` beside
+  the working directory. Railway's working directory is `/app`, so that resolves to
+  **`/app/uploads/menu-items/`** with no configuration.
+- They are served read-only at **`/uploads/*`** (`express.static`, `nosniff`, a restrictive CSP,
+  dotfiles denied). The item's `imageUrl` stores the **served path**, not the disk path, so moving
+  the directory does not rewrite the menu.
+- Filenames are a fresh uuid plus the extension for the detected type. The uploaded name is never
+  reused: it is attacker-controlled and may not be a safe path segment.
+- Limits: **5 MB**, one file, and **JPEG / PNG / WebP / GIF / AVIF only**. SVG is refused because it
+  can carry script and these files are served from the same origin as the app.
+- Replacing or deleting an image unlinks the file it replaced, best effort — an orphaned file wastes
+  a few hundred kilobytes, whereas failing the staff member's actual request over a failed unlink
+  would be worse.
+
+> **MANUAL RAILWAY STEP — not done in code, and not checked for.**
+> A container filesystem is wiped on every redeploy. Attach a **persistent volume mounted at
+> `/app/uploads`** to the service in the Railway dashboard (Service → Settings → Volumes), the same
+> pattern as the volume behind the MongoDB service. Do not try to configure this from code.
+> A missing volume looks exactly like a working directory until the next deploy, when every stored
+> image URL starts 404ing while the menu still lists the items.
+
+### Staff HTTP surface
+
+```
+GET    /api/staff/overview                      # board + today's takings (polled by the pages)
+PATCH  /api/staff/orders/:orderId/status        { status: received|cooking|ready|collected }
+GET    /api/staff/sales-report?start_date=&end_date=
+
+GET    /api/staff/menu-items                    # every item, sold-out ones included
+POST   /api/staff/menu-items                    # multipart: image? + name, priceSen, category, …
+PUT    /api/staff/menu-items/:id                # multipart; patches whatever is sent
+PATCH  /api/staff/menu-items/:id/availability   { available }
+DELETE /api/staff/menu-items/:id
+```
+
+- `PATCH …/status` is the verb the pages use. `POST` to the same path still works — it shipped
+  first, and a kitchen tablet holding a cached page must not break on a deploy.
+- `sales-report` buckets **paid** orders by the day their money landed, in the shop's own timezone,
+  one query for the whole window. Both dates default to today; one date means one day. Every day in
+  range comes back, quiet ones as zeroes — a week missing its quiet Monday reads as a six-day week.
+  Range is capped at 366 days. Errors: `invalid_date`, `invalid_date_range`, `range_too_long`.
+- `PUT` patches rather than replaces, so an edit form that only changes the price does not have to
+  resend the description. `removeImage=true` clears a photo without uploading a replacement.
+- Errors carry a machine-readable code: `unknown_menu_item` (404), `missing_field`, `field_too_long`,
+  `invalid_price`, `invalid_category`, `unsupported_image_type`, `invalid_upload` (400).
+
+### Availability is shown, not hidden
+
+`GET /api/menu` — what the customer app reads — **includes** sold-out items, with `categoryId` and
+`available` on every item. The customer page groups by category and renders an unavailable item
+greyed out, not clickable, with "Currently unavailable" (and the reason) where the price would be.
+Hiding it only moves "do you still do the cod?" to the counter.
+
+The agent's own `get_menu` tool still hides them by default, because it must never offer something
+the fryer cannot make. That is the one deliberate difference between the two.
 
 ## Session & Sales Behavior (applies to every phase, not just one)
 - **Cart ownership:** the cart belongs to the customer's own browser session — never stored server-side keyed only by `table_id`. `table_id` is a routing tag for kitchen/staff, never a shared "current order" store.
@@ -64,8 +195,16 @@ Ask before deciding anything not specified here (exact menu items, styling detai
 - Staff redemption via `redeem_voucher(code)`
 
 ## Data Model
-- `MenuItem`: name, category, price, options[], available (bool)
-- `Order`: order_id, table_id, items[], status, total, created_at
+Domain fields are camelCase, and money is always an integer count of sen (1 MYR = 100 sen) — never a
+float. See `src/menu/types.ts` and `src/orders/types.ts` for what is actually there.
+
+- `MenuItem`: id, categoryId (staff-editable string), name, description, flavourNotes, priceSen,
+  portion, allergens[], mayContain[], dietary[], tags[], optionGroups[], available (bool, default
+  true), unavailableReason?, **imageUrl?** (the served `/uploads/menu-items/<file>` path; absent
+  when nobody has uploaded a photo)
+- `Category`: id (slug), name (as staff typed it), blurb, sortOrder
+- `Order`: id, reference, lines[], totals, paymentStatus (pending|paid|failed|expired),
+  **kitchenStatus (received|cooking|ready|collected)**, tableNumber?, createdAt, updatedAt
 - `Voucher`: code, order_id, type (discount / drink / chips), expiry, redeemed (bool)
 - `GamePlay`: order_id, result, voucher_id (nullable)
 - `ChanceLedger`: order_id, base_chances (1), bonus_chances[] (type: register/review/social/spend, verified: bool), total_chances, used_chances

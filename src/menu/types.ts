@@ -8,9 +8,23 @@
 
 export const CURRENCY = "MYR" as const;
 
-/** Category ids are stable; the agent groups its menu rundown by these. */
+/**
+ * The categories the shop opened with. Staff can add their own from the menu
+ * page, so this is the seed set rather than the closed set it used to be — which
+ * is why `CategoryId` is a plain string. Ids stay stable once created: an item
+ * points at one, and the agent groups its menu rundown by them.
+ */
 export const CATEGORY_IDS = ["fish", "chips", "combos", "drinks"] as const;
-export type CategoryId = (typeof CATEGORY_IDS)[number];
+export type CategoryId = string;
+
+/** Turns a category name typed by staff into a stable id. "Sides & Dips" -> "sides-dips". */
+export function toCategoryId(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
 
 /**
  * Allergens we declare per item. Keep this list closed — the agent answers
@@ -89,10 +103,19 @@ export interface MenuItem {
   dietary: DietaryTag[];
   tags: ItemTag[];
   optionGroups: OptionGroup[];
-  /** False when 86'd for the day. Hidden from the menu unless explicitly requested. */
+  /**
+   * False when 86'd for the day. Still listed to customers, shown as
+   * unavailable, so nobody is left wondering whether it exists — the agent's
+   * `get_menu` is the one caller that hides them by default.
+   */
   available: boolean;
   /** Why it is off, e.g. "sold out today" — the agent repeats this verbatim. */
   unavailableReason?: string;
+  /**
+   * Path to the item's photo, as served: `/uploads/menu-items/<file>`. Absent
+   * when nobody has uploaded one, which is the state every seeded item is in.
+   */
+  imageUrl?: string;
 }
 
 export interface Category {
@@ -102,6 +125,21 @@ export interface Category {
   blurb: string;
   /** Ascending order the categories are presented in. */
   sortOrder: number;
+}
+
+/**
+ * Thrown for anything a member of staff could fix by filling the form in
+ * differently. Mirrors `OrderValidationError` — same shape, same HTTP mapping.
+ */
+export class MenuValidationError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly details?: unknown,
+  ) {
+    super(message);
+    this.name = "MenuValidationError";
+  }
 }
 
 export interface Menu {

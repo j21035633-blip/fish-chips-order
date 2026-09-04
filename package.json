@@ -19,9 +19,11 @@
     "qr": "tsx src/cli/qr.ts"
   },
   "dependencies": {
+    "@types/multer": "^2.2.0",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "mongodb": "^6.21.0",
+    "multer": "^2.3.0",
     "qrcode": "^1.5.4",
     "zod": "^3.24.1"
   },

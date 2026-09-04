@@ -1,5 +1,7 @@
 import { MongoClient, type Collection, type Db, type Filter } from "mongodb";
 
+import type { MenuPersistence } from "../menu/store.js";
+import type { Menu } from "../menu/types.js";
 import type { CartRepository, OrderRepository } from "../orders/repository.js";
 import type { Cart, Order } from "../orders/types.js";
 
@@ -22,6 +24,13 @@ export type IndexState = "pending" | "ready" | "failed";
 
 type StoredCart = Cart & { _id: string; expiresAt: Date };
 type StoredOrder = Order & { _id: string };
+type StoredMenu = Menu & { _id: string };
+
+/**
+ * The menu is one document under a fixed id. Staff edits replace it wholesale,
+ * so there is exactly one row and no chance of items and categories disagreeing.
+ */
+const MENU_DOC_ID = "current";
 
 export class MongoStorage {
   readonly kind = "mongodb" as const;
@@ -101,6 +110,23 @@ export class MongoStorage {
 
   orders(): OrderRepository {
     return new MongoOrderRepository(() => this.database.collection<StoredOrder>("orders"));
+  }
+
+  menu(): MenuPersistence {
+    const collection = () => this.database.collection<StoredMenu>("menu");
+    return {
+      async load(): Promise<Menu | undefined> {
+        const doc = await collection().findOne({ _id: MENU_DOC_ID });
+        if (doc === null) return undefined;
+        const { _id, ...menu } = doc;
+        return menu;
+      },
+      async save(menu: Menu): Promise<void> {
+        // The upsert takes _id from the filter, and the driver refuses it in
+        // the replacement — so the document is stored under MENU_DOC_ID either way.
+        await collection().replaceOne({ _id: MENU_DOC_ID }, menu, { upsert: true });
+      },
+    };
   }
 
   private newClient(): MongoClient {

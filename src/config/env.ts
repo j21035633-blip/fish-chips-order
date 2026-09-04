@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 import "dotenv/config";
 
 /**
@@ -68,6 +70,14 @@ export interface AppConfig {
    * rather than leaving it at the default a customer might try.
    */
   staffDashboardPath: string;
+  /**
+   * Where uploaded menu-item images are written, and what `/uploads` serves.
+   *
+   * Defaults to `uploads` beside the working directory, which on Railway (whose
+   * working directory is `/app`) resolves to `/app/uploads` — the path the
+   * persistent volume must be mounted at. See `src/menu/images.ts`.
+   */
+  uploadsDir: string;
   mongo: MongoConfig;
   stripe: StripeConfig;
   revenueMonster: RevenueMonsterConfig;
@@ -79,6 +89,7 @@ export function loadConfig(): AppConfig {
     publicBaseUrl: str("PUBLIC_BASE_URL") ?? `http://localhost:${int("PORT", 3000)}`,
     businessTimeZone: str("BUSINESS_TIMEZONE") ?? "Asia/Kuala_Lumpur",
     staffDashboardPath: normalisePath(str("STAFF_DASHBOARD_PATH") ?? "/staff"),
+    uploadsDir: resolve(str("UPLOADS_DIR") ?? "uploads"),
     mongo: {
       // Railway's own MongoDB service publishes MONGO_URL; accept it so the
       // variable that is already there works without being renamed.

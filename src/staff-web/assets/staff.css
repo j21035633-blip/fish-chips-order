@@ -1,0 +1,336 @@
+/*
+ * Shared chrome for the three staff views.
+ *
+ * These files sit outside the customer web root and are served only under the
+ * dashboard's own (configurable) path, so the staff area can share a stylesheet
+ * without any of it becoming reachable at the site root.
+ */
+
+:root {
+  --ink: #10241f;
+  --ink-soft: #5b6b67;
+  --line: #dfe5e3;
+  --panel: #fff;
+  --bg: #f4f7f6;
+  --sea: #12776a;
+  --sea-wash: #e3f1ee;
+  --amber: #b06d00;
+  --danger: #b3261e;
+  /* One step more saturated than --sea: at bar size the chrome colour reads
+     grey rather than green. Checked against the panel, not eyeballed. */
+  --chart: #0f8f7c;
+  --grid: #e9edec;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* ------------------------------------------------------------------ header */
+header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: center;
+  padding: 14px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+h1 { font-size: 17px; margin: 0; }
+
+/* The nav is the one piece every view shares; it never moves between them. */
+.staff-nav { display: flex; gap: 6px; flex-wrap: wrap; }
+.staff-nav a {
+  display: inline-block;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.staff-nav a:hover { background: var(--bg); color: var(--ink); }
+.staff-nav a[aria-current="page"] {
+  background: var(--sea);
+  border-color: var(--sea);
+  color: #fff;
+}
+.staff-nav a:focus-visible { outline: 2px solid var(--sea); outline-offset: 2px; }
+
+/* Whatever the view wants on the right of the bar: takings, feed state. */
+.header-slot { margin-left: auto; display: flex; gap: 18px; align-items: center; }
+.sales { display: flex; gap: 18px; align-items: baseline; }
+.sales-total { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+.sales-label { font-size: 12px; color: var(--ink-soft); }
+.feed-state { font-size: 12px; color: var(--ink-soft); }
+.feed-state.stale { color: var(--danger); font-weight: 650; }
+
+main { padding: 18px 20px 60px; }
+.error { margin: 0 20px 14px; padding: 10px 12px; border-radius: 8px; background: #fbe6e4; color: var(--danger); font-size: 14px; }
+.empty { color: var(--ink-soft); font-size: 14px; padding: 10px 2px; }
+
+/* ------------------------------------------------------- board and tickets */
+.columns { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.column-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 0 0 10px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+
+.ticket {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.ticket.cooking { border-left-color: var(--amber); }
+.ticket.ready { border-left-color: var(--sea); }
+.ticket-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.table { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+.table.takeaway { font-size: 15px; font-weight: 650; color: var(--ink-soft); }
+.reference { font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.lines { margin: 10px 0 0; padding: 0; list-style: none; font-size: 14px; }
+.lines li { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+.opts { color: var(--ink-soft); font-size: 12px; }
+.foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.total { font-weight: 700; margin-right: auto; }
+
+.tag { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }
+.tag.paid { background: var(--sea-wash); color: var(--sea); }
+.tag.pending { background: #fdf1dd; color: var(--amber); }
+.tag.failed, .tag.expired { background: #fbe6e4; color: var(--danger); }
+
+button { font: inherit; border-radius: 8px; cursor: pointer; }
+.advance { background: var(--sea); color: #fff; border: 0; padding: 9px 14px; font-weight: 650; }
+.advance:disabled { opacity: 0.45; cursor: not-allowed; }
+.undo { background: transparent; border: 1px solid var(--line); color: var(--ink-soft); padding: 8px 10px; font-size: 13px; }
+
+/* ------------------------------------------------------- kitchen & counter */
+/* Cards rather than a dense board: this view is tapped, not just read, so the
+   action gets the full width of the card and a target big enough for a glove. */
+.cards { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); align-items: start; }
+.card { background: var(--panel); border: 1px solid var(--line); border-top: 4px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.card.cooking { border-top-color: var(--amber); }
+.card.ready { border-top-color: var(--sea); }
+.status-line { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; color: var(--ink-soft); }
+.status-name { text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+.card .advance { width: 100%; margin-top: 10px; padding: 12px 14px; font-size: 15px; }
+.card-count { font-size: 13px; color: var(--ink-soft); }
+
+/* ------------------------------------------------------------ sales report */
+.controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; margin-bottom: 18px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 12px; color: var(--ink-soft); }
+.field input {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+}
+.presets { display: flex; gap: 6px; }
+.presets button { background: var(--panel); border: 1px solid var(--line); color: var(--ink-soft); padding: 8px 12px; font-size: 13px; font-weight: 650; }
+.presets button:hover { color: var(--ink); }
+
+.summary { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 18px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.stat-label { font-size: 12px; color: var(--ink-soft); }
+.stat-value { font-size: 32px; font-weight: 700; letter-spacing: -0.02em; margin-top: 2px; }
+.stat-note { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+/* One number leads the view. Proportional figures on purpose — tabular digits
+   are all as wide as a zero, which reads loose at this size. */
+.stat.hero .stat-value { font-size: 48px; line-height: 1.05; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; position: relative; }
+.panel h2 { font-size: 14px; margin: 0 0 2px; }
+.panel .sub { font-size: 12px; color: var(--ink-soft); margin: 0 0 14px; }
+.chart-scroll { overflow-x: auto; }
+.chart { display: block; }
+.chart .grid-line { stroke: var(--grid); stroke-width: 1; }
+.chart .axis-text { fill: var(--ink-soft); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .bar { fill: var(--chart); }
+.chart .bar-hit { fill: transparent; }
+.chart .bar-group:hover .bar { fill: var(--sea); }
+.chart .bar-group:focus-visible { outline: 2px solid var(--sea); outline-offset: 2px; }
+.chart .bar-group:focus-visible .bar { fill: var(--sea); }
+.chart .peak-label { fill: var(--ink); font-size: 11px; font-weight: 650; }
+
+.tooltip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--ink);
+  color: #fff;
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+  transform: translate(-50%, -100%);
+}
+.tooltip[hidden] { display: none; }
+.tooltip b { font-weight: 700; }
+
+.breakdown { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 14px; }
+.breakdown caption { text-align: left; font-size: 12px; color: var(--ink-soft); padding-bottom: 8px; }
+.breakdown th, .breakdown td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+.breakdown th:first-child, .breakdown td:first-child { text-align: left; }
+.breakdown thead th { font-size: 12px; color: var(--ink-soft); font-weight: 650; }
+.breakdown td { font-variant-numeric: tabular-nums; }
+.breakdown tfoot td { font-weight: 700; border-bottom: 0; }
+
+/* ------------------------------------------------------------ menu admin */
+.menu-group { margin-bottom: 22px; }
+.menu-group-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 0 0 10px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+.menu-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto auto auto;
+  gap: 14px;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+}
+.menu-row.off { background: #fafbfb; }
+.menu-row.off .row-name, .menu-row.off .row-price { color: var(--ink-soft); }
+.menu-row.off .thumb { filter: grayscale(1); opacity: 0.6; }
+.thumb {
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.thumb.placeholder {
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  color: var(--ink-soft);
+}
+.row-name { font-weight: 650; }
+.row-desc {
+  color: var(--ink-soft);
+  font-size: 13px;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row-price { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.row-category { font-size: 12px; color: var(--ink-soft); white-space: nowrap; }
+.row-actions { display: flex; gap: 6px; }
+.row-actions button {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  padding: 7px 11px;
+  font-size: 13px;
+  font-weight: 650;
+}
+.row-actions button:hover { color: var(--ink); }
+.row-actions .destroy:hover { color: var(--danger); border-color: var(--danger); }
+.row-actions .confirming { color: #fff; background: var(--danger); border-color: var(--danger); }
+
+/* The 86 switch. One tap, saved immediately — there is no form around it. */
+.switch {
+  position: relative;
+  width: 46px;
+  height: 26px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  padding: 0;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgba(16, 36, 31, 0.25);
+  transition: transform 120ms ease;
+}
+.switch[aria-checked="true"] { background: var(--sea); border-color: var(--sea); }
+.switch[aria-checked="true"]::after { transform: translateX(20px); }
+.switch:disabled { opacity: 0.5; cursor: not-allowed; }
+.switch:focus-visible { outline: 2px solid var(--sea); outline-offset: 2px; }
+.switch-cell { display: flex; align-items: center; gap: 9px; }
+.switch-label { font-size: 12px; color: var(--ink-soft); width: 68px; }
+
+/* --------------------------------------------------------------- the form */
+.form-dialog {
+  width: min(560px, calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 0;
+}
+.form-dialog::backdrop { background: rgba(16, 36, 31, 0.4); }
+.form-dialog form { padding: 18px 20px 20px; }
+.form-dialog h2 { font-size: 17px; margin: 0 0 14px; }
+.form-grid { display: grid; gap: 12px; }
+.form-grid .field input, .form-grid .field textarea, .form-grid .field select {
+  font: inherit;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  width: 100%;
+}
+.form-grid .field textarea { resize: vertical; min-height: 66px; }
+.form-two { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+.image-field { display: flex; gap: 14px; align-items: center; }
+.image-preview {
+  width: 84px;
+  height: 84px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.image-actions { display: grid; gap: 6px; }
+.checkbox { display: flex; gap: 9px; align-items: center; font-size: 14px; }
+.checkbox input { width: 18px; height: 18px; }
+.form-foot { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
+.form-foot .advance { margin-left: auto; }
+.form-error { color: var(--danger); font-size: 13px; margin: 10px 0 0; }
+.form-error[hidden] { display: none; }
+.ghost { background: transparent; border: 1px solid var(--line); color: var(--ink-soft); padding: 9px 13px; font-weight: 650; }
+.ghost:hover { color: var(--ink); }
+.hint { font-size: 12px; color: var(--ink-soft); }

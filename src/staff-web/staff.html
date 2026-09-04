@@ -4,113 +4,19 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="robots" content="noindex, nofollow" />
-    <title>Kitchen &amp; counter — Anchor &amp; Batter</title>
+    <title>Dashboard — Anchor &amp; Batter</title>
     <!--
-      One self-contained file on purpose. The customer app is served by
-      express.static; anything living in that directory is reachable at its own
-      filename no matter what path the dashboard is mounted at, which would
-      defeat the point of making the path configurable.
+      The staff area is served from its own directory, never through the
+      customer's express.static: anything living in that web root is reachable
+      at its own filename no matter what path the dashboard is mounted at, which
+      would defeat the point of making the path configurable. The shared assets
+      below are served under the dashboard's own path for the same reason.
+
+      {{STAFF_BASE}} is substituted at serve time — see renderStaffPage.
     -->
-    <style>
-      :root {
-        --ink: #10241f;
-        --ink-soft: #5b6b67;
-        --line: #dfe5e3;
-        --panel: #fff;
-        --bg: #f4f7f6;
-        --sea: #12776a;
-        --amber: #b06d00;
-        --danger: #b3261e;
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--ink);
-        font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-      }
-      header {
-        position: sticky;
-        top: 0;
-        z-index: 2;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        align-items: center;
-        padding: 14px 20px;
-        background: var(--panel);
-        border-bottom: 1px solid var(--line);
-      }
-      h1 { font-size: 17px; margin: 0; }
-      .sales {
-        margin-left: auto;
-        display: flex;
-        gap: 18px;
-        align-items: baseline;
-      }
-      .sales-total { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
-      .sales-label { font-size: 12px; color: var(--ink-soft); }
-      .feed-state { font-size: 12px; color: var(--ink-soft); }
-      .feed-state.stale { color: var(--danger); font-weight: 650; }
-
-      main { padding: 18px 20px 60px; }
-      .columns { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
-      .column-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        margin: 0 0 10px;
-        font-size: 13px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--ink-soft);
-      }
-
-      .ticket {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-left: 4px solid var(--line);
-        border-radius: 10px;
-        padding: 12px 14px;
-        margin-bottom: 10px;
-      }
-      .ticket.cooking { border-left-color: var(--amber); }
-      .ticket.ready { border-left-color: var(--sea); }
-      .ticket-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
-      .table { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
-      .table.takeaway { font-size: 15px; font-weight: 650; color: var(--ink-soft); }
-      .reference { font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-      .lines { margin: 10px 0 0; padding: 0; list-style: none; font-size: 14px; }
-      .lines li { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
-      .opts { color: var(--ink-soft); font-size: 12px; }
-      .foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
-      .total { font-weight: 700; margin-right: auto; }
-
-      .tag { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }
-      .tag.paid { background: #e3f1ee; color: var(--sea); }
-      .tag.pending { background: #fdf1dd; color: var(--amber); }
-      .tag.failed, .tag.expired { background: #fbe6e4; color: var(--danger); }
-
-      button { font: inherit; border-radius: 8px; cursor: pointer; }
-      .advance { background: var(--sea); color: #fff; border: 0; padding: 9px 14px; font-weight: 650; }
-      .advance:disabled { opacity: 0.45; cursor: not-allowed; }
-      .undo { background: transparent; border: 1px solid var(--line); color: var(--ink-soft); padding: 8px 10px; font-size: 13px; }
-      .empty { color: var(--ink-soft); font-size: 14px; padding: 10px 2px; }
-      .error { margin: 0 20px 14px; padding: 10px 12px; border-radius: 8px; background: #fbe6e4; color: var(--danger); font-size: 14px; }
-    </style>
+    <link rel="stylesheet" href="{{STAFF_BASE}}/assets/staff.css" />
   </head>
-  <body>
-    <header>
-      <h1>Kitchen &amp; counter</h1>
-      <span id="feed-state" class="feed-state">connecting…</span>
-      <div class="sales">
-        <div>
-          <div id="sales-total" class="sales-total">—</div>
-          <div id="sales-label" class="sales-label">Today's sales</div>
-        </div>
-      </div>
-    </header>
-
+  <body data-staff-base="{{STAFF_BASE}}" data-staff-view="dashboard">
     <p id="error" class="error" hidden></p>
 
     <main>
@@ -121,47 +27,24 @@
       </div>
     </main>
 
-    <script>
-      // Short polling rather than a websocket: one shop, one process, and a
-      // dropped socket on a kitchen tablet that silently stops updating is worse
-      // than a request every two seconds. `stale` below makes a stall visible
-      // rather than leaving the board quietly frozen.
-      const POLL_MS = 2000;
-      const STALE_AFTER_MS = 8000;
+    <script type="module">
+      import { api, el, errorBanner, orderFeed } from "{{STAFF_BASE}}/assets/common.js";
+      import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
 
+      // The board's three columns. `collected` is a status but not a column —
+      // an order that has been handed over drops off this view, and the Kitchen
+      // & Counter page is where it is marked so.
       const STATUSES = ["received", "cooking", "ready"];
       const NEXT_LABEL = { received: "Start cooking", cooking: "Mark ready" };
 
-      const errorEl = document.getElementById("error");
-      const feedState = document.getElementById("feed-state");
-      let lastOk = 0;
-      let busy = new Set();
+      const { slot } = mountStaffChrome({ title: "Kitchen & counter" });
+      const feedState = el("span", { id: "feed-state", class: "feed-state", text: "connecting…" });
+      const salesTotal = el("div", { class: "sales-total", text: "—" });
+      const salesLabel = el("div", { class: "sales-label", text: "Today's sales" });
+      slot.append(feedState, el("div", { class: "sales" }, [el("div", {}, [salesTotal, salesLabel])]));
 
-      function el(tag, props = {}, children = []) {
-        const node = document.createElement(tag);
-        for (const [key, value] of Object.entries(props)) {
-          if (value === undefined || value === null || value === false) continue;
-          if (key === "class") node.className = value;
-          else if (key === "text") node.textContent = value;
-          else if (key.startsWith("on")) node.addEventListener(key.slice(2).toLowerCase(), value);
-          else node.setAttribute(key, value);
-        }
-        for (const child of [].concat(children)) {
-          if (child === null || child === undefined || child === false) continue;
-          node.append(child);
-        }
-        return node;
-      }
-
-      async function api(path, options) {
-        const response = await fetch(path, {
-          headers: { "content-type": "application/json" },
-          ...options,
-        });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.message ?? body.error ?? `Request failed (${response.status})`);
-        return body;
-      }
+      const showError = errorBanner();
+      const busy = new Set();
 
       function ticket(order) {
         const paid = order.paymentStatus === "paid";
@@ -222,10 +105,10 @@
         busy.add(orderId);
         try {
           await api(`/api/staff/orders/${orderId}/status`, {
-            method: "POST",
+            method: "PATCH",
             body: JSON.stringify({ status }),
           });
-          await refresh();
+          await feed.refresh();
         } catch (error) {
           showError(error.message);
         } finally {
@@ -233,45 +116,31 @@
         }
       }
 
-      function showError(message) {
-        errorEl.textContent = message;
-        errorEl.hidden = false;
-      }
-
       function draw({ orders, sales }) {
-        document.getElementById("sales-total").textContent = sales.total;
-        document.getElementById("sales-label").textContent =
+        showError();
+        salesTotal.textContent = sales.total;
+        salesLabel.textContent =
           `Today's sales · ${sales.count} order${sales.count === 1 ? "" : "s"} · ${sales.day}`;
 
         for (const status of STATUSES) {
           const forStatus = orders.filter((order) => order.kitchenStatus === status);
           document.getElementById(`count-${status}`).textContent = String(forStatus.length);
-          const column = document.getElementById(`col-${status}`);
-          column.replaceChildren(
-            ...(forStatus.length === 0
-              ? [el("p", { class: "empty", text: "Nothing here." })]
-              : forStatus.map(ticket)),
-          );
+          document
+            .getElementById(`col-${status}`)
+            .replaceChildren(
+              ...(forStatus.length === 0 ? [el("p", { class: "empty", text: "Nothing here." })] : forStatus.map(ticket)),
+            );
         }
       }
 
-      async function refresh() {
-        const data = await api("/api/staff/overview");
-        lastOk = Date.now();
-        errorEl.hidden = true;
-        draw(data);
-      }
-
-      function tick() {
-        refresh().catch((error) => showError(error.message));
-        const age = Date.now() - lastOk;
-        const stale = lastOk === 0 || age > STALE_AFTER_MS;
-        feedState.textContent = stale ? "not updating" : "live";
-        feedState.className = stale ? "feed-state stale" : "feed-state";
-      }
-
-      tick();
-      setInterval(tick, POLL_MS);
+      const feed = orderFeed({
+        onData: draw,
+        onError: (error) => showError(error.message),
+        onState: (state) => {
+          feedState.textContent = state === "stale" ? "not updating" : "live";
+          feedState.className = state === "stale" ? "feed-state stale" : "feed-state";
+        },
+      });
     </script>
   </body>
 </html>

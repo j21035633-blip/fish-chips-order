@@ -1,15 +1,20 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import express, { type Request, type Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
+import { MulterError } from "multer";
 import { z, ZodError } from "zod";
 
 import { services, type Services } from "../app/container.js";
 import { config } from "../config/env.js";
+import { deleteImage, menuImageUpload, servedImageUrl } from "../menu/images.js";
+import { toItemView } from "../menu/service.js";
+import type { MenuItemInput } from "../menu/store.js";
+import { MenuValidationError } from "../menu/types.js";
 import { KITCHEN_STATUSES, OrderValidationError, PAYMENT_METHODS, PAYMENT_PROVIDERS } from "../orders/types.js";
 import { PaymentProviderError } from "../payments/types.js";
-import { menuTools } from "../tools/menuTools.js";
+import { createMenuTools } from "../tools/menuTools.js";
 import { createOrderTools } from "../tools/orderTools.js";
 
 /**
@@ -22,6 +27,7 @@ import { createOrderTools } from "../tools/orderTools.js";
 export function createServer(app: Services = services) {
   const server = express();
   const tools = createOrderTools(app);
+  const menuTools = createMenuTools(app.menu);
 
   // ---------------------------------------------------------------- webhooks
   // Mounted before express.json() on purpose: signature verification needs the
@@ -82,7 +88,11 @@ export function createServer(app: Services = services) {
         allergenMode: single(req.query.allergenMode),
         maxPriceSen: int(req.query.maxPriceSen),
         search: single(req.query.search),
-        includeUnavailable: bool(req.query.includeUnavailable),
+        // Sold-out items are *included* here, unlike the agent's own
+        // `get_menu`: the customer page lists them greyed out with the
+        // add button disabled, which answers "do you still do the cod?"
+        // without anyone having to ask.
+        includeUnavailable: bool(req.query.includeUnavailable) ?? true,
         withDescriptions: bool(req.query.withDescriptions),
       }),
     );
@@ -183,13 +193,141 @@ export function createServer(app: Services = services) {
     });
   });
 
-  server.post("/api/staff/orders/:orderId/status", (req, res) => {
+  /**
+   * Move an order along the pass.
+   *
+   * PATCH is the honest verb — this edits one field of an existing order — and
+   * is what the staff pages call. POST is kept alongside it because it is what
+   * shipped first, and a kitchen tablet holding a cached page must not break on
+   * a deploy.
+   */
+  const setStatus = (req: Request<{ orderId: string }>, res: Response): void => {
     void runAsync(res, async () => {
       const { status } = staffStatusInput.parse(req.body ?? {});
       const result = await app.orders.setKitchenStatus(req.params.orderId, status);
       return { order: result.order, changed: result.changed };
     });
+  };
+
+  server.patch("/api/staff/orders/:orderId/status", setStatus);
+  server.post("/api/staff/orders/:orderId/status", setStatus);
+
+  /**
+   * Takings per day over a range, for the sales report page.
+   *
+   * Dates are snake_case here because they are a report's parameters rather than
+   * a domain object's fields, and `start_date`/`end_date` is what a person
+   * hand-writing this URL will reach for. Both default to today.
+   */
+  server.get("/api/staff/sales-report", (req, res) => {
+    void runAsync(res, () => {
+      const query = salesReportQuery.parse({
+        start_date: single(req.query.start_date),
+        end_date: single(req.query.end_date),
+      });
+      return app.orders.salesReport({ startDate: query.start_date, endDate: query.end_date });
+    });
   });
+
+  // -------------------------------------------------------- staff menu admin
+  /**
+   * Menu management. As open as every other route here — see the note above on
+   * what the unguessable dashboard path does and does not buy you.
+   *
+   * Prices are in sen throughout, like every other money field in this API. The
+   * form converts, so nothing on the wire is a float.
+   */
+  server.get("/api/staff/menu-items", (_req, res) => {
+    run(res, () => ({
+      // Every item, sold-out ones included: this is the page that turns them
+      // back on, so it cannot be filtered by the thing it edits.
+      items: app.menuStore.items().map(toItemView),
+      categories: app.menuStore.categories().map((category) => ({
+        id: category.id,
+        name: category.name,
+        itemCount: app.menuStore.items().filter((item) => item.categoryId === category.id).length,
+      })),
+      version: app.menuStore.load().version,
+    }));
+  });
+
+  server.post("/api/staff/menu-items", withMenuImage, (req, res) => {
+    void runAsync(res, async () => {
+      const input = menuItemInput(req);
+      try {
+        const item = await app.menuStore.create(input);
+        res.status(201).json({ item: toItemView(item) });
+      } catch (error) {
+        // The file landed before the fields were validated, so a rejected
+        // create must not leave an orphan on the volume.
+        await deleteImage(input.imageUrl);
+        throw error;
+      }
+      return undefined;
+    });
+  });
+
+  /**
+   * Patches whatever fields were sent — "update any field", so an edit form that
+   * only changes the price does not have to resend the description.
+   */
+  server.put("/api/staff/menu-items/:id", withMenuImage, (req: Request<{ id: string }>, res) => {
+    void runAsync(res, async () => {
+      const input = menuItemInput(req);
+      const previousImage = app.menuStore.item(req.params.id).imageUrl;
+
+      try {
+        const item = await app.menuStore.update(req.params.id, input);
+        // Only once the new image is safely recorded; the reverse order loses
+        // the old photo when the write fails.
+        if (previousImage !== undefined && previousImage !== item.imageUrl) await deleteImage(previousImage);
+        return { item: toItemView(item) };
+      } catch (error) {
+        await deleteImage(input.imageUrl);
+        throw error;
+      }
+    });
+  });
+
+  /**
+   * The 86 toggle. Availability only, on purpose: this fires on a single tap
+   * during service, so it must not be able to carry a stale price with it.
+   */
+  server.patch("/api/staff/menu-items/:id/availability", (req, res) => {
+    void runAsync(res, async () => {
+      const { available } = availabilityInput.parse(req.body ?? {});
+      const item = await app.menuStore.setAvailability(req.params.id, available);
+      return { item: toItemView(item) };
+    });
+  });
+
+  server.delete("/api/staff/menu-items/:id", (req, res) => {
+    void runAsync(res, async () => {
+      // A cart still holding this item now fails to price with `unknown_item`,
+      // which is the same 400 an unavailable item already produced.
+      const removed = await app.menuStore.remove(req.params.id);
+      await deleteImage(removed.imageUrl);
+      return { deleted: true, id: removed.id };
+    });
+  });
+
+  // Uploaded images, read-only. Served from the uploads volume rather than the
+  // customer web root, so a redeploy cannot quietly replace them with nothing.
+  server.use(
+    "/uploads",
+    express.static(config.uploadsDir, {
+      dotfiles: "deny",
+      index: false,
+      // These are content-addressed by a uuid filename: a given URL never
+      // changes what it points at, so it can be cached hard.
+      maxAge: "7d",
+      setHeaders: (response) => {
+        // Belt and braces for a store of user-supplied files served same-origin.
+        response.setHeader("x-content-type-options", "nosniff");
+        response.setHeader("content-security-policy", "default-src 'none'; img-src 'self'");
+      },
+    }),
+  );
 
   // ------------------------------------------------------------- agent tools
   const toolRegistry = { ...menuTools, ...tools };
@@ -213,17 +351,32 @@ export function createServer(app: Services = services) {
     });
   }
 
-  // The dashboard is served from its own directory, never through
-  // `express.static`: a file under the customer's web root stays reachable at
+  // The staff area is served from its own directory, never through the
+  // customer's `express.static`: a file under that web root stays reachable at
   // its own filename whatever path the dashboard is mounted at.
-  const staffFile = resolveStaffPage();
-  if (staffFile) {
-    server.get(config.staffDashboardPath, (_req, res) => {
+  const staffDir = resolveStaffDir();
+  if (staffDir) {
+    const staffPage = (file: string) => (_req: Request, res: Response) => {
       // Belt and braces on top of the meta tag — a crawler that reaches this
       // page should not put the kitchen board in a search index.
       res.setHeader("x-robots-tag", "noindex, nofollow");
-      res.sendFile(staffFile);
-    });
+      res.type("html").send(renderStaffPage(join(staffDir, file)));
+    };
+
+    // Three views over one area. Each is its own document rather than a client
+    // router, so a tablet on the pass reloads into the view it was showing.
+    server.get(config.staffDashboardPath, staffPage("staff.html"));
+    server.get(`${config.staffDashboardPath}/kitchen`, staffPage("kitchen.html"));
+    server.get(`${config.staffDashboardPath}/sales`, staffPage("sales.html"));
+    server.get(`${config.staffDashboardPath}/menu`, staffPage("menu.html"));
+
+    // The shared nav, styles and helpers the three pages import. Mounted under
+    // the dashboard's own path so nothing about the staff area leaks a route at
+    // the site root.
+    server.use(
+      `${config.staffDashboardPath}/assets`,
+      express.static(join(staffDir, "assets"), { setHeaders: (response) => response.setHeader("x-robots-tag", "noindex, nofollow") }),
+    );
   }
 
   return server;
@@ -245,22 +398,109 @@ function resolveWebDir(): string | undefined {
   return candidates.find((candidate) => existsSync(join(candidate, "index.html")));
 }
 
-/** Same resolution dance as `resolveWebDir`, for the staff page's own directory. */
-function resolveStaffPage(): string | undefined {
+/** Same resolution dance as `resolveWebDir`, for the staff area's own directory. */
+function resolveStaffDir(): string | undefined {
   const candidates: string[] = [];
 
   try {
-    candidates.push(fileURLToPath(new URL("../staff-web/staff.html", import.meta.url)));
-    candidates.push(fileURLToPath(new URL("../../src/staff-web/staff.html", import.meta.url)));
+    candidates.push(fileURLToPath(new URL("../staff-web/", import.meta.url)));
+    candidates.push(fileURLToPath(new URL("../../src/staff-web/", import.meta.url)));
   } catch {
     // As in resolveWebDir: import.meta.url is not always a file: URL.
   }
-  candidates.push(resolve(process.cwd(), "src/staff-web/staff.html"));
+  candidates.push(resolve(process.cwd(), "src/staff-web"));
 
-  return candidates.find((candidate) => existsSync(candidate));
+  return candidates.find((candidate) => existsSync(join(candidate, "staff.html")));
+}
+
+const staffPageCache = new Map<string, string>();
+
+/**
+ * Reads a staff page, substituting the path the area is mounted at.
+ *
+ * The pages are static files with no build step, but the mount path is
+ * configurable — so nav links and asset URLs cannot be written into the HTML
+ * ahead of time. One placeholder, filled once and cached, keeps them absolute:
+ * relative URLs would resolve differently on `/staff` and `/staff/kitchen`.
+ */
+function renderStaffPage(file: string): string {
+  const cached = staffPageCache.get(file);
+  if (cached !== undefined) return cached;
+
+  const html = readFileSync(file, "utf8").replaceAll("{{STAFF_BASE}}", config.staffDashboardPath);
+  staffPageCache.set(file, html);
+  return html;
 }
 
 const staffStatusInput = z.object({ status: z.enum(KITCHEN_STATUSES) });
+
+const availabilityInput = z.object({ available: z.boolean() });
+
+/**
+ * One optional image, on the field named `image`.
+ *
+ * Wrapped rather than passed straight in so multer's own failures — a file over
+ * the size limit, a PDF renamed to .jpg — come back as the same JSON errors as
+ * everything else instead of express's default HTML 500.
+ */
+function withMenuImage(req: Request, res: Response, next: NextFunction): void {
+  menuImageUpload().single("image")(req, res, (error: unknown) => {
+    if (error) {
+      respondToError(res, error);
+      return;
+    }
+    next();
+  });
+}
+
+/**
+ * Reads the staff form into store input.
+ *
+ * Multipart carries strings only, so numbers and booleans are parsed here — and
+ * a field that was not sent stays `undefined`, which is what makes PUT a patch
+ * rather than a wipe.
+ */
+function menuItemInput(req: Request): MenuItemInput {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const file = (req as Request & { file?: { filename: string } }).file;
+
+  const input: MenuItemInput = {};
+  for (const field of ["name", "description", "category", "flavourNotes", "unavailableReason"] as const) {
+    if (body[field] !== undefined) input[field] = String(body[field]);
+  }
+  if (body.priceSen !== undefined) input.priceSen = menuPriceSen(body.priceSen);
+  if (body.available !== undefined) input.available = formBoolean(body.available, "available");
+  if (body.removeImage !== undefined) input.removeImage = formBoolean(body.removeImage, "removeImage");
+  if (file) input.imageUrl = servedImageUrl(file);
+
+  return input;
+}
+
+/** Rejects a non-integer rather than truncating it — a silently halved price is worse. */
+function menuPriceSen(raw: unknown): number {
+  const parsed = Number(String(raw).trim());
+  if (!Number.isInteger(parsed)) {
+    throw new MenuValidationError(`"${String(raw)}" is not a whole number of sen.`, "invalid_price", { priceSen: raw });
+  }
+  return parsed;
+}
+
+/** Accepts what a checkbox and a JSON client each send for the same thing. */
+function formBoolean(raw: unknown, field: string): boolean {
+  const value = String(raw).trim().toLowerCase();
+  if (["true", "1", "on", "yes"].includes(value)) return true;
+  if (["false", "0", "off", "no", ""].includes(value)) return false;
+  throw new MenuValidationError(`"${String(raw)}" is not true or false.`, "invalid_boolean", { field, value: raw });
+}
+
+/**
+ * Shape only. Whether the dates name real days, sit the right way round and
+ * cover a sane span is the service's call, so one rule serves every caller.
+ */
+const salesReportQuery = z.object({
+  start_date: z.string().optional(),
+  end_date: z.string().optional(),
+});
 
 function isProvider(value: string): value is (typeof PAYMENT_PROVIDERS)[number] {
   return (PAYMENT_PROVIDERS as readonly string[]).includes(value);
@@ -300,6 +540,19 @@ function respondToError(res: Response, error: unknown): void {
     // differently, so it is a 400 with the code the UI can branch on.
     const status = error.code === "unknown_cart" || error.code === "unknown_order" ? 404 : 400;
     res.status(status).json({ error: error.code, message: error.message, details: error.details });
+    return;
+  }
+  if (error instanceof MenuValidationError) {
+    // Same split as OrderValidationError: a missing item is a 404, everything
+    // else is something the staff member can fix in the form.
+    const status = error.code === "unknown_menu_item" ? 404 : 400;
+    res.status(status).json({ error: error.code, message: error.message, details: error.details });
+    return;
+  }
+  if (error instanceof MulterError) {
+    // LIMIT_FILE_SIZE, LIMIT_UNEXPECTED_FILE and friends: all of them are the
+    // request's fault, and the code is the one thing the form can branch on.
+    res.status(400).json({ error: "invalid_upload", code: error.code, message: error.message, field: error.field });
     return;
   }
   if (error instanceof PaymentProviderError) {
