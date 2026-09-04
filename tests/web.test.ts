@@ -410,3 +410,165 @@ async function placeOrder(): Promise<string> {
   const { order } = await json("/api/orders", { method: "POST", body: JSON.stringify({ cartId }) });
   return order.id;
 }
+
+describe("cart bar and sheet", async () => {
+  /** Adds one Classic Battered Dory through the page, as a customer would. */
+  async function addDory() {
+    const dory = [...document.querySelectorAll("button.item")].find((item) =>
+      item.textContent?.includes("Classic Battered Dory"),
+    ) as HTMLButtonElement;
+    dory.click();
+    await settle(2);
+    (document.getElementById("item-add") as HTMLButtonElement).click();
+    await settle();
+  }
+
+  const bar = () => document.getElementById("cart-bar") as HTMLButtonElement;
+  const panel = () => document.getElementById("cart-panel") as HTMLElement;
+  const scrim = () => document.getElementById("scrim") as HTMLElement;
+
+  it("shows nothing at all on an empty cart", async () => {
+    await bootPage("/");
+
+    // The bug this replaces: the panel was open over the menu on load, before
+    // the customer had touched anything.
+    expect(panel().hidden).toBe(true);
+    expect(scrim().hidden).toBe(true);
+    expect(bar().hidden).toBe(true);
+    // And no strip reserved at the bottom of the menu for a bar that is not there.
+    expect(document.body.classList.contains("has-cart")).toBe(false);
+  });
+
+  it("brings up the bar on the first item, without opening the sheet over the menu", async () => {
+    await bootPage("/");
+    await addDory();
+
+    expect(bar().hidden).toBe(false);
+    expect(bar().textContent).toContain("1");
+    expect(document.getElementById("cart-bar-total")!.textContent).toBe("RM16.90");
+    expect(bar().getAttribute("aria-expanded")).toBe("false");
+
+    // Adding does not interrupt browsing — the menu is still what is on screen.
+    expect(panel().hidden).toBe(true);
+    // The menu now reserves room for the bar, so the last item stays reachable.
+    expect(document.body.classList.contains("has-cart")).toBe(true);
+  });
+
+  it("opens from the bar and closes from the X", async () => {
+    await bootPage("/");
+    await addDory();
+
+    bar().click();
+    expect(panel().hidden).toBe(false);
+    expect(scrim().hidden).toBe(false);
+    expect(bar().getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById("cart-body")!.textContent).toContain("Classic Battered Dory");
+
+    // The other half of the bug: this set `hidden`, and a `display` rule in the
+    // stylesheet outranked it, so the panel stayed put and the button looked dead.
+    (document.getElementById("cart-close") as HTMLButtonElement).click();
+    expect(panel().hidden).toBe(true);
+    expect(scrim().hidden).toBe(true);
+    expect(bar().getAttribute("aria-expanded")).toBe("false");
+    // Still there to be reopened.
+    expect(bar().hidden).toBe(false);
+  });
+
+  it("also closes on the dimmed background and on Escape", async () => {
+    await bootPage("/");
+    await addDory();
+
+    bar().click();
+    scrim().click();
+    expect(panel().hidden).toBe(true);
+
+    bar().click();
+    expect(panel().hidden).toBe(false);
+    document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(panel().hidden).toBe(true);
+  });
+
+  it("takes itself away when the last item is removed from inside the sheet", async () => {
+    await bootPage("/");
+    await addDory();
+    bar().click();
+
+    const fewer = [...document.querySelectorAll("#cart-body .icon-button")].find(
+      (button) => button.getAttribute("aria-label") === "Fewer",
+    ) as HTMLButtonElement;
+    fewer.click();
+    await settle();
+
+    // Nothing left to show, so there is nothing left on screen either.
+    expect(document.getElementById("cart-count")!.textContent).toBe("0");
+    expect(panel().hidden).toBe(true);
+    expect(bar().hidden).toBe(true);
+    expect(document.body.classList.contains("has-cart")).toBe(false);
+  });
+
+  it("keeps the checkout button working, and leaves the payment flow alone", async () => {
+    await bootPage("/");
+    await addDory();
+
+    bar().click();
+    (document.getElementById("checkout-button") as HTMLButtonElement).click();
+    await settle();
+
+    expect(window.location.pathname).toBe("/checkout");
+    expect(document.getElementById("view")!.textContent).toContain("Card");
+    // No bar over the checkout page: it already shows the total and the pay button.
+    expect(bar().hidden).toBe(true);
+    expect(panel().hidden).toBe(true);
+  });
+
+  it("shows no cart on the order page", async () => {
+    const orderId = await placeOrder();
+    await bootPage(`/order/${orderId}`);
+
+    expect(bar().hidden).toBe(true);
+    expect(panel().hidden).toBe(true);
+    expect(document.body.classList.contains("has-cart")).toBe(false);
+  });
+});
+
+/**
+ * The layout rules the two-state cart depends on.
+ *
+ * jsdom has no layout engine, so overlap and fold cannot be measured here —
+ * these assert the mechanisms that produce them, which is what would silently
+ * regress in an edit.
+ */
+describe("cart layout contract", () => {
+  const css = readFileSync(`${webDir}/styles.css`, "utf8");
+  const html = readFileSync(`${webDir}/index.html`, "utf8");
+
+  it("makes `hidden` beat any class that sets display", () => {
+    // The root cause of both bugs. Without this rule `.cart-panel { display: flex }`
+    // outranks the UA's `[hidden] { display: none }` and the attribute does nothing.
+    expect(css).toMatch(/\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+  });
+
+  it("reserves exactly the bar's height under the menu, and only when there is a bar", () => {
+    expect(css).toContain("--cart-bar-h");
+    expect(css).toMatch(/\.cart-bar\s*\{[^}]*height:\s*var\(--cart-bar-h\)/);
+    expect(css).toMatch(/body\.has-cart \.view\s*\{[^}]*padding-bottom:\s*calc\(var\(--cart-bar-h\)/);
+  });
+
+  it("sizes the sheet against the visible viewport, not the address bar", () => {
+    // `vh` counts the collapsing mobile address bar as visible screen, which is
+    // what pushes a sheet's checkout button below the fold.
+    expect(css).toMatch(/\.cart-panel\s*\{[^}]*max-height:\s*82dvh/);
+  });
+
+  it("keeps the checkout button outside the scrolling list", () => {
+    // `.cart-foot` is a sibling of `.cart-body`, not inside it, so a long order
+    // scrolls under a total and a button that stay on screen.
+    const body = html.indexOf('id="cart-body"');
+    const foot = html.indexOf('class="cart-foot"');
+    const checkout = html.indexOf('id="checkout-button"');
+    expect(body).toBeGreaterThan(-1);
+    expect(foot).toBeGreaterThan(body);
+    expect(checkout).toBeGreaterThan(foot);
+    expect(css).toMatch(/\.cart-body\s*\{[^}]*overflow-y:\s*auto/);
+  });
+});

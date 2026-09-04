@@ -230,6 +230,36 @@ Hiding it only moves "do you still do the cod?" to the counter.
 The agent's own `get_menu` tool still hides them by default, because it must never offer something
 the fryer cannot make. That is the one deliberate difference between the two.
 
+## The customer cart is two states, never three
+
+`src/web/`. **Empty cart: nothing on screen.** No bar, no sheet, and no reserved strip at the foot of
+the menu. **Something in it: a slim bar** pinned to the bottom — count, running total, "View order".
+**Tapped: a bottom sheet** with the lines, quantity steppers, total and Checkout.
+
+Rules worth keeping if you touch this:
+
+- **The sheet only ever opens from a tap.** It does not open on load, and it deliberately does not
+  open after adding an item either — that put a wall in front of someone who was about to add a
+  second thing. The bar's new count and total are the confirmation.
+- **It closes four ways:** the X, the dimmed background, Escape, and a swipe down on the grip. The
+  swipe is bound to the grip alone, never the scrolling list, so it cannot fight a scroll.
+- **Emptying the cart from inside the sheet closes the sheet**, because there is nothing left to
+  look at.
+- The order and checkout views call `setCartVisible(false)`: those pages are about an order that is
+  already placed, and a bar over the pay button is the worst place for one.
+- `.cart-foot` sits **outside** the scrolling `.cart-body`, so Checkout is on screen at any order
+  length; the sheet's ceiling is `82dvh`, not `vh`, because `vh` counts a mobile browser's
+  collapsing address bar as visible screen and pushes the button below the fold.
+- `body.has-cart` adds exactly `--cart-bar-h` to the menu's bottom padding. The bar is `position:
+  fixed`, so without it the last item of the last section is unreachable underneath.
+
+**`[hidden] { display: none !important }` is load-bearing** (top of `styles.css`). The whole page
+uses the `hidden` attribute as its visibility state, and the browser's own `[hidden]` rule is a
+plain UA rule that *any* class setting `display` outranks. `.cart-panel { display: flex }` did
+exactly that: the panel sat open over the menu on load and the close button looked dead, because
+`hidden = true` was being set and quietly overruled. Do not remove that rule, and do not reach for
+an `.open` class instead — one visibility mechanism, not two.
+
 ## Session & Sales Behavior (applies to every phase, not just one)
 - **Cart ownership:** the cart belongs to the customer's own browser session — never stored server-side keyed only by `table_id`. `table_id` is a routing tag for kitchen/staff, never a shared "current order" store.
 - **Fresh start per scan:** when a new customer scans the same table's QR, they always get an empty cart. A previous customer's order must never appear on a new session.

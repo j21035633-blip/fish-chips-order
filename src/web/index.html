@@ -14,9 +14,6 @@
           <span class="brand-name">Anchor &amp; Batter</span>
         </a>
         <span id="table-badge" class="table-badge" hidden></span>
-        <button id="cart-toggle" class="cart-toggle" type="button" hidden>
-          Cart <span id="cart-count" class="pill">0</span>
-        </button>
       </div>
     </header>
 
@@ -24,8 +21,31 @@
       <p class="loading">Loading the menu…</p>
     </main>
 
-    <!-- Cart drawer, menu view only -->
-    <aside id="cart-panel" class="cart-panel" hidden aria-label="Your order">
+    <!--
+      The cart has two states and no third: a slim bar when there is something
+      in it, and the sheet below when the bar is tapped. With an empty cart
+      neither is rendered — nothing floats over the menu until there is
+      something to float.
+    -->
+    <button
+      id="cart-bar"
+      class="cart-bar"
+      type="button"
+      hidden
+      aria-haspopup="dialog"
+      aria-controls="cart-panel"
+      aria-expanded="false"
+    >
+      <span class="cart-bar-count"><span id="cart-count">0</span> items</span>
+      <span class="cart-bar-dot" aria-hidden="true">·</span>
+      <span id="cart-bar-total" class="cart-bar-total">RM0.00</span>
+      <span class="cart-bar-cta">View order</span>
+    </button>
+
+    <aside id="cart-panel" class="cart-panel" hidden role="dialog" aria-modal="true" aria-label="Your order">
+      <!-- The drag handle. Also the grab area for swipe-to-close, which is kept
+           off the scrolling list so a swipe cannot fight a scroll. -->
+      <div id="cart-grip" class="cart-grip"><span aria-hidden="true"></span></div>
       <div class="cart-head">
         <h2>Your order</h2>
         <button id="cart-close" class="icon-button" type="button" aria-label="Close">&times;</button>

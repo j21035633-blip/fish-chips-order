@@ -14,6 +14,9 @@
   --ok: #1c7a4a;
   --radius: 12px;
   --shadow: 0 1px 2px rgba(20, 33, 31, 0.06), 0 8px 24px rgba(20, 33, 31, 0.06);
+  /* The collapsed cart bar's height, in one place: the bar is fixed, and the
+     menu reserves exactly this much room under itself so the two never overlap. */
+  --cart-bar-h: 60px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -34,6 +37,18 @@
 }
 
 * { box-sizing: border-box; }
+
+/*
+ * `hidden` beats layout, always.
+ *
+ * The browser's own `[hidden] { display: none }` is a plain UA rule, so any
+ * class that sets `display` — `.cart-panel { display: flex }` did — silently
+ * outranks it. The attribute then does nothing: the panel sat open over the
+ * menu on load and the close button appeared dead, because `hidden = true` was
+ * being set and overruled. Everything here uses `hidden` as its visibility
+ * state, so it has to win.
+ */
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -67,17 +82,6 @@ h1, h2, h3 { line-height: 1.25; margin: 0; }
 .brand-mark { font-size: 20px; opacity: 0.9; }
 .brand-name { font-weight: 650; letter-spacing: -0.01em; }
 
-.cart-toggle {
-  background: rgba(255, 255, 255, 0.16);
-  color: #fff;
-  border: 0;
-  border-radius: 999px;
-  padding: 8px 14px;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-.cart-toggle:hover { background: rgba(255, 255, 255, 0.24); }
 .table-badge {
   margin-left: auto;
   margin-right: 10px;
@@ -89,21 +93,17 @@ h1, h2, h3 { line-height: 1.25; margin: 0; }
   white-space: nowrap;
 }
 
-.pill {
-  display: inline-block;
-  min-width: 20px;
-  padding: 0 6px;
-  margin-left: 4px;
-  border-radius: 999px;
-  background: var(--batter);
-  color: #2a1c05;
-  font-size: 13px;
-  font-weight: 700;
-  text-align: center;
-}
-
 /* ------------------------------------------------------------------ view */
-.view { max-width: 720px; margin: 0 auto; padding: 20px 16px 120px; }
+/*
+ * The bottom padding is what keeps the cart bar off the menu.
+ *
+ * The bar is fixed, so it cannot push anything: the last item of the last
+ * section would sit under it and be untappable. `body.has-cart` adds exactly
+ * the bar's height back as scrollable space, and only while there is a bar —
+ * an empty cart has no floating anything, so it gets no dead strip either.
+ */
+.view { max-width: 720px; margin: 0 auto; padding: 20px 16px calc(24px + env(safe-area-inset-bottom)); }
+body.has-cart .view { padding-bottom: calc(var(--cart-bar-h) + 24px + env(safe-area-inset-bottom)); }
 .loading, .empty { color: var(--ink-soft); text-align: center; padding: 48px 0; }
 
 .category { margin-bottom: 32px; }
@@ -190,27 +190,128 @@ h1, h2, h3 { line-height: 1.25; margin: 0; }
 .tag.signature { background: color-mix(in srgb, var(--sea) 18%, transparent); color: var(--sea); }
 
 /* ------------------------------------------------------------------ cart */
+/*
+ * Collapsed state: a bar, not a panel.
+ *
+ * Everything the customer needs at a glance — how many, how much, and the way
+ * in — on one line, so browsing the menu is never interrupted by an order they
+ * are still building.
+ */
+.cart-bar {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 25;
+  height: var(--cart-bar-h);
+  /* The bar's own height stays constant; the safe area is padding under it, so
+     a phone with a home indicator does not eat the text. */
+  padding: 0 16px calc(env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(720px, 100%);
+  margin: 0 auto;
+  background: var(--sea);
+  color: #fff;
+  border: 0;
+  border-radius: 14px 14px 0 0;
+  font: inherit;
+  font-weight: 620;
+  cursor: pointer;
+  box-shadow: 0 -6px 28px rgba(20, 33, 31, 0.18);
+}
+.cart-bar:hover { background: var(--sea-dark); }
+.cart-bar-dot { opacity: 0.6; }
+.cart-bar-total { font-variant-numeric: tabular-nums; }
+/* Pushed to the far end and underlined-on-hover so the bar reads as one control
+   with an obvious action, rather than a status strip that happens to be tappable. */
+.cart-bar-cta { margin-left: auto; font-weight: 700; }
+.cart-bar:hover .cart-bar-cta { text-decoration: underline; }
+
+/*
+ * Expanded state: a bottom sheet.
+ *
+ * Sized to its content up to a ceiling, so two items get a short sheet and a
+ * long order gets a scrollable one — never the full screen for three lines.
+ * The ceiling is `dvh`, not `vh`: with `vh` the mobile browser's collapsing
+ * address bar is counted as visible screen and the checkout button ends up
+ * below the fold.
+ */
 .cart-panel {
   position: fixed;
   inset: auto 0 0 0;
   z-index: 40;
-  max-height: 82vh;
+  width: min(720px, 100%);
+  margin: 0 auto;
+  max-height: 82dvh;
   display: flex;
   flex-direction: column;
   background: var(--card);
   border-top: 1px solid var(--line);
   border-radius: 16px 16px 0 0;
   box-shadow: 0 -8px 40px rgba(20, 33, 31, 0.18);
+  animation: sheet-up 0.24s cubic-bezier(0.2, 0.8, 0.3, 1);
+  /* Set while a finger is dragging it down; the JS writes the offset here so
+     the swipe follows the thumb without touching inline styles on every frame. */
+  transform: translateY(var(--sheet-drag, 0));
+}
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+.scrim { position: fixed; inset: 0; z-index: 30; background: rgba(10, 20, 18, 0.4); animation: fade-in 0.2s ease; }
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cart-panel, .scrim { animation: none; }
 }
 @media (min-width: 720px) {
-  .cart-panel { inset: 0 0 0 auto; width: 380px; max-height: none; border-radius: 0; border-left: 1px solid var(--line); }
+  /* Room for a side drawer: the sheet becomes one, and the bar stays a bar. */
+  .cart-panel {
+    inset: 0 0 0 auto;
+    width: 380px;
+    margin: 0;
+    max-height: none;
+    border-radius: 0;
+    border-left: 1px solid var(--line);
+    animation: none;
+  }
 }
+
+/* The grab handle, and the only place a downward drag closes the sheet. */
+.cart-grip {
+  display: grid;
+  place-items: center;
+  padding: 10px 0 2px;
+  cursor: grab;
+  /* Stops the browser claiming the vertical gesture as a page scroll before the
+     handler sees it. */
+  touch-action: none;
+}
+.cart-grip span {
+  width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+}
+.cart-panel.dragging { animation: none; transition: none; }
+@media (min-width: 720px) {
+  /* Nothing to swipe on a side drawer. */
+  .cart-grip { display: none; }
+}
+
 .cart-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 16px; border-bottom: 1px solid var(--line);
+  padding: 10px 16px 14px; border-bottom: 1px solid var(--line);
 }
 .cart-head h2 { font-size: 17px; }
-.cart-body { flex: 1; overflow-y: auto; padding: 8px 16px; }
+.cart-body { flex: 1; overflow-y: auto; padding: 8px 16px; -webkit-overflow-scrolling: touch; }
+/*
+ * The foot never scrolls away. It is outside `.cart-body`, so the list scrolls
+ * under it and Checkout is on screen at any order length — the thing that
+ * breaks first when a sheet is sized by content.
+ */
 .cart-foot { padding: 16px; border-top: 1px solid var(--line); padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
 .cart-total { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 17px; }
 .cart-total strong { font-variant-numeric: tabular-nums; }
@@ -222,7 +323,8 @@ h1, h2, h3 { line-height: 1.25; margin: 0; }
 .cart-line-opts { color: var(--ink-soft); font-size: 13px; margin-top: 2px; }
 .cart-line-total { font-variant-numeric: tabular-nums; font-size: 15px; }
 
-.scrim { position: fixed; inset: 0; z-index: 30; background: rgba(10, 20, 18, 0.4); }
+/* The page behind a sheet must not scroll under the finger. */
+body.cart-open { overflow: hidden; }
 
 /* --------------------------------------------------------------- controls */
 .qty { display: flex; align-items: center; gap: 4px; }

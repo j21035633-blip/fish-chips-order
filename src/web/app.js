@@ -6,7 +6,9 @@ const cartPanel = document.getElementById("cart-panel");
 const cartBody = document.getElementById("cart-body");
 const cartTotalEl = document.getElementById("cart-total");
 const cartCountEl = document.getElementById("cart-count");
-const cartToggle = document.getElementById("cart-toggle");
+const cartBar = document.getElementById("cart-bar");
+const cartBarTotal = document.getElementById("cart-bar-total");
+const cartGrip = document.getElementById("cart-grip");
 const cartClose = document.getElementById("cart-close");
 const checkoutButton = document.getElementById("checkout-button");
 const scrim = document.getElementById("scrim");
@@ -29,6 +31,14 @@ const state = {
   dialogItem: null,
   dialogQty: 1,
   pendingOrder: null,
+  /**
+   * Whether this view has a cart to show at all.
+   *
+   * The order and checkout pages are about one order that is already placed, so
+   * a bar offering to edit a different one would be nonsense. Separate from
+   * "the cart has items in it": both have to be true before anything is drawn.
+   */
+  cartVisible: true,
 };
 
 // ---------------------------------------------------------------- utilities
@@ -145,11 +155,21 @@ function setCart(cart) {
 function renderCart() {
   const cart = state.cart;
   const lines = cart?.lines ?? [];
+  const total = cart?.total ?? "RM0.00";
 
   cartCountEl.textContent = String(cart?.itemCount ?? 0);
-  cartTotalEl.textContent = cart?.total ?? "RM0.00";
-  cartToggle.hidden = lines.length === 0;
+  cartTotalEl.textContent = total;
+  cartBarTotal.textContent = total;
   checkoutButton.disabled = lines.length === 0;
+
+  // Nothing in the cart, nothing on screen: no bar, no sheet, and no reserved
+  // strip at the bottom of the menu either. An order the customer emptied from
+  // inside the sheet takes the sheet down with it — there is nothing left in
+  // there to look at.
+  const showBar = state.cartVisible && lines.length > 0;
+  cartBar.hidden = !showBar;
+  document.body.classList.toggle("has-cart", showBar);
+  if (!showBar) closeCart();
 
   mount(cartBody,
     lines.length === 0
@@ -205,14 +225,76 @@ async function changeQuantity(line, quantity) {
   }
 }
 
+/**
+ * Shows or hides the whole cart affordance for a view.
+ *
+ * Called by every route, so a view never has to remember to put it back.
+ */
+function setCartVisible(visible) {
+  state.cartVisible = visible;
+  if (!visible) closeCart();
+  renderCart();
+}
+
 function openCart() {
+  // Only ever from a tap, and only when there is something to show. The panel
+  // opening by itself was the bug: an empty sheet over the menu, on load,
+  // before the customer had done anything at all.
+  if (cartBar.hidden) return;
+
   cartPanel.hidden = false;
   scrim.hidden = false;
+  cartBar.setAttribute("aria-expanded", "true");
+  document.body.classList.add("cart-open");
+  cartClose.focus();
 }
 
 function closeCart() {
   cartPanel.hidden = true;
   scrim.hidden = true;
+  cartPanel.style.removeProperty("--sheet-drag");
+  cartPanel.classList.remove("dragging");
+  cartBar.setAttribute("aria-expanded", "false");
+  document.body.classList.remove("cart-open");
+}
+
+/**
+ * Swipe the sheet down to dismiss it.
+ *
+ * Only from the grip: a drag that started on the scrolling list would have to
+ * guess whether the customer meant to scroll it or dismiss the sheet, and
+ * guessing wrong loses their place in a long order. Pointer events rather than
+ * touch events, so a mouse drag behaves the same and there is one code path.
+ */
+function trackSheetDrag() {
+  const DISMISS_PX = 90;
+  let startY = null;
+
+  cartGrip.addEventListener("pointerdown", (event) => {
+    startY = event.clientY;
+    cartGrip.setPointerCapture(event.pointerId);
+    cartPanel.classList.add("dragging");
+  });
+
+  cartGrip.addEventListener("pointermove", (event) => {
+    if (startY === null) return;
+    // Downward only. Dragging up would lift the sheet off the bottom edge and
+    // show the page through the gap.
+    const offset = Math.max(0, event.clientY - startY);
+    cartPanel.style.setProperty("--sheet-drag", `${offset}px`);
+  });
+
+  const end = (event) => {
+    if (startY === null) return;
+    const offset = Math.max(0, event.clientY - startY);
+    startY = null;
+    cartPanel.classList.remove("dragging");
+    cartPanel.style.removeProperty("--sheet-drag");
+    if (offset > DISMISS_PX) closeCart();
+  };
+
+  cartGrip.addEventListener("pointerup", end);
+  cartGrip.addEventListener("pointercancel", end);
 }
 
 // -------------------------------------------------------------- menu view
@@ -373,8 +455,11 @@ itemAddButton.addEventListener("click", async () => {
       body: JSON.stringify({ itemId: state.dialogItem.id, quantity: state.dialogQty, selections }),
     });
     itemDialog.close();
+    // Deliberately does *not* open the sheet. Adding an item used to throw the
+    // full panel over the menu, which put a wall in front of someone who was
+    // most likely about to add a second thing. The bar appearing with a new
+    // count and total is the confirmation; the sheet waits to be asked for.
     setCart(cart);
-    openCart();
   } catch (error) {
     alert(error.message);
   }
@@ -414,7 +499,9 @@ async function startPayment(orderId, method) {
 }
 
 async function renderCheckoutView() {
-  closeCart();
+  // The whole page is the order now, with its own total and pay button. A bar
+  // over the top of it saying the same thing would just cover the button.
+  setCartVisible(false);
   const [{ methods }] = await Promise.all([api("/api/payments/methods"), ensureCart()]);
   const cart = state.cart;
 
@@ -516,8 +603,9 @@ async function pay(errorEl, payButton) {
 let pollTimer = null;
 
 async function renderOrderView(orderId) {
-  closeCart();
-  cartToggle.hidden = true;
+  // This order is placed; the cart it came from is gone. Takes the sheet down
+  // with it if it happened to be open.
+  setCartVisible(false);
   clearInterval(pollTimer);
 
   // Only fetched when an order turns out to have nowhere for the customer to pay.
@@ -678,7 +766,7 @@ function statusLabel(status) {
 // ------------------------------------------------ simulated checkout page
 
 async function renderSimulatedCheckout() {
-  cartToggle.hidden = true;
+  setCartVisible(false);
   const params = new URLSearchParams(location.search);
   const orderId = params.get("orderId");
 
@@ -741,7 +829,7 @@ async function renderTableLanding() {
       console.warn(error);
       mount(view, el("p", { class: "empty", text: `${error.message} Showing the menu instead.` }));
       history.replaceState({}, "", "/");
-      cartToggle.hidden = false;
+      setCartVisible(true);
       return;
     }
   }
@@ -761,7 +849,7 @@ function navigate(path) {
 
 async function route() {
   clearInterval(pollTimer);
-  cartToggle.hidden = false;
+  setCartVisible(true);
   mount(view, el("p", { class: "loading", text: "Loading…" }));
 
   try {
@@ -776,9 +864,15 @@ async function route() {
   }
 }
 
-cartToggle.addEventListener("click", openCart);
+// Three ways out of the sheet, plus the swipe: the X, the dimmed background,
+// and Escape. A sheet with one exit is a sheet someone gets stuck in.
+cartBar.addEventListener("click", openCart);
 cartClose.addEventListener("click", closeCart);
 scrim.addEventListener("click", closeCart);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !cartPanel.hidden) closeCart();
+});
+trackSheetDrag();
 checkoutButton.addEventListener("click", () => navigate("/checkout"));
 window.addEventListener("popstate", route);
 
