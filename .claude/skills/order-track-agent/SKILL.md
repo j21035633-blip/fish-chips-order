@@ -243,6 +243,13 @@ Rules worth keeping if you touch this:
   second thing. The bar's new count and total are the confirmation.
 - **It closes four ways:** the X, the dimmed background, Escape, and a swipe down on the grip. The
   swipe is bound to the grip alone, never the scrolling list, so it cannot fight a scroll.
+- **The item options sheet is the same sheet** — same `.sheet-grip`, same `.sheet-head` with its X,
+  same four dismissals through one `trackSheetDrag(sheet, grip, dismiss)`. It stays a `<dialog>`
+  underneath, because `showModal()` gives Escape, a focus trap and an inert page for free; the
+  backdrop click is the one thing `<dialog>` does not do, and it is detected as a click whose target
+  is the dialog element itself. Every dismissal goes through `dismissItem()`, so an abandoned ice
+  level or quantity is discarded in exactly one place — nothing is ordered unless Add is tapped.
+  **Add a third sheet by reusing this chrome, not by inventing a second dismiss mechanism.**
 - **Emptying the cart from inside the sheet closes the sheet**, because there is nothing left to
   look at.
 - The order and checkout views call `setCartVisible(false)`: those pages are about an order that is

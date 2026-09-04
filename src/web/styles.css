@@ -279,8 +279,13 @@ body.has-cart .view { padding-bottom: calc(var(--cart-bar-h) + 24px + env(safe-a
   }
 }
 
-/* The grab handle, and the only place a downward drag closes the sheet. */
-.cart-grip {
+/*
+ * Sheet chrome, shared by the cart and the item options.
+ *
+ * Both dismiss the same four ways, so both wear the same grip and the same
+ * head: a customer who learns the gesture on one has learnt it on the other.
+ */
+.sheet-grip {
   display: grid;
   place-items: center;
   padding: 10px 0 2px;
@@ -289,23 +294,22 @@ body.has-cart .view { padding-bottom: calc(var(--cart-bar-h) + 24px + env(safe-a
      handler sees it. */
   touch-action: none;
 }
-.cart-grip span {
+.sheet-grip span {
   width: 40px;
   height: 4px;
   border-radius: 999px;
   background: var(--line);
 }
-.cart-panel.dragging { animation: none; transition: none; }
-@media (min-width: 720px) {
-  /* Nothing to swipe on a side drawer. */
-  .cart-grip { display: none; }
-}
-
-.cart-head {
-  display: flex; align-items: center; justify-content: space-between;
+.sheet-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 10px 16px 14px; border-bottom: 1px solid var(--line);
 }
-.cart-head h2 { font-size: 17px; }
+.sheet-head h2 { font-size: 17px; min-width: 0; }
+.dragging { animation: none !important; transition: none; }
+@media (min-width: 720px) {
+  /* Nothing to swipe once these stop being sheets. */
+  .sheet-grip { display: none; }
+}
 .cart-body { flex: 1; overflow-y: auto; padding: 8px 16px; -webkit-overflow-scrolling: touch; }
 /*
  * The foot never scrolls away. It is outside `.cart-body`, so the list scrolls
@@ -376,21 +380,58 @@ body.cart-open { overflow: hidden; }
 }
 
 /* ---------------------------------------------------------------- dialog */
+/*
+ * The item sheet. A <dialog> rather than a div, for the modality: Escape, the
+ * focus trap and an inert page behind it are the browser's job, not ours.
+ *
+ * Styled as a bottom sheet on a phone, like the cart, so the swipe-down gesture
+ * means the same thing in both places. `margin: auto auto 0` is what pins a
+ * dialog to the bottom — its default centring is a margin, not a position.
+ */
 .dialog {
   border: 0;
-  border-radius: 16px;
+  border-radius: 16px 16px 0 0;
   padding: 0;
-  width: min(480px, calc(100vw - 32px));
+  width: min(480px, 100vw);
+  max-width: 100vw;
+  margin: auto auto 0;
+  max-height: 88dvh;
   background: var(--card);
   color: var(--ink);
-  box-shadow: var(--shadow);
+  box-shadow: 0 -8px 40px rgba(20, 33, 31, 0.18);
+  animation: sheet-up 0.24s cubic-bezier(0.2, 0.8, 0.3, 1);
+  transform: translateY(var(--sheet-drag, 0));
 }
 .dialog::backdrop { background: rgba(10, 20, 18, 0.45); }
-.dialog form { margin: 0; }
-#item-dialog-body { padding: 20px; max-height: 60vh; overflow-y: auto; }
+/* The form is the sheet's whole body, so the column that keeps the foot in
+   place lives on it rather than on the dialog. */
+.dialog form {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 88dvh;
+}
+/* Scrolls under a foot that stays put, so Add is reachable however many option
+   groups an item has. */
+#item-dialog-body { padding: 4px 20px 20px; flex: 1; overflow-y: auto; }
 .dialog-foot {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 14px 20px; border-top: 1px solid var(--line);
+  padding-bottom: calc(14px + env(safe-area-inset-bottom));
+}
+@media (prefers-reduced-motion: reduce) {
+  .dialog { animation: none; }
+}
+@media (min-width: 720px) {
+  /* Room to centre it again: back to a card, and the grip goes away with it. */
+  .dialog {
+    margin: auto;
+    width: min(480px, calc(100vw - 32px));
+    border-radius: 16px;
+    max-height: min(88dvh, 720px);
+    box-shadow: var(--shadow);
+    animation: none;
+  }
 }
 
 .dialog h3 { font-size: 19px; }

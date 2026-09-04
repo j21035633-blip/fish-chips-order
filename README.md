@@ -9,7 +9,7 @@ The agent's behaviour is defined in `.claude/skills/order-track-agent/SKILL.md`.
 | 2 | 2–3 — Cart, checkout, **real payments** | Done |
 | 3+ | 4–6 — Bonus chances, fishing game, order status | Not started |
 
-**307 tests, 15 files.** `npm test`.
+**315 tests, 15 files.** `npm test`.
 
 ## Run it
 
@@ -80,7 +80,8 @@ reach `localhost`.
 table and has to load on a bad connection.
 
 - Menu grouped by section; tap an item for flavour, portion, allergens and options
-- Options priced live in the dialog before adding
+- Options priced live in the sheet before adding, which dismisses the same four ways the cart does —
+  X, dimmed background, Escape, swipe down — discarding the selection unless **Add** is tapped
 - Cart in two states: a slim bar with the count and running total while browsing, expanding to a
   bottom sheet with quantity controls when tapped. Empty cart, no bar — nothing floats over the menu
   until there is something to float. The sheet closes on the X, the dimmed background, Escape, or a

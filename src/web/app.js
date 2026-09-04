@@ -14,6 +14,9 @@ const checkoutButton = document.getElementById("checkout-button");
 const scrim = document.getElementById("scrim");
 const itemDialog = document.getElementById("item-dialog");
 const itemDialogBody = document.getElementById("item-dialog-body");
+const itemTitle = document.getElementById("item-title");
+const itemGrip = document.getElementById("item-grip");
+const itemClose = document.getElementById("item-close");
 const itemQtyEl = document.getElementById("item-qty");
 const itemPriceEl = document.getElementById("item-price");
 const itemAddButton = document.getElementById("item-add");
@@ -259,42 +262,50 @@ function closeCart() {
 }
 
 /**
- * Swipe the sheet down to dismiss it.
+ * Swipe a sheet down to dismiss it.
  *
- * Only from the grip: a drag that started on the scrolling list would have to
- * guess whether the customer meant to scroll it or dismiss the sheet, and
- * guessing wrong loses their place in a long order. Pointer events rather than
- * touch events, so a mouse drag behaves the same and there is one code path.
+ * Shared by the cart and the item options: one gesture, wired once, so a
+ * customer who learns it on one sheet has learnt it on the other.
+ *
+ * Only from the grip. A drag that started on the scrolling content would have
+ * to guess whether the customer meant to scroll or dismiss, and guessing wrong
+ * loses their place. Pointer events rather than touch events, so a mouse drag
+ * behaves the same and there is one code path.
  */
-function trackSheetDrag() {
+function trackSheetDrag(sheet, grip, dismiss) {
   const DISMISS_PX = 90;
   let startY = null;
 
-  cartGrip.addEventListener("pointerdown", (event) => {
+  grip.addEventListener("pointerdown", (event) => {
     startY = event.clientY;
-    cartGrip.setPointerCapture(event.pointerId);
-    cartPanel.classList.add("dragging");
+    try {
+      // Keeps the gesture on the grip if the finger wanders off it. Throws on a
+      // pointer id that is no longer active, which is not worth losing the drag
+      // over — the move and up handlers work without capture.
+      grip.setPointerCapture(event.pointerId);
+    } catch {}
+    sheet.classList.add("dragging");
   });
 
-  cartGrip.addEventListener("pointermove", (event) => {
+  grip.addEventListener("pointermove", (event) => {
     if (startY === null) return;
     // Downward only. Dragging up would lift the sheet off the bottom edge and
     // show the page through the gap.
     const offset = Math.max(0, event.clientY - startY);
-    cartPanel.style.setProperty("--sheet-drag", `${offset}px`);
+    sheet.style.setProperty("--sheet-drag", `${offset}px`);
   });
 
   const end = (event) => {
     if (startY === null) return;
     const offset = Math.max(0, event.clientY - startY);
     startY = null;
-    cartPanel.classList.remove("dragging");
-    cartPanel.style.removeProperty("--sheet-drag");
-    if (offset > DISMISS_PX) closeCart();
+    sheet.classList.remove("dragging");
+    sheet.style.removeProperty("--sheet-drag");
+    if (offset > DISMISS_PX) dismiss();
   };
 
-  cartGrip.addEventListener("pointerup", end);
-  cartGrip.addEventListener("pointercancel", end);
+  grip.addEventListener("pointerup", end);
+  grip.addEventListener("pointercancel", end);
 }
 
 // -------------------------------------------------------------- menu view
@@ -374,8 +385,11 @@ function openItem(item) {
   state.dialogItem = item;
   state.dialogQty = 1;
 
+  // The name lives in the sheet's head, beside the close button, so it stays on
+  // screen while a long list of options scrolls under it.
+  itemTitle.textContent = item.name;
+
   mount(itemDialogBody,
-    el("h3", { text: item.name }),
     el("p", { class: "flavour", text: item.flavourNotes }),
     el("p", { class: "portion", text: item.portionSummary }),
     item.allergens.length > 0
@@ -433,11 +447,45 @@ function selectedChoices() {
   );
 }
 
+/**
+ * Closes the options sheet without ordering anything.
+ *
+ * Every dismissal goes through here — the X, the backdrop, Escape and the
+ * swipe — so there is one place where an abandoned selection is discarded.
+ * Discarding is cheap: nothing is sent until Add is tapped, the options live in
+ * the DOM that `openItem` rebuilds from scratch every time, and the quantity
+ * goes back to 1 with it. Idempotent, so the native `cancel` firing alongside
+ * our own Escape handling is not a problem.
+ */
+function dismissItem() {
+  if (itemDialog.hasAttribute("open")) itemDialog.close();
+  state.dialogItem = null;
+  state.dialogQty = 1;
+}
+
 function updateDialogPrice() {
+  // Nothing to price once the sheet has been dismissed; a late event from a
+  // pointer that was mid-tap must not throw.
+  if (!state.dialogItem) return;
   const base = centsFromPrice(state.dialogItem.price);
   const deltas = selectedChoices().reduce((total, choice) => total + choice.delta, 0);
   itemPriceEl.textContent = formatSen((base + deltas) * state.dialogQty);
 }
+
+itemClose.addEventListener("click", dismissItem);
+
+// The backdrop. A click that lands on the dialog element itself was outside the
+// sheet, because the form fills it edge to edge — that is the standard way to
+// tell "outside" from "inside" on a <dialog>, which has no separate scrim node.
+itemDialog.addEventListener("click", (event) => {
+  if (event.target === itemDialog) dismissItem();
+});
+
+// Escape. The browser already closes a modal dialog on it and fires `cancel`;
+// this is where the abandoned selection gets dropped either way.
+itemDialog.addEventListener("cancel", dismissItem);
+
+trackSheetDrag(itemDialog, itemGrip, dismissItem);
 
 itemDialog.addEventListener("click", (event) => {
   const step = event.target.closest("[data-qty]");
@@ -870,9 +918,14 @@ cartBar.addEventListener("click", openCart);
 cartClose.addEventListener("click", closeCart);
 scrim.addEventListener("click", closeCart);
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !cartPanel.hidden) closeCart();
+  if (event.key !== "Escape") return;
+  // The dialog is on top when it is open, so it gets the key first. In a real
+  // browser its own `cancel` has already fired by now; this is what makes
+  // Escape work where <dialog> is stubbed, and it is a no-op if it is not.
+  if (itemDialog.hasAttribute("open")) dismissItem();
+  else if (!cartPanel.hidden) closeCart();
 });
-trackSheetDrag();
+trackSheetDrag(cartPanel, cartGrip, closeCart);
 checkoutButton.addEventListener("click", () => navigate("/checkout"));
 window.addEventListener("popstate", route);
 

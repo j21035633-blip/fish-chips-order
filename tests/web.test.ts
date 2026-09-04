@@ -560,6 +560,26 @@ describe("cart layout contract", () => {
     expect(css).toMatch(/\.cart-panel\s*\{[^}]*max-height:\s*82dvh/);
   });
 
+  it("dresses both sheets from the same chrome", () => {
+    // One grip class and one head class, used by the cart panel and the item
+    // dialog alike — a second dismiss design is the thing to catch here.
+    expect(css).toMatch(/\.sheet-grip\s*\{/);
+    expect(css).toMatch(/\.sheet-head\s*\{/);
+    expect(css).not.toMatch(/\.cart-grip\s*\{/);
+    for (const parent of ["cart-panel", "item-dialog"]) {
+      const scope = html.slice(html.indexOf(`id="${parent}"`));
+      expect(scope.slice(0, scope.indexOf("</dialog>") + 1 || 900), parent).toContain("sheet-grip");
+      expect(scope.slice(0, 900), parent).toContain("sheet-head");
+    }
+  });
+
+  it("keeps Add reachable however many option groups an item has", () => {
+    // Same rule as the cart's foot: the body scrolls, the foot does not.
+    expect(css).toMatch(/#item-dialog-body\s*\{[^}]*overflow-y:\s*auto/);
+    expect(css).toMatch(/\.dialog form\s*\{[^}]*flex-direction:\s*column/);
+    expect(css).toMatch(/\.dialog\s*\{[^}]*max-height:\s*88dvh/);
+  });
+
   it("keeps the checkout button outside the scrolling list", () => {
     // `.cart-foot` is a sibling of `.cart-body`, not inside it, so a long order
     // scrolls under a total and a button that stay on screen.
@@ -570,5 +590,121 @@ describe("cart layout contract", () => {
     expect(foot).toBeGreaterThan(body);
     expect(checkout).toBeGreaterThan(foot);
     expect(css).toMatch(/\.cart-body\s*\{[^}]*overflow-y:\s*auto/);
+  });
+});
+
+describe("item options sheet", async () => {
+  const dialog = () => document.getElementById("item-dialog") as HTMLElement;
+  const isOpen = () => dialog().hasAttribute("open");
+
+  /** Opens the options sheet for an item by tapping its row, as a customer would. */
+  async function openItem(name: string) {
+    const row = [...document.querySelectorAll("button.item")].find((item) =>
+      item.textContent?.includes(name),
+    ) as HTMLButtonElement;
+    row.click();
+    await settle(2);
+    expect(isOpen()).toBe(true);
+  }
+
+  /** Whether anything has reached the cart. */
+  const cartCount = () => document.getElementById("cart-count")!.textContent;
+
+  it("names the item in the sheet head, beside the close button", async () => {
+    await bootPage("/");
+    await openItem("Hand-Cut Chips");
+
+    expect(document.getElementById("item-title")!.textContent).toBe("Hand-Cut Chips");
+    // The head is the cart sheet's head, not a second design.
+    expect(document.querySelector("#item-dialog .sheet-head .icon-button")).toBeTruthy();
+    expect(document.querySelector("#item-dialog .sheet-grip")).toBeTruthy();
+  });
+
+  it("closes on the X without ordering anything", async () => {
+    await bootPage("/");
+    await openItem("Hand-Cut Chips");
+
+    (document.getElementById("item-close") as HTMLButtonElement).click();
+    await settle(2);
+
+    expect(isOpen()).toBe(false);
+    expect(cartCount()).toBe("0");
+    expect((document.getElementById("cart-bar") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("closes on the backdrop and on Escape", async () => {
+    await bootPage("/");
+
+    await openItem("Hand-Cut Chips");
+    // A click landing on the dialog element itself is a click outside the sheet.
+    dialog().dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    expect(isOpen()).toBe(false);
+
+    await openItem("Hand-Cut Chips");
+    document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(isOpen()).toBe(false);
+
+    // A click *inside* the sheet must not close it — that is the same listener.
+    await openItem("Hand-Cut Chips");
+    document.getElementById("item-dialog-body")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    expect(isOpen()).toBe(true);
+
+    expect(cartCount()).toBe("0");
+  });
+
+  it("closes on a swipe down of the grip, and not on a nudge", async () => {
+    await bootPage("/");
+    await openItem("Hand-Cut Chips");
+
+    const grip = document.getElementById("item-grip")!;
+    const drag = (from: number, to: number) => {
+      grip.dispatchEvent(new window.MouseEvent("pointerdown", { clientY: from, bubbles: true }));
+      grip.dispatchEvent(new window.MouseEvent("pointermove", { clientY: to, bubbles: true }));
+      grip.dispatchEvent(new window.MouseEvent("pointerup", { clientY: to, bubbles: true }));
+    };
+
+    // A short drag is a mis-tap, not a dismissal.
+    drag(100, 130);
+    expect(isOpen()).toBe(true);
+
+    drag(100, 300);
+    expect(isOpen()).toBe(false);
+    expect(cartCount()).toBe("0");
+  });
+
+  it("discards the options and quantity that were being chosen", async () => {
+    await bootPage("/");
+    await openItem("Hand-Cut Chips");
+
+    // Upsize and bump the quantity, then walk away from it.
+    const large = document.querySelector('#item-dialog-body input[value="large"]') as HTMLInputElement;
+    large.checked = true;
+    large.dispatchEvent(new window.Event("change", { bubbles: true }));
+    (document.querySelector('#item-dialog [data-qty="1"]') as HTMLButtonElement).click();
+    expect(document.getElementById("item-qty")!.textContent).toBe("2");
+    expect(document.getElementById("item-price")!.textContent).toBe("RM23.80");
+
+    (document.getElementById("item-close") as HTMLButtonElement).click();
+    await settle(2);
+
+    // Nothing ordered, and the next open starts from scratch rather than
+    // remembering a choice the customer abandoned.
+    expect(cartCount()).toBe("0");
+    await openItem("Hand-Cut Chips");
+    expect(document.getElementById("item-qty")!.textContent).toBe("1");
+    expect(document.getElementById("item-price")!.textContent).toBe("RM7.90");
+    expect((document.querySelector('#item-dialog-body input[value="large"]') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("still adds the item when Add is the thing that was tapped", async () => {
+    await bootPage("/");
+    await openItem("Hand-Cut Chips");
+
+    (document.getElementById("item-add") as HTMLButtonElement).click();
+    await settle();
+
+    expect(isOpen()).toBe(false);
+    expect(cartCount()).toBe("1");
+    expect((document.getElementById("cart-bar") as HTMLElement).hidden).toBe(false);
   });
 });
