@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Sign in — Anchor &amp; Batter</title>
+    <link rel="stylesheet" href="{{STAFF_BASE}}/assets/staff.css" />
+  </head>
+  <body class="login-page" data-staff-base="{{STAFF_BASE}}" data-staff-view="login">
+    <main>
+      <form id="login-form" class="login-card" novalidate>
+        <h1>Staff sign in</h1>
+        <p class="sub">One password for everyone on shift. Ask the manager if you do not have it.</p>
+
+        <div class="field">
+          <label for="password">Password</label>
+          <!--
+            autofocus so a tablet on the pass is one tap from typing, and
+            autocomplete="current-password" so a saved password fills in rather
+            than being retyped between shifts.
+          -->
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            autocapitalize="off"
+            spellcheck="false"
+            required
+            autofocus
+          />
+        </div>
+
+        <p id="form-error" class="form-error" hidden></p>
+
+        <button id="submit" class="advance" type="submit">Sign in</button>
+      </form>
+    </main>
+
+    <script type="module">
+      import { staffBase } from "{{STAFF_BASE}}/assets/nav.js";
+
+      const form = document.getElementById("login-form");
+      const password = document.getElementById("password");
+      const submit = document.getElementById("submit");
+      const error = document.getElementById("form-error");
+
+      /**
+       * Where to go once signed in.
+       *
+       * `?next=` is set by the server when it turns a staff page away, so a
+       * bookmarked Sales Report comes back to the Sales Report. Only same-site
+       * paths are honoured — an absolute URL in a query parameter is an open
+       * redirect, and this page is exactly the sort a phisher would like one on.
+       */
+      function destination() {
+        const next = new URLSearchParams(location.search).get("next");
+        if (next && next.startsWith("/") && !next.startsWith("//")) return next;
+        return staffBase() || "/";
+      }
+
+      // Already signed in — a tablet that woke up on this page should not make
+      // anyone type a password they have already typed.
+      fetch("/api/staff/session")
+        .then((response) => response.json())
+        .then((session) => {
+          if (session.authenticated || session.authRequired === false) location.replace(destination());
+        })
+        .catch(() => {
+          // Offline or the server is down. The form still works; let them try.
+        });
+
+      function showError(message) {
+        error.textContent = message ?? "";
+        error.hidden = !message;
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        showError();
+        submit.disabled = true;
+
+        try {
+          const response = await fetch("/api/staff/login", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ password: password.value }),
+          });
+          const body = await response.json().catch(() => ({}));
+
+          if (response.ok) {
+            // replace, not assign: the back button should not return to a login
+            // screen that has already done its job.
+            location.replace(destination());
+            return;
+          }
+
+          showError(body.message ?? `Sign in failed (${response.status})`);
+          password.select();
+        } catch (failure) {
+          showError(failure.message ?? "Could not reach the server.");
+        } finally {
+          submit.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

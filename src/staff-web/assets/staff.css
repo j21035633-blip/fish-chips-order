@@ -334,3 +334,41 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 .ghost { background: transparent; border: 1px solid var(--line); color: var(--ink-soft); padding: 9px 13px; font-weight: 650; }
 .ghost:hover { color: var(--ink); }
 .hint { font-size: 12px; color: var(--ink-soft); }
+
+/* --- sign in and out ----------------------------------------------------- */
+/* Quieter than the view links beside it: leaving is not the thing anyone came
+   to the header to do, but it has to be findable on a shared tablet. */
+.logout {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+.logout:hover { color: var(--ink); border-color: var(--ink-soft); }
+.logout:disabled { opacity: 0.5; cursor: progress; }
+
+/* The one staff page with no header: there is nothing to navigate to until the
+   password is in, and a nav whose every link redirects back here is worse than
+   no nav at all. */
+.login-page main { display: flex; justify-content: center; padding: 12vh 20px 60px; }
+.login-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 26px 24px;
+  width: 100%;
+  max-width: 380px;
+}
+.login-card h1 { font-size: 20px; margin: 0; }
+.login-card .sub { font-size: 13px; color: var(--ink-soft); margin: 6px 0 20px; }
+.login-card .field input {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  color: var(--ink);
+  width: 100%;
+}
+.login-card .advance { width: 100%; margin-top: 18px; padding: 12px 14px; font-size: 15px; }

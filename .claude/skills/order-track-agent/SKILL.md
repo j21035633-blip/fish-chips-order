@@ -15,9 +15,9 @@ The plan called for FastAPI + Next.js. What actually shipped is Node, and new wo
   The customer page is opened by scanning a QR at the table, so it has to load on a bad connection.
 - **Validation:** Zod at every edge (HTTP query/body, agent tool input)
 - **Uploads:** `multer` to local disk, served read-only — see *Menu management* below
-- **Auth:** none yet. Staff pages sit behind an unguessable path (`STAFF_DASHBOARD_PATH`) and that
-  is **not** auth: every `/api/staff/*` route is as open as the rest of the API. Real staff auth is
-  the next thing this needs, and it now gates menu writes and file uploads, not just a status toggle.
+- **Auth:** one shared staff password (`STAFF_PASSWORD`), guarding every staff page and every
+  `/api/staff/*` route. No library and no per-user accounts — see *Staff auth* below. The customer
+  side has no auth at all and is not meant to.
 - **Hosting:** Railway
 - **Tests:** Vitest. `npm test` and `npm run typecheck` both have to pass; the web tests boot the
   real page against the real server in jsdom.
@@ -32,8 +32,8 @@ The plan called for FastAPI + Next.js. What actually shipped is Node, and new wo
    confirmed orders, table carried from the scan onto the ticket
 3. **Payments** — Stripe (cards) + Revenue Monster (e-wallets/DuitNow) behind a `PaymentAdapter`,
    webhooks with real signature verification, simulated when no credentials are configured
-4. **Staff area** — four views, kitchen status, daily sales total, sales reporting, menu management.
-   See *Staff area* below.
+4. **Staff area** — four views, kitchen status, daily sales total, sales reporting, menu management,
+   all behind one shared password. See *Staff area* and *Staff auth* below.
 
 ### Not built yet
 5. POS adapter — behind a `POSAdapter` interface so the backend is swappable. **[DECISION NEEDED]**
@@ -44,13 +44,12 @@ The plan called for FastAPI + Next.js. What actually shipped is Node, and new wo
    true random chance of nothing
 8. Staff voucher redemption screen
 9. AI agent conversational layer ("Order & Track") on top of the above
-10. **Staff auth** — see the note in the stack section. This is the most overdue item.
 
 Ask before deciding anything not specified here (exact menu items, styling details, etc.).
 
 ## Staff area
 
-Four views under `STAFF_DASHBOARD_PATH` (default `/staff`), sharing one nav component and one
+Four views plus a login screen under `STAFF_DASHBOARD_PATH` (default `/staff`), sharing one nav and one
 stylesheet in `src/staff-web/assets/`:
 
 | Path | View | What it does |
@@ -59,6 +58,7 @@ stylesheet in `src/staff-web/assets/`:
 | `/kitchen` | **Kitchen & Counter** | The same active orders as cards, each with the one action its status calls for |
 | `/sales` | **Sales Report** | Date range (defaults to today), summary cards, sales-by-day chart, daily breakdown table |
 | `/menu` | **Menu** | Add / edit / delete items, upload photos, one-tap availability toggle |
+| `/login` | **Sign in** | The one page outside the gate. No nav, one password field — see *Staff auth* |
 
 Each view is its own document rather than a client-side router, so a tablet on the pass reloads into
 the view it was showing. Add a fifth view by adding one entry to `STAFF_VIEWS` in
@@ -77,8 +77,8 @@ off both boards, while staying in the day's trade so the sales report still coun
 Counter view is where it is set ("Mark Collected"); the Dashboard's chain still ends at Ready.
 
 Any status is accepted rather than forward-only — a mis-tap on a busy pass has to be undoable, and
-there is no auth to make an audit trail of anyway. The change is idempotent, so a double-tap is not
-an error. Kitchen status never touches payment status: money and food move independently.
+a shared password means there is no per-person audit trail to protect anyway. The change is
+idempotent, so a double-tap is not an error. Kitchen status never touches payment status: money and food move independently.
 
 ### Menu management
 
@@ -133,9 +133,71 @@ Deleting an item leaves a cart that still holds it failing to price with `unknow
 > A missing volume looks exactly like a working directory until the next deploy, when every stored
 > image URL starts 404ing while the menu still lists the items.
 
+### Staff auth — one shared password
+
+Everything under the staff path and everything under `/api/staff/` is behind a single password that
+the whole shop shares. Deliberately not per-user accounts: one shop, one tablet on the pass, and
+individual logins would be ceremony that ends with the password written on the wall anyway. It lives
+in `src/staff/auth.ts`.
+
+> **MANUAL RAILWAY STEP — set `STAFF_PASSWORD` in the service's variables before this protects
+> anything in production.** It is a plain string, set in the Railway dashboard (Service → Variables),
+> never committed. With it unset the gate is **off** and the staff area is as open as it was before
+> this shipped — the deliberate choice, so local development and the tests run without a secret, but
+> it means a deploy that forgot the variable is unprotected. It is loud rather than silent: the
+> server warns at startup, and `GET /health` reports `"staffAuth": "disabled"` until it is set.
+
+**The flow.** `POST /api/staff/login { password }` → 200 and a `staff_session` cookie, or 401
+`invalid_password`. A browser hitting any staff page without a valid cookie is **302'd** to
+`{STAFF_DASHBOARD_PATH}/login?next=<where it was going>`; sign in and it lands where it was headed.
+`POST /api/staff/logout` clears the cookie; the **Log out** button in the shared header calls it.
+Any staff API call that comes back 401 sends the page to the login screen — that is how a session
+expiring mid-service is handled, in `api()` in `assets/common.js` (and by hand in `menu.html`, whose
+upload builds its own multipart request).
+
+**The session** is a payload plus an HMAC over it — no JWT library, because nothing here needs one:
+this is a cookie the server issues to itself, not a token for a third party to read. Details that
+matter if you touch it:
+
+- **The signing key is derived from the password itself** (`sha256("…:v1:" + STAFF_PASSWORD)`). So
+  there is no second secret to configure, changing the password **invalidates every existing
+  session** — which is how you revoke access on the day someone leaves — and a restart or redeploy
+  does *not* sign the kitchen out.
+- **12-hour expiry.** Longer than the longest shift; a tablet left on overnight signs in again in
+  the morning.
+- Cookie is `httpOnly`, `SameSite=Lax`, `Path=/` (it has two consumers under different prefixes),
+  and `Secure` whenever `PUBLIC_BASE_URL` is https.
+- The password is compared in constant time, over sha256 digests so a length mismatch cannot throw
+  and leak the real length.
+- **Failed logins are throttled** per client address: 8 in 10 minutes and the endpoint 429s without
+  looking at the password at all. In-memory, per-process — a speed bump against online guessing of a
+  shared password on a public URL, not a defence against one that has leaked.
+
+**The gate is mounted at the prefix** (`server.use("/api/staff", requireStaffApi)`), above every
+staff route, so **a route added later is protected without anyone having to remember**. `/login`,
+`/logout` and `/session` are exempted inside the middleware rather than by sitting above it, so
+reordering `app.ts` cannot quietly open a hole. Page guarding is `requireStaffPage` on each view's
+route — server-side on purpose: a guard running in the page's own script can only hide a document
+that has already been sent. The shared assets stay ungated; they are code, not data, and the login
+screen needs its own stylesheet.
+
+Login page is `src/staff-web/login.html` (`data-staff-view="login"`, no nav — there is nothing to
+navigate to yet). It honours `?next=` only for same-site paths: an absolute URL there would be an
+open redirect, on exactly the sort of page a phisher would want one.
+
+**What this still is not.** There is no audit trail — every action is "a staff member", which is why
+kitchen status stays freely reversible. There is no lockout for a leaked password other than
+changing it. And the customer API is untouched and stays open, which is the point.
+
 ### Staff HTTP surface
 
+Everything below requires a valid session cookie; without one they answer 401 `staff_auth_required`.
+
 ```
+POST   /api/staff/login                         { password } -> sets staff_session cookie
+POST   /api/staff/logout                        # clears it
+GET    /api/staff/session                       # { authenticated, authRequired } for the login page
+
 GET    /api/staff/overview                      # board + today's takings (polled by the pages)
 PATCH  /api/staff/orders/:orderId/status        { status: received|cooking|ready|collected }
 GET    /api/staff/sales-report?start_date=&end_date=

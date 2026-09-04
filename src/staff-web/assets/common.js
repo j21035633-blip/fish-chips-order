@@ -34,6 +34,25 @@ export function svgEl(tag, props = {}, children = []) {
   return node;
 }
 
+/**
+ * Sends the browser to the sign-in screen, remembering where it was.
+ *
+ * Latched, because the board polls every two seconds: without the flag an
+ * expired session would fire a redirect per tick, and the in-flight requests
+ * that land during the navigation would each fire another.
+ */
+let redirecting = false;
+
+export function redirectToLogin() {
+  if (redirecting) return;
+  // Nothing to redirect to from the login page itself — that would loop.
+  if (document.body.dataset.staffView === "login") return;
+
+  redirecting = true;
+  const base = document.body.dataset.staffBase ?? "";
+  location.replace(`${base}/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+}
+
 /** Throws with the server's own message, so a 400 explains itself on screen. */
 export async function api(path, options) {
   const response = await fetch(path, {
@@ -41,6 +60,15 @@ export async function api(path, options) {
     ...options,
   });
   const body = await response.json().catch(() => ({}));
+
+  // The session expired, or the password was rotated mid-shift. Sending them
+  // to sign in again is the only useful answer; the thrown error still stops
+  // the caller from carrying on as though the request had worked.
+  if (response.status === 401) {
+    redirectToLogin();
+    throw new Error(body.message ?? "Session expired. Sign in again.");
+  }
+
   if (!response.ok) throw new Error(body.message ?? body.error ?? `Request failed (${response.status})`);
   return body;
 }

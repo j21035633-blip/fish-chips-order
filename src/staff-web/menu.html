@@ -67,7 +67,7 @@
     </dialog>
 
     <script type="module">
-      import { api, el, errorBanner } from "{{STAFF_BASE}}/assets/common.js";
+      import { api, el, errorBanner, redirectToLogin } from "{{STAFF_BASE}}/assets/common.js";
       import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
 
       const { slot } = mountStaffChrome({ title: "Menu" });
@@ -303,6 +303,10 @@
             { method: editing ? "PUT" : "POST", body },
           );
           const payload = await response.json().catch(() => ({}));
+          // This one call does not go through `api`, because the browser has to
+          // build the multipart body — so it has to handle an expired session
+          // itself rather than inheriting that.
+          if (response.status === 401) redirectToLogin();
           if (!response.ok) {
             throw new Error(payload.message ?? payload.error ?? `Save failed (${response.status})`);
           }

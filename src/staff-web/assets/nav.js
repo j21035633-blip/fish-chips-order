@@ -4,7 +4,7 @@
 // its own header, so the nav is defined once and a fourth view is one entry in
 // the list below.
 
-import { el } from "./common.js";
+import { el, redirectToLogin } from "./common.js";
 
 /**
  * `path` is relative to wherever the staff area is mounted — the mount point is
@@ -52,12 +52,40 @@ export function staffNav(active = staffView()) {
 }
 
 /**
+ * The sign-out control.
+ *
+ * A button, not a link: it changes state on the server, so it must not be
+ * something a crawler or a prefetch can trip. The redirect happens either way —
+ * a logout that fails to reach the server still has to get the person off a
+ * board they wanted to leave, and the cookie's own expiry backstops it.
+ */
+export function logoutButton() {
+  return el("button", {
+    class: "logout",
+    type: "button",
+    text: "Log out",
+    onclick: async (event) => {
+      event.currentTarget.disabled = true;
+      try {
+        await fetch("/api/staff/logout", { method: "POST" });
+      } catch {
+        // Offline. Go to the login screen anyway.
+      }
+      redirectToLogin();
+    },
+  });
+}
+
+/**
  * Renders the header every staff view shares and returns the right-hand slot,
  * which is the one part a view fills in for itself.
+ *
+ * Log out sits after the slot so it is the last thing in the header on every
+ * view, wherever that view's own controls end.
  */
 export function mountStaffChrome({ title }) {
   const slot = el("div", { class: "header-slot" });
-  const header = el("header", {}, [el("h1", { text: title }), staffNav(), slot]);
+  const header = el("header", {}, [el("h1", { text: title }), staffNav(), slot, logoutButton()]);
 
   document.body.prepend(header);
   return { header, slot };

@@ -78,6 +78,19 @@ describe("staff nav", () => {
     slot.append(document.createElement("span"));
     expect(header.querySelector(".header-slot")?.children).toHaveLength(1);
   });
+
+  it("puts a log out button on every view, last in the header", () => {
+    for (const view of ["dashboard", "kitchen", "sales", "menu"]) {
+      mountAs(view);
+      const { header } = nav.mountStaffChrome({ title: "Anything" });
+
+      const logout = header.querySelector(".logout");
+      expect(logout?.textContent, view).toBe("Log out");
+      // A button, not a link: it changes state, so a prefetch must not fire it.
+      expect(logout?.tagName, view).toBe("BUTTON");
+      expect(header.lastElementChild, view).toBe(logout);
+    }
+  });
 });
 
 describe("staff page markup", () => {
@@ -86,6 +99,7 @@ describe("staff page markup", () => {
     ["kitchen.html", "kitchen"],
     ["sales.html", "sales"],
     ["menu.html", "menu"],
+    ["login.html", "login"],
   ];
 
   it("declares which view it is, and asks for its assets through the mount path", () => {
@@ -119,5 +133,24 @@ describe("shared helpers", () => {
     expect(node.className).toBe("empty");
     expect(node.textContent).toBe("<b>not markup</b>");
     expect(node.querySelector("b")).toBeNull();
+  });
+
+  it("turns a 401 into an error rather than letting the caller carry on", async () => {
+    // Mounted as the login page so the redirect is a no-op — jsdom cannot
+    // navigate, and the throw is the half worth asserting here anyway. The
+    // redirect itself is covered server-side, where the guard actually lives.
+    mountAs("login");
+    const original = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ error: "staff_auth_required", message: "Sign in to use the staff area." }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+
+    try {
+      await expect(common.api("/api/staff/overview")).rejects.toThrow("Sign in");
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

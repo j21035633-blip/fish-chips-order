@@ -125,7 +125,14 @@ function stripeSigned(body: string) {
 
 describe("checkout flow", async () => {
   it("reports phase 2 on health", async () => {
-    await expect(json(await fetch(`${base}/health`))).resolves.toEqual({ ok: true, phase: 2, storage: "memory", indexes: "ready" });
+    await expect(json(await fetch(`${base}/health`))).resolves.toEqual({
+      ok: true,
+      phase: 2,
+      storage: "memory",
+      indexes: "ready",
+      // No STAFF_PASSWORD in the test environment, so the gate is off and says so.
+      staffAuth: "disabled",
+    });
   });
 
   it("builds a cart with a running total", async () => {

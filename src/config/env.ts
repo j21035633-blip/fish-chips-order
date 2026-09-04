@@ -65,11 +65,22 @@ export interface AppConfig {
   /** Which day "today's sales" means. The shop's zone, not the server's. */
   businessTimeZone: string;
   /**
-   * Where the staff dashboard is mounted. Overridable because the dashboard has
-   * no login yet: on a public deployment, set this to something unguessable
-   * rather than leaving it at the default a customer might try.
+   * Where the staff area is mounted. Still worth overriding now that there is a
+   * login — an unguessable path keeps the sign-in screen itself off a customer's
+   * radar — but it is no longer the only thing standing in the way.
    */
   staffDashboardPath: string;
+  /**
+   * The one password everyone behind the counter shares. Set it in the Railway
+   * dashboard; it never belongs in the repo.
+   *
+   * Undefined leaves the staff area **open**, which is how it shipped and what
+   * keeps local development and the tests runnable without a secret. That is
+   * loud rather than silent: the server warns at startup and `/health` reports
+   * `"staffAuth": "disabled"`, so an unprotected deploy is visible from
+   * outside.
+   */
+  staffPassword: string | undefined;
   /**
    * Where uploaded menu-item images are written, and what `/uploads` serves.
    *
@@ -89,6 +100,7 @@ export function loadConfig(): AppConfig {
     publicBaseUrl: str("PUBLIC_BASE_URL") ?? `http://localhost:${int("PORT", 3000)}`,
     businessTimeZone: str("BUSINESS_TIMEZONE") ?? "Asia/Kuala_Lumpur",
     staffDashboardPath: normalisePath(str("STAFF_DASHBOARD_PATH") ?? "/staff"),
+    staffPassword: str("STAFF_PASSWORD"),
     uploadsDir: resolve(str("UPLOADS_DIR") ?? "uploads"),
     mongo: {
       // Railway's own MongoDB service publishes MONGO_URL; accept it so the

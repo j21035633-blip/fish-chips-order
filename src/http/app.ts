@@ -14,6 +14,20 @@ import type { MenuItemInput } from "../menu/store.js";
 import { MenuValidationError } from "../menu/types.js";
 import { KITCHEN_STATUSES, OrderValidationError, PAYMENT_METHODS, PAYMENT_PROVIDERS } from "../orders/types.js";
 import { PaymentProviderError } from "../payments/types.js";
+import {
+  clearLoginFailures,
+  hasStaffSession,
+  issueSession,
+  loginRetryAfter,
+  passwordMatches,
+  recordLoginFailure,
+  requireStaffApi,
+  requireStaffPage,
+  sessionCookieOptions,
+  staffAuthEnabled,
+  STAFF_SESSION_COOKIE,
+  throttleKey,
+} from "../staff/auth.js";
 import { createMenuTools } from "../tools/menuTools.js";
 import { createOrderTools } from "../tools/orderTools.js";
 
@@ -74,6 +88,10 @@ export function createServer(app: Services = services) {
       phase: 2,
       storage: app.storage.kind,
       indexes: app.storage.indexes,
+      // Same reasoning as `storage`: a deploy that forgot STAFF_PASSWORD is
+      // serving an open staff area, and that should be visible without having
+      // to go and try the door.
+      staffAuth: staffAuthEnabled() ? "password" : "disabled",
     });
   });
 
@@ -176,15 +194,75 @@ export function createServer(app: Services = services) {
     });
   });
 
+  // --------------------------------------------------------------- staff auth
+  /**
+   * One shared password for everyone behind the counter — see `src/staff/auth.ts`
+   * for why it is shared rather than per-user, and what the session is made of.
+   *
+   * The gate is mounted at the `/api/staff` prefix, above every staff route, so
+   * a route added below is protected without anyone having to remember to
+   * protect it. Login and logout are exempted inside the middleware rather than
+   * by sitting above it, so reordering this file cannot open a hole.
+   */
+  server.use("/api/staff", requireStaffApi);
+
+  /** What the login page asks before deciding whether to show itself. */
+  server.get("/api/staff/session", (req, res) => {
+    res.json({ authenticated: hasStaffSession(req), authRequired: staffAuthEnabled() });
+  });
+
+  server.post("/api/staff/login", (req, res) => {
+    run(res, () => {
+      if (!staffAuthEnabled()) {
+        // Nothing to sign in to. Saying so beats a 401 the page cannot act on:
+        // the caller is already through the door.
+        res.json({ ok: true, authRequired: false });
+        return undefined;
+      }
+
+      const key = throttleKey(req);
+      const retryAfter = loginRetryAfter(key);
+      if (retryAfter > 0) {
+        res.setHeader("retry-after", String(retryAfter));
+        res.status(429).json({
+          error: "too_many_attempts",
+          message: `Too many failed attempts. Try again in ${Math.ceil(retryAfter / 60)} minute(s).`,
+          retryAfter,
+        });
+        return undefined;
+      }
+
+      const { password } = staffLoginInput.parse(req.body ?? {});
+      if (!passwordMatches(password)) {
+        recordLoginFailure(key);
+        // No detail, deliberately: "wrong password" and "no password set" must
+        // look identical from outside.
+        res.status(401).json({ error: "invalid_password", message: "That password is not right." });
+        return undefined;
+      }
+
+      clearLoginFailures(key);
+      res.cookie(STAFF_SESSION_COOKIE, issueSession(), sessionCookieOptions());
+      return { ok: true, authRequired: true };
+    });
+  });
+
+  server.post("/api/staff/logout", (_req, res) => {
+    // Cleared with the same options it was set with; a mismatched path would
+    // leave the old cookie in place and log nobody out.
+    res.clearCookie(STAFF_SESSION_COOKIE, sessionCookieOptions());
+    res.json({ ok: true });
+  });
+
   // --------------------------------------------------------------- staff view
   /**
    * The kitchen/counter board.
    *
-   * No login yet, so the only thing keeping customers off it is the path, which
-   * `STAFF_DASHBOARD_PATH` should override on any public deployment. Be honest
-   * about the limit of that: the data routes below are as open as every other
-   * route here, and obscurity only hides the page, not the API. Real staff auth
-   * is a later phase.
+   * Behind the shared password above. The path is still worth overriding with
+   * `STAFF_DASHBOARD_PATH` on a public deployment — it keeps the sign-in screen
+   * off a passing customer's radar — but it is no longer the only thing
+   * standing in the way, which it was when these routes were as open as the
+   * customer API.
    */
   server.get("/api/staff/overview", (_req, res) => {
     void runAsync(res, async () => {
@@ -231,8 +309,10 @@ export function createServer(app: Services = services) {
 
   // -------------------------------------------------------- staff menu admin
   /**
-   * Menu management. As open as every other route here — see the note above on
-   * what the unguessable dashboard path does and does not buy you.
+   * Menu management. Behind the same gate as the rest of `/api/staff` — which
+   * matters most here: these are the routes that write the menu and accept
+   * uploads, and the guard runs before multer, so an unauthenticated request
+   * never puts a file on the volume.
    *
    * Prices are in sen throughout, like every other money field in this API. The
    * form converts, so nothing on the wire is a float.
@@ -363,12 +443,19 @@ export function createServer(app: Services = services) {
       res.type("html").send(renderStaffPage(join(staffDir, file)));
     };
 
-    // Three views over one area. Each is its own document rather than a client
-    // router, so a tablet on the pass reloads into the view it was showing.
-    server.get(config.staffDashboardPath, staffPage("staff.html"));
-    server.get(`${config.staffDashboardPath}/kitchen`, staffPage("kitchen.html"));
-    server.get(`${config.staffDashboardPath}/sales`, staffPage("sales.html"));
-    server.get(`${config.staffDashboardPath}/menu`, staffPage("menu.html"));
+    // The one page that must not be behind the gate, or there is no way through
+    // it. It carries no data — just a password field.
+    server.get(`${config.staffDashboardPath}/login`, staffPage("login.html"));
+
+    // Four views over one area. Each is its own document rather than a client
+    // router, so a tablet on the pass reloads into the view it was showing —
+    // and each is guarded server-side, so an unauthenticated reload lands on
+    // the login screen instead of a page that renders and then thinks better
+    // of it.
+    server.get(config.staffDashboardPath, requireStaffPage, staffPage("staff.html"));
+    server.get(`${config.staffDashboardPath}/kitchen`, requireStaffPage, staffPage("kitchen.html"));
+    server.get(`${config.staffDashboardPath}/sales`, requireStaffPage, staffPage("sales.html"));
+    server.get(`${config.staffDashboardPath}/menu`, requireStaffPage, staffPage("menu.html"));
 
     // The shared nav, styles and helpers the three pages import. Mounted under
     // the dashboard's own path so nothing about the staff area leaks a route at
@@ -433,6 +520,13 @@ function renderStaffPage(file: string): string {
 }
 
 const staffStatusInput = z.object({ status: z.enum(KITCHEN_STATUSES) });
+
+/**
+ * Length-capped so a megabyte of "password" cannot be hashed on demand, and
+ * non-empty so a blank field is a 400 the form can explain rather than a 401
+ * that reads as a wrong password.
+ */
+const staffLoginInput = z.object({ password: z.string().min(1).max(200) });
 
 const availabilityInput = z.object({ available: z.boolean() });
 

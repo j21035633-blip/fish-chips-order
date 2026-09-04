@@ -38,6 +38,14 @@ createServer(services).listen(config.port, () => {
   console.log(`fish-chips-order listening on ${config.publicBaseUrl} (storage: ${services.storage.kind})`);
 });
 
+if (config.staffPassword === undefined) {
+  console.warn(
+    `[staff] STAFF_PASSWORD is not set — the staff area at ${config.staffDashboardPath} is open to ` +
+      "anyone who finds the path, including the routes that edit the menu and accept uploads. Set it " +
+      "in the Railway dashboard. /health reports \"staffAuth\": \"disabled\" until you do.",
+  );
+}
+
 if (services.storage.kind === "memory") {
   console.warn(
     "[storage] MONGODB_URI is not set — carts and orders are held in memory and " +
