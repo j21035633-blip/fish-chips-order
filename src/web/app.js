@@ -1,5 +1,18 @@
 // Customer order app. No framework, no build step — this page is opened by
 // scanning a QR code at the table, so it should load on a bad connection.
+//
+// The menu cards and the option groups come from ./menu-browse.js, shared with
+// the staff takeaway panel so both tap the same UI rather than two copies of it.
+
+import {
+  el,
+  formatSen,
+  itemDetails,
+  menuSections,
+  optionGroup,
+  pricedSelection,
+  selectedChoices as choicesIn,
+} from "./menu-browse.js";
 
 const view = document.getElementById("view");
 const cartPanel = document.getElementById("cart-panel");
@@ -50,25 +63,6 @@ const state = {
 
 // ---------------------------------------------------------------- utilities
 
-/** Builds an element. Text goes in via textContent, never innerHTML. */
-function el(tag, props = {}, children = []) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(props)) {
-    if (value === undefined || value === null || value === false) continue;
-    if (key === "class") node.className = value;
-    else if (key === "text") node.textContent = value;
-    else if (key === "html") node.innerHTML = value;
-    else if (key.startsWith("on")) node.addEventListener(key.slice(2).toLowerCase(), value);
-    else if (value === true) node.setAttribute(key, "");
-    else node.setAttribute(key, value);
-  }
-  for (const child of [].concat(children)) {
-    if (child === null || child === undefined || child === false) continue;
-    node.append(child);
-  }
-  return node;
-}
-
 /**
  * Replaces a node's children.
  *
@@ -93,12 +87,6 @@ async function api(path, options = {}) {
     throw error;
   }
   return body;
-}
-
-function centsFromPrice(text) {
-  // Prices arrive pre-formatted from the server ("RM16.90"); this is only used
-  // for the live total in the options dialog.
-  return Math.round(Number(String(text).replace(/[^0-9.-]/g, "")) * 100);
 }
 
 /**
@@ -131,12 +119,6 @@ function totalLines(priced) {
       el("span", { text: priced.total }),
     ]),
   ];
-}
-
-function formatSen(sen) {
-  const sign = sen < 0 ? "-" : "";
-  const abs = Math.abs(sen);
-  return `${sign}RM${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, "0")}`;
 }
 
 // -------------------------------------------------------------------- cart
@@ -385,71 +367,10 @@ async function renderMenuView() {
   const [{ categories }] = await Promise.all([api("/api/menu"), ensureCart()]);
   state.menu = categories;
 
-  mount(view,
-    ...categories.map((category) =>
-      el("section", { class: "category" }, [
-        el("div", { class: "category-head" }, [
-          el("h2", { text: category.name }),
-          el("p", { text: category.blurb }),
-        ]),
-        ...category.items.map((item) => menuRow(item)),
-      ]),
-    ),
-  );
+  mount(view, ...menuSections(categories, openItem));
 
   renderCart();
 }
-
-/**
- * One row of the menu.
- *
- * A sold-out item is still listed — hiding it only moves "do you still do the
- * cod?" to the counter. It is greyed, not clickable, and where the price would
- * be it says why, so nobody taps it expecting a dialog.
- */
-function menuRow(item) {
-  const sellable = item.available !== false;
-
-  return el(
-    "button",
-    {
-      class: "item",
-      type: "button",
-      // Not `disabled`: a disabled button is skipped by the keyboard and reads
-      // as nothing at all to a screen reader. aria-disabled keeps it in the
-      // page and announced, and the handler below declines the tap.
-      "aria-disabled": sellable ? undefined : "true",
-      onClick: () => sellable && openItem(item),
-    },
-    [
-      item.imageUrl
-        ? el("img", { class: "item-thumb", src: item.imageUrl, alt: "", loading: "lazy" })
-        : null,
-      el("div", { class: "item-main" }, [
-        el("div", { class: "item-name", text: item.name }),
-        el("div", { class: "item-desc", text: item.description }),
-        item.tags.length > 0
-          ? el(
-              "div",
-              { class: "tags" },
-              item.tags
-                .filter((tag) => ["signature", "popular", "new", "spicy"].includes(tag))
-                .map((tag) => el("span", { class: `tag ${tag}`, text: tag })),
-            )
-          : null,
-      ]),
-      sellable
-        ? el("div", { class: "item-price", text: item.price })
-        : el("div", { class: "item-unavailable" }, [
-            document.createTextNode("Currently unavailable"),
-            item.unavailableReason
-              ? el("span", { class: "item-unavailable-reason", text: item.unavailableReason })
-              : null,
-          ]),
-    ],
-  );
-}
-
 // ------------------------------------------------------------ item dialog
 
 function openItem(item) {
@@ -461,61 +382,13 @@ function openItem(item) {
   itemTitle.textContent = item.name;
 
   mount(itemDialogBody,
-    el("p", { class: "flavour", text: item.flavourNotes }),
-    el("p", { class: "portion", text: item.portionSummary }),
-    item.allergens.length > 0
-      ? el("p", { class: "allergens", text: `Contains: ${item.allergens.join(", ")}` })
-      : null,
-    ...item.optionGroups.map((group) => renderGroup(group)),
+    ...itemDetails(item),
+    ...item.optionGroups.map((group) => optionGroup(group, updateDialogPrice)),
   );
 
   itemQtyEl.textContent = "1";
   updateDialogPrice();
   itemDialog.showModal();
-}
-
-function renderGroup(group) {
-  const pickOne = group.maxSelections === 1;
-  const hint = pickOne
-    ? group.required
-      ? "pick one"
-      : "optional"
-    : `pick up to ${group.maxSelections}`;
-
-  return el("div", { class: "group", "data-group": group.id }, [
-    el("div", { class: "group-name" }, [
-      document.createTextNode(group.name + " "),
-      el("span", { class: "group-hint", text: `(${hint})` }),
-    ]),
-    ...group.choices
-      .filter((choice) => choice.available)
-      .map((choice) =>
-        el("label", { class: "choice" }, [
-          el("input", {
-            type: pickOne ? "radio" : "checkbox",
-            name: group.id,
-            value: choice.id,
-            checked: pickOne && choice.isDefault,
-            "data-delta": String(choice.priceDeltaSen),
-            onChange: updateDialogPrice,
-          }),
-          el("span", { class: "choice-name", text: choice.name }),
-          choice.priceDeltaSen !== 0
-            ? el("span", { class: "choice-delta", text: choice.priceDelta })
-            : null,
-        ]),
-      ),
-  ]);
-}
-
-function selectedChoices() {
-  return [...itemDialogBody.querySelectorAll(".group")].flatMap((groupEl) =>
-    [...groupEl.querySelectorAll("input:checked")].map((input) => ({
-      groupId: groupEl.dataset.group,
-      choiceId: input.value,
-      delta: Number(input.dataset.delta),
-    })),
-  );
 }
 
 /**
@@ -538,9 +411,7 @@ function updateDialogPrice() {
   // Nothing to price once the sheet has been dismissed; a late event from a
   // pointer that was mid-tap must not throw.
   if (!state.dialogItem) return;
-  const base = centsFromPrice(state.dialogItem.price);
-  const deltas = selectedChoices().reduce((total, choice) => total + choice.delta, 0);
-  itemPriceEl.textContent = formatSen((base + deltas) * state.dialogQty);
+  itemPriceEl.textContent = formatSen(pricedSelection(state.dialogItem, itemDialogBody, state.dialogQty));
 }
 
 itemClose.addEventListener("click", dismissItem);
@@ -581,7 +452,7 @@ itemDialog.addEventListener("click", (event) => {
 });
 
 itemAddButton.addEventListener("click", async () => {
-  const selections = selectedChoices().map(({ groupId, choiceId }) => ({ groupId, choiceId }));
+  const selections = choicesIn(itemDialogBody).map(({ groupId, choiceId }) => ({ groupId, choiceId }));
   try {
     const { cart } = await api(`/api/carts/${state.cart.cartId}/lines`, {
       method: "POST",

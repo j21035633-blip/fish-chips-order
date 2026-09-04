@@ -28,7 +28,7 @@
     </main>
 
     <script type="module">
-      import { api, el, errorBanner, orderFeed } from "{{STAFF_BASE}}/assets/common.js";
+      import { api, el, errorBanner, orderFeed, orderLabel, takeawayTag } from "{{STAFF_BASE}}/assets/common.js";
       import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
 
       // The board's three columns. `collected` is a status but not a column —
@@ -51,11 +51,14 @@
         const next = STATUSES[STATUSES.indexOf(order.kitchenStatus) + 1];
         const previous = STATUSES[STATUSES.indexOf(order.kitchenStatus) - 1];
 
+        const label = orderLabel(order);
+
         return el("article", { class: `ticket ${order.kitchenStatus}` }, [
           el("div", { class: "ticket-head" }, [
-            order.tableNumber
-              ? el("span", { class: "table", text: `Table ${order.tableNumber}` })
-              : el("span", { class: "table takeaway", text: "Counter / takeaway" }),
+            el("span", {}, [
+              el("span", { class: label.takeaway ? "table takeaway" : "table", text: label.text }),
+              label.takeaway ? takeawayTag() : null,
+            ]),
             el("span", { class: "reference", text: order.reference }),
           ]),
           order.customerName ? el("div", { class: "opts", text: order.customerName }) : null,

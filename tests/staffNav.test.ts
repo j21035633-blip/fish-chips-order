@@ -157,3 +157,44 @@ describe("shared helpers", () => {
     }
   });
 });
+
+describe("order labels", () => {
+  it("names a table, a takeaway number, and a bare counter order", async () => {
+    expect(common.orderLabel({ tableNumber: "6" })).toEqual({ text: "Table 6", takeaway: false });
+    expect(common.orderLabel({ takeawayNumber: 3 })).toEqual({ text: "Takeaway #3", takeaway: true });
+    // A QR order with no table: the same kind of thing, without a number.
+    expect(common.orderLabel({})).toEqual({ text: "Counter / takeaway", takeaway: true });
+  });
+
+  it("badges anything that is not going to a table", () => {
+    const tag = common.takeawayTag();
+    expect(tag.textContent).toBe("Takeaway");
+    expect(tag.className).toContain("takeaway-tag");
+  });
+
+  it("shows the badge on both boards", () => {
+    for (const file of ["staff.html", "kitchen.html"]) {
+      const html = readFileSync(resolve(staffDir, file), "utf8");
+      expect(html, file).toContain("takeawayTag()");
+      expect(html, file).toContain("orderLabel(order)");
+    }
+  });
+});
+
+describe("staff dialogs stay shut until opened", () => {
+  // Comments stripped first: one of them quotes the broken rule to explain it.
+  const css = readFileSync(resolve(staffDir, "assets/staff.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it("never sets display on a bare dialog class", () => {
+    // A <dialog> is hidden by the UA rule `dialog:not([open]) { display: none }`,
+    // and an author rule beats the UA stylesheet whatever its specificity — so a
+    // plain `.some-dialog { display: flex }` leaves an empty sheet on the page
+    // before anyone opens it. This caught exactly that.
+    for (const rule of css.matchAll(/\.([a-z-]*dialog[a-z-]*)(\[[^\]]*\])?\s*\{([^}]*)\}/g)) {
+      const [, name, attribute, body] = rule;
+      if (/display\s*:/.test(body!)) {
+        expect(`${name}${attribute ?? ""} sets display`).toBe(`${name}[open] sets display`);
+      }
+    }
+  });
+});

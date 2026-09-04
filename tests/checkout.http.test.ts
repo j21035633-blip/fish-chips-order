@@ -602,3 +602,81 @@ describe("isolation", async () => {
     expect((await app.carts.price(cartId)).lines).toHaveLength(0);
   });
 });
+
+describe("staff takeaway over HTTP", () => {
+  /** Opens a cart the way the staff panel does, with one item in it. */
+  async function counterCart(): Promise<string> {
+    const cartId = await openCart();
+    await post(`/api/carts/${cartId}/lines`, { itemId: "fish-dory-classic" });
+    return cartId;
+  }
+
+  it("rings up a cash takeaway as paid, straight onto the board", async () => {
+    const cartId = await counterCart();
+    const body = await json(await post("/api/staff/orders/takeaway", { cartId, payment: "cash" }));
+
+    expect(body.order.paymentStatus).toBe("paid");
+    expect(body.order.takeawayNumber).toBeGreaterThan(0);
+    expect(body.order.tableNumber).toBeUndefined();
+    expect(body.payment).toBeNull();
+
+    const overview = (await json(await fetch(`${base}/api/staff/overview`))) as any;
+    expect(overview.orders.some((order: any) => order.id === body.order.id)).toBe(true);
+  });
+
+  it("routes a card takeaway through the same payment flow, held off the board", async () => {
+    const cartId = await counterCart();
+    const body = await json(await post("/api/staff/orders/takeaway", { cartId, payment: "card" }));
+
+    expect(body.order.paymentStatus).toBe("pending");
+    expect(body.order.holdForPayment).toBe(true);
+    // Simulated here, but it is the Stripe adapter that produced it.
+    expect(body.payment.provider).toBe("stripe");
+    expect(body.payment.checkoutUrl).toBeTruthy();
+
+    const before = (await json(await fetch(`${base}/api/staff/overview`))) as any;
+    expect(before.orders.some((order: any) => order.id === body.order.id)).toBe(false);
+
+    // The same webhook a customer's own payment settles on.
+    await post(`/api/payments/simulate/${body.order.id}`, {});
+
+    const after = (await json(await fetch(`${base}/api/staff/overview`))) as any;
+    const ticket = after.orders.find((order: any) => order.id === body.order.id);
+    expect(ticket).toBeTruthy();
+    expect(ticket.paymentStatus).toBe("paid");
+  });
+
+  it("charges a takeaway the same total, tax included", async () => {
+    const cartId = await counterCart();
+    const { cart } = await json(await fetch(`${base}/api/carts/${cartId}`));
+    const body = await json(await post("/api/staff/orders/takeaway", { cartId, payment: "cash" }));
+
+    expect(body.order.subtotalSen).toBe(cart.subtotalSen);
+    expect(body.order.taxSen).toBe(cart.taxSen);
+    expect(body.order.totalSen).toBe(cart.totalSen);
+  });
+
+  it("refuses an empty cart and an unknown payment kind", async () => {
+    const empty = await openCart();
+    expect((await post("/api/staff/orders/takeaway", { cartId: empty, payment: "cash" })).status).toBe(400);
+
+    const cartId = await counterCart();
+    expect((await post("/api/staff/orders/takeaway", { cartId, payment: "voucher" })).status).toBe(400);
+    // Cash is not a customer payment method and must not appear as one.
+    const methods = await json(await fetch(`${base}/api/payments/methods`));
+    expect(JSON.stringify(methods)).not.toContain("cash");
+  });
+
+  it("leaves the customer's own QR flow alone", async () => {
+    // A table order still reaches the board unpaid, exactly as before.
+    const cartId = await openCart({ table: "9" });
+    await post(`/api/carts/${cartId}/lines`, { itemId: "fish-dory-classic" });
+    const { order } = await json(await post("/api/orders", { cartId }));
+
+    expect(order.takeawayNumber).toBeUndefined();
+    expect(order.holdForPayment).toBeUndefined();
+
+    const overview = (await json(await fetch(`${base}/api/staff/overview`))) as any;
+    expect(overview.orders.some((row: any) => row.id === order.id)).toBe(true);
+  });
+});

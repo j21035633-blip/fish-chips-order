@@ -15,9 +15,61 @@
       <p id="empty" class="empty" hidden>Nothing on the pass.</p>
     </main>
 
+    <!--
+      Ringing up a takeaway at the counter. The menu inside is the customer
+      app's own cards and option groups, imported from /menu-browse.js, so an
+      item looks and behaves the same whoever is tapping it.
+    -->
+    <dialog id="takeaway" class="takeaway-panel" aria-label="New takeaway order">
+      <div class="sheet-head">
+        <h2 id="takeaway-title">New takeaway order</h2>
+        <button id="takeaway-close" class="icon-button" type="button" aria-label="Close">&times;</button>
+      </div>
+
+      <div class="takeaway-body">
+        <div id="takeaway-menu" class="takeaway-menu"><p class="empty">Loading the menu…</p></div>
+        <aside class="takeaway-cart">
+          <h3>This order</h3>
+          <div id="takeaway-lines"><p class="empty">Tap an item to start.</p></div>
+          <div id="takeaway-totals" class="totals" hidden>
+            <div class="totals-row"><span>Subtotal</span><span id="takeaway-subtotal">RM0.00</span></div>
+            <div class="totals-row"><span id="takeaway-tax-label">Tax</span><span id="takeaway-tax">RM0.00</span></div>
+            <div class="totals-row grand"><span>Total</span><strong id="takeaway-total">RM0.00</strong></div>
+          </div>
+          <p id="takeaway-error" class="form-error" hidden></p>
+          <div class="takeaway-pay">
+            <button id="pay-cash" class="advance" type="button" disabled>Cash — paid now</button>
+            <button id="pay-card" class="ghost" type="button" disabled>Card — Stripe</button>
+          </div>
+          <p id="takeaway-note" class="hint" hidden></p>
+        </aside>
+      </div>
+    </dialog>
+
+    <!-- The options sheet, same markup as the customer page's. -->
+    <dialog id="opts" class="opts-dialog" aria-label="Item options">
+      <div class="sheet-head">
+        <h2 id="opts-title"></h2>
+        <button id="opts-close" class="icon-button" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div id="opts-body" class="opts-body"></div>
+      <div class="opts-foot">
+        <div class="qty">
+          <button type="button" class="icon-button" data-qty="-1" aria-label="Fewer">&minus;</button>
+          <output id="opts-qty">1</output>
+          <button type="button" class="icon-button" data-qty="1" aria-label="More">+</button>
+        </div>
+        <button id="opts-add" class="advance" type="button">Add — <span id="opts-price"></span></button>
+      </div>
+    </dialog>
+
     <script type="module">
-      import { api, el, errorBanner, orderFeed } from "{{STAFF_BASE}}/assets/common.js";
+      import { api, el, errorBanner, orderFeed, orderLabel, takeawayTag } from "{{STAFF_BASE}}/assets/common.js";
       import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
+      // The customer app's own menu UI. Public because it is menu rendering, the
+      // same code /app.js already serves — see the note at the top of that file.
+      import { itemDetails, menuSections, optionGroup, pricedSelection, selectedChoices, formatSen }
+        from "/menu-browse.js";
 
       // One card per order still on the pass, each showing the single action its
       // status calls for. Ordered so the oldest ticket is the first one a cook
@@ -33,7 +85,14 @@
       const { slot } = mountStaffChrome({ title: "Kitchen & Counter" });
       const feedState = el("span", { id: "feed-state", class: "feed-state", text: "connecting…" });
       const count = el("span", { class: "card-count", text: "—" });
-      slot.append(feedState, count);
+      const newTakeaway = el("button", {
+        id: "new-takeaway",
+        class: "advance",
+        type: "button",
+        text: "New Takeaway Order",
+        onClick: () => openTakeaway(),
+      });
+      slot.append(feedState, count, newTakeaway);
 
       const cardsEl = document.getElementById("cards");
       const emptyEl = document.getElementById("empty");
@@ -44,11 +103,14 @@
         const action = ACTION[order.kitchenStatus];
         const paid = order.paymentStatus === "paid";
 
+        const label = orderLabel(order);
+
         return el("article", { class: `card ${order.kitchenStatus}` }, [
           el("div", { class: "ticket-head" }, [
-            order.tableNumber
-              ? el("span", { class: "table", text: `Table ${order.tableNumber}` })
-              : el("span", { class: "table takeaway", text: "Counter / takeaway" }),
+            el("span", {}, [
+              el("span", { class: label.takeaway ? "table takeaway" : "table", text: label.text }),
+              label.takeaway ? takeawayTag() : null,
+            ]),
             el("span", { class: "reference", text: order.reference }),
           ]),
           order.customerName ? el("div", { class: "opts", text: order.customerName }) : null,
@@ -110,6 +172,202 @@
         cardsEl.replaceChildren(...active.map(card));
         emptyEl.hidden = active.length > 0;
       }
+
+      // ------------------------------------------------------ takeaway order
+      //
+      // Built on the customer's own cart endpoints — POST /api/carts, then
+      // /api/carts/:id/lines — so pricing, options and validation are the same
+      // code path a QR order takes. Only the last step differs, and that is the
+      // one staff route: /api/staff/orders/takeaway.
+
+      const panel = document.getElementById("takeaway");
+      const optsDialog = document.getElementById("opts");
+      const takeawayMenu = document.getElementById("takeaway-menu");
+      const takeawayLines = document.getElementById("takeaway-lines");
+      const takeawayTotals = document.getElementById("takeaway-totals");
+      const takeawayNote = document.getElementById("takeaway-note");
+      const takeawayError = document.getElementById("takeaway-error");
+      const payCash = document.getElementById("pay-cash");
+      const payCard = document.getElementById("pay-card");
+      const optsBody = document.getElementById("opts-body");
+      const optsTitle = document.getElementById("opts-title");
+      const optsQty = document.getElementById("opts-qty");
+      const optsPrice = document.getElementById("opts-price");
+
+      const ticket = { cartId: null, cart: null, item: null, qty: 1 };
+
+      function showTakeawayError(message) {
+        takeawayError.textContent = message ?? "";
+        takeawayError.hidden = !message;
+      }
+
+      async function openTakeaway() {
+        showTakeawayError();
+        takeawayNote.hidden = true;
+        panel.showModal();
+
+        try {
+          // A cart per order, opened fresh: nothing carries over from the last
+          // customer at the counter.
+          const [{ categories }, { cartId }] = await Promise.all([
+            api("/api/menu"),
+            api("/api/carts", { method: "POST", body: JSON.stringify({}) }),
+          ]);
+          ticket.cartId = cartId;
+          takeawayMenu.replaceChildren(...menuSections(categories, openOptions));
+          await refreshTicket();
+        } catch (error) {
+          showTakeawayError(error.message);
+        }
+      }
+
+      function closeTakeaway() {
+        panel.close();
+        ticket.cartId = null;
+        ticket.cart = null;
+      }
+
+      async function refreshTicket() {
+        const { cart } = await api(`/api/carts/${ticket.cartId}`);
+        ticket.cart = cart;
+
+        const lines = cart.lines ?? [];
+        takeawayTotals.hidden = lines.length === 0;
+        payCash.disabled = lines.length === 0;
+        payCard.disabled = lines.length === 0;
+
+        document.getElementById("takeaway-subtotal").textContent = cart.subtotal;
+        document.getElementById("takeaway-tax").textContent = cart.tax;
+        document.getElementById("takeaway-tax-label").textContent =
+          cart.taxRate === undefined ? "Tax" : `Tax (${Number((cart.taxRate * 100).toFixed(2))}%)`;
+        document.getElementById("takeaway-total").textContent = cart.total;
+
+        takeawayLines.replaceChildren(
+          lines.length === 0
+            ? el("p", { class: "empty", text: "Tap an item to start." })
+            : el(
+                "div",
+                {},
+                lines.map((line) =>
+                  el("div", { class: "cart-line" }, [
+                    el("div", { class: "cart-line-main" }, [
+                      el("div", { class: "cart-line-name", text: `${line.quantity}× ${line.name}` }),
+                      line.options.length > 0
+                        ? el("div", {
+                            class: "opts",
+                            text: line.options.map((option) => option.choiceName).join(", "),
+                          })
+                        : null,
+                    ]),
+                    el("span", { class: "cart-line-total", text: line.lineTotal }),
+                    el("button", {
+                      class: "undo",
+                      type: "button",
+                      text: "Remove",
+                      onClick: () => removeLine(line.lineId),
+                    }),
+                  ]),
+                ),
+              ),
+        );
+      }
+
+      async function removeLine(lineId) {
+        try {
+          await api(`/api/carts/${ticket.cartId}/lines/${lineId}`, { method: "DELETE" });
+          await refreshTicket();
+        } catch (error) {
+          showTakeawayError(error.message);
+        }
+      }
+
+      function openOptions(item) {
+        ticket.item = item;
+        ticket.qty = 1;
+        optsTitle.textContent = item.name;
+        optsQty.textContent = "1";
+        optsBody.replaceChildren(
+          ...itemDetails(item),
+          ...item.optionGroups.map((group) => optionGroup(group, priceOptions)),
+        );
+        priceOptions();
+        optsDialog.showModal();
+      }
+
+      function priceOptions() {
+        if (!ticket.item) return;
+        optsPrice.textContent = formatSen(pricedSelection(ticket.item, optsBody, ticket.qty));
+      }
+
+      optsDialog.addEventListener("click", (event) => {
+        // The backdrop, same test the customer sheet uses.
+        if (event.target === optsDialog) return optsDialog.close();
+        const step = event.target.closest("[data-qty]");
+        if (!step) return;
+        ticket.qty = Math.min(20, Math.max(1, ticket.qty + Number(step.dataset.qty)));
+        optsQty.textContent = String(ticket.qty);
+        priceOptions();
+      });
+      document.getElementById("opts-close").addEventListener("click", () => optsDialog.close());
+
+      document.getElementById("opts-add").addEventListener("click", async () => {
+        const selections = selectedChoices(optsBody).map(({ groupId, choiceId }) => ({ groupId, choiceId }));
+        try {
+          await api(`/api/carts/${ticket.cartId}/lines`, {
+            method: "POST",
+            body: JSON.stringify({ itemId: ticket.item.id, quantity: ticket.qty, selections }),
+          });
+          optsDialog.close();
+          await refreshTicket();
+        } catch (error) {
+          optsDialog.close();
+          showTakeawayError(error.message);
+        }
+      });
+
+      async function place(payment) {
+        payCash.disabled = true;
+        payCard.disabled = true;
+        showTakeawayError();
+
+        try {
+          const result = await api("/api/staff/orders/takeaway", {
+            method: "POST",
+            body: JSON.stringify({ cartId: ticket.cartId, payment }),
+          });
+          const label = `Takeaway #${result.order.takeawayNumber}`;
+
+          if (payment === "cash") {
+            // Paid and on the pass already; nothing left to wait for.
+            closeTakeaway();
+            await feed.refresh();
+            showError(`${label} is paid and on the pass.`);
+            return;
+          }
+
+          // Card: the ticket stays off the board until the webhook says paid,
+          // exactly as it would for a customer paying from their own phone.
+          takeawayNote.hidden = false;
+          takeawayNote.replaceChildren(
+            el("strong", { text: `${label} — waiting for payment. ` }),
+            document.createTextNode("It joins the pass when the payment confirms. "),
+            result.payment?.checkoutUrl
+              ? el("a", { href: result.payment.checkoutUrl, target: "_blank", rel: "noopener", text: "Open the payment page" })
+              : document.createTextNode("No payment link came back from the provider."),
+          );
+        } catch (error) {
+          showTakeawayError(error.message);
+        } finally {
+          const lines = ticket.cart?.lines?.length ?? 0;
+          payCash.disabled = lines === 0;
+          payCard.disabled = lines === 0;
+        }
+      }
+
+      payCash.addEventListener("click", () => place("cash"));
+      payCard.addEventListener("click", () => place("card"));
+      document.getElementById("takeaway-close").addEventListener("click", closeTakeaway);
+      panel.addEventListener("cancel", closeTakeaway);
 
       const feed = orderFeed({
         onData: draw,

@@ -414,3 +414,144 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   .qr-card { border-color: #999; }
   .qr-download { display: none; }
 }
+
+/* --- takeaway ordering ---------------------------------------------------- */
+/* The badge that separates food waiting at the counter from food going to a
+   table. Small, because the label beside it already says which. */
+.tag.takeaway-tag {
+  margin-left: 8px;
+  background: #eef1f0;
+  color: var(--ink-soft);
+  vertical-align: 2px;
+}
+
+/* The head both staff sheets share: a title and the way out. */
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.sheet-head h2 { font-size: 16px; margin: 0; min-width: 0; }
+
+.takeaway-panel {
+  border: 0;
+  border-radius: 14px;
+  padding: 0;
+  width: min(1100px, 96vw);
+  max-height: 92dvh;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 20px 60px rgba(20, 33, 31, 0.28);
+}
+.takeaway-panel::backdrop, .opts-dialog::backdrop { background: rgba(10, 20, 18, 0.45); }
+/* Layout on [open], never the bare class — see the note on .opts-dialog below. */
+.takeaway-panel[open] { display: flex; flex-direction: column; }
+
+/*
+ * Menu on the left, the order being built on the right, each scrolling on its
+ * own so the total and the pay buttons never leave the counter's sight.
+ *
+ * The `min-height: 0` on all three is what makes that true. A grid or flex child
+ * is min-content tall by default, so without it the order column grows to fit
+ * everything in it and puts the pay buttons a thousand pixels below the bottom
+ * of the panel instead of scrolling inside it.
+ */
+.takeaway-body { display: grid; grid-template-columns: 1fr 320px; flex: 1; min-height: 0; }
+.takeaway-menu { overflow-y: auto; min-height: 0; padding: 16px 18px; }
+.takeaway-cart {
+  border-left: 1px solid var(--line);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  min-height: 0;
+  background: var(--bg);
+}
+.takeaway-cart h3 { font-size: 14px; margin: 0 0 10px; }
+.takeaway-cart .totals { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.takeaway-cart .totals-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--ink-soft); padding: 2px 0; }
+.takeaway-cart .totals-row span:last-child, .takeaway-cart .totals-row strong { font-variant-numeric: tabular-nums; }
+.takeaway-cart .totals-row.grand { font-size: 16px; color: var(--ink); margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
+.takeaway-pay { display: grid; gap: 8px; margin-top: auto; padding-top: 14px; }
+.takeaway-pay button { padding: 13px 14px; font-size: 15px; }
+.takeaway-cart .cart-line { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.takeaway-cart .cart-line-main { flex: 1; min-width: 0; }
+.takeaway-cart .cart-line-name { font-weight: 620; font-size: 14px; }
+.takeaway-cart .cart-line-total { font-variant-numeric: tabular-nums; font-size: 14px; }
+.takeaway-cart .undo { padding: 4px 8px; font-size: 12px; }
+@media (max-width: 860px) {
+  /* On a counter tablet held upright the order goes under the menu rather than
+     squeezing both into half a screen each. */
+  .takeaway-body { grid-template-columns: 1fr; }
+  .takeaway-cart { border-left: 0; border-top: 1px solid var(--line); }
+}
+
+/*
+ * The customer app's menu markup, restyled for the staff area.
+ *
+ * The classes come from /menu-browse.js, shared with the customer page; the
+ * customer stylesheet is not loaded here because it would restyle the whole
+ * staff area. Scoped under the panel so nothing here leaks onto the boards.
+ */
+.takeaway-panel .category { margin-bottom: 22px; }
+.takeaway-panel .category-head h2 { font-size: 15px; }
+.takeaway-panel .category-head p { margin: 2px 0 8px; color: var(--ink-soft); font-size: 12px; }
+.takeaway-panel .item {
+  width: 100%;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  font: inherit;
+  color: inherit;
+}
+.takeaway-panel .item:hover { border-color: var(--sea); }
+.takeaway-panel .item[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.takeaway-panel .item[aria-disabled="true"]:hover { border-color: var(--line); }
+.takeaway-panel .item-thumb { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; flex: 0 0 auto; }
+.takeaway-panel .item-name { font-weight: 620; font-size: 14px; }
+.takeaway-panel .item-desc { color: var(--ink-soft); font-size: 12px; margin-top: 1px; }
+.takeaway-panel .item-price { font-variant-numeric: tabular-nums; font-weight: 620; white-space: nowrap; }
+.takeaway-panel .item-unavailable { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--danger); text-align: right; }
+.takeaway-panel .item-unavailable-reason { display: block; font-size: 10px; font-weight: 500; text-transform: none; color: var(--ink-soft); }
+.takeaway-panel .tags { display: flex; gap: 5px; margin-top: 4px; }
+
+/*
+ * The options sheet, sitting over the panel in the top layer.
+ *
+ * The layout goes on `[open]`, never on the bare class. A <dialog> is hidden by
+ * the UA rule `dialog:not([open]) { display: none }`, and an author rule beats
+ * the UA stylesheet whatever the specificity — so `.opts-dialog { display: flex }`
+ * would leave an empty sheet sitting on the page before anyone opened it.
+ */
+.opts-dialog {
+  border: 0;
+  border-radius: 14px;
+  padding: 0;
+  width: min(460px, 94vw);
+  max-height: 88dvh;
+  background: var(--panel);
+  color: var(--ink);
+}
+.opts-dialog[open] { display: flex; flex-direction: column; }
+.opts-body { padding: 4px 18px 18px; overflow-y: auto; flex: 1; }
+.opts-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-top: 1px solid var(--line); }
+.opts-body .flavour { color: var(--ink-soft); font-size: 13px; margin: 8px 0 0; }
+.opts-body .portion { color: var(--ink-soft); font-size: 12px; margin: 6px 0 0; }
+.opts-body .allergens { color: var(--danger); font-size: 12px; margin: 8px 0 0; }
+.opts-body .group { margin-top: 16px; }
+.opts-body .group-name { font-weight: 650; font-size: 14px; margin-bottom: 6px; }
+.opts-body .group-hint { color: var(--ink-soft); font-weight: 500; font-size: 12px; }
+.opts-body .choice { display: flex; align-items: center; gap: 9px; padding: 7px 0; font-size: 14px; }
+.opts-body .choice input { width: 18px; height: 18px; }
+.opts-body .choice-name { flex: 1; }
+.opts-body .choice-delta { color: var(--ink-soft); font-variant-numeric: tabular-nums; font-size: 13px; }

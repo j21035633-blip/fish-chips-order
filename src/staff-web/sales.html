@@ -39,6 +39,18 @@
           <div id="count-value" class="stat-value">—</div>
           <div id="count-note" class="stat-note">&nbsp;</div>
         </div>
+        <!-- Split by where the food went. A day that looks flat overall can be
+             a quiet dining room and a busy counter, and that is worth seeing. -->
+        <div class="stat">
+          <div class="stat-label">Dine-in</div>
+          <div id="dinein-value" class="stat-value">—</div>
+          <div id="dinein-note" class="stat-note">&nbsp;</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Takeaway</div>
+          <div id="takeaway-value" class="stat-value">—</div>
+          <div id="takeaway-note" class="stat-note">&nbsp;</div>
+        </div>
       </div>
 
       <section class="panel">
@@ -120,6 +132,11 @@
         document.getElementById("count-value").textContent = String(report.count);
         document.getElementById("count-note").textContent =
           `Over ${report.days.length} day${report.days.length === 1 ? "" : "s"}`;
+        for (const [key, channel] of [["dinein", report.dineIn], ["takeaway", report.takeaway]]) {
+          document.getElementById(`${key}-value`).textContent = channel.total;
+          document.getElementById(`${key}-note`).textContent =
+            `${channel.count} order${channel.count === 1 ? "" : "s"}`;
+        }
         document.getElementById("chart-sub").textContent = `${span} · ${report.timeZone}`;
 
         chartEl.replaceChildren(barChart(report.days));

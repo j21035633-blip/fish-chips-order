@@ -136,12 +136,26 @@ export class CartService {
 export interface ConfirmOrderInput {
   cartId: string;
   customerName?: string | undefined;
+  /**
+   * Rung up at the counter by staff rather than scanned at a table.
+   *
+   * Gives the order its daily `takeawayNumber`, and — when the customer is
+   * paying by card — holds it off the pass until the payment settles.
+   */
+  takeaway?: { holdForPayment: boolean } | undefined;
 }
 
 export interface DailySales {
   /** `YYYY-MM-DD` in the shop's own timezone. */
   day: string;
   timeZone: string;
+  count: number;
+  totalSen: number;
+  total: string;
+}
+
+/** Takings from one of the two ways an order reaches the kitchen. */
+export interface ChannelSplit {
   count: number;
   totalSen: number;
   total: string;
@@ -154,6 +168,9 @@ export interface SalesReportDay {
   count: number;
   totalSen: number;
   total: string;
+  /** The same takings split by how the order was taken. */
+  dineIn: ChannelSplit;
+  takeaway: ChannelSplit;
 }
 
 /**
@@ -170,6 +187,9 @@ export interface SalesReport {
   count: number;
   totalSen: number;
   total: string;
+  /** Range totals per channel, for the summary cards. */
+  dineIn: ChannelSplit;
+  takeaway: ChannelSplit;
   days: SalesReportDay[];
 }
 
@@ -243,6 +263,12 @@ export class OrderService {
     // so a customer cannot check out "as" a table they never scanned.
     if (cart.tableNumber !== undefined) order.tableNumber = cart.tableNumber;
 
+    if (input.takeaway) {
+      order.takeawayNumber = await this.nextTakeawayNumber();
+      // Only ever set true; an absent flag is what every other order carries.
+      if (input.takeaway.holdForPayment) order.holdForPayment = true;
+    }
+
     await this.orders.save(order);
     // The cart is spent. Emptying it stops a double-submit from creating a twin order.
     await this.carts.clear(cart.id);
@@ -300,6 +326,31 @@ export class OrderService {
     return { order, changed: true };
   }
 
+  /**
+   * Cash over the counter: paid the moment it is rung up.
+   *
+   * There is no provider to ask and no webhook to wait for — the money is in
+   * the till — so this is the one path that may set `paid` without one. It
+   * refuses an order that already has a payment session, because that one is
+   * mid-flight with a provider and a second settlement would be a lie about
+   * which of them the customer actually paid.
+   */
+  async takeCash(orderId: string): Promise<Order> {
+    const order = await this.get(orderId);
+    if (order.payment) {
+      throw new OrderValidationError(
+        "That order already has a card payment in progress.",
+        "payment_already_started",
+        { orderId, provider: order.payment.provider },
+      );
+    }
+
+    order.paidInCash = true;
+    await this.orders.save(order);
+    const { order: paid } = await this.markPaid(orderId);
+    return paid;
+  }
+
   async markFailed(orderId: string, reason: string): Promise<MarkPaidResult> {
     const order = await this.get(orderId);
     // A late failure for an order already paid is noise; never downgrade a paid order.
@@ -345,7 +396,12 @@ export class OrderService {
   /** Today's orders, newest first — what the staff board shows. */
   async feed(timeZone: string = config.businessTimeZone): Promise<Order[]> {
     const { start } = businessDayRange(businessDay(new Date(), timeZone), timeZone);
-    return this.orders.createdSince(start);
+    const today = await this.orders.createdSince(start);
+    // A staff takeaway paid by card is not a ticket until the money lands; the
+    // customer is at the counter and the terminal has not answered yet. Nothing
+    // else is filtered — a table's order reaches the kitchen unpaid, as it
+    // always has.
+    return today.filter((order) => !(order.holdForPayment && order.paymentStatus !== "paid"));
   }
 
   /**
@@ -406,7 +462,9 @@ export class OrderService {
     const { end } = businessDayRange(endDate, timeZone);
     const paid = await this.orders.paidBetween(start, end);
 
-    const takings = new Map(days.map((day) => [day, { count: 0, totalSen: 0 }]));
+    const empty = () => ({ count: 0, totalSen: 0, dineIn: tally(), takeaway: tally() });
+    const takings = new Map(days.map((day) => [day, empty()]));
+
     for (const order of paid) {
       // The query bounds the range, so every settled order lands in a bucket —
       // but a clock skewed past the last boundary should be dropped, not thrown.
@@ -414,26 +472,71 @@ export class OrderService {
       if (!bucket) continue;
       bucket.count += 1;
       bucket.totalSen += order.totalSen;
+
+      // Split by where the food went, not by who typed the order in: a QR order
+      // with no table is a counter order and belongs with the takeaways.
+      const channel = order.tableNumber === undefined ? bucket.takeaway : bucket.dineIn;
+      channel.count += 1;
+      channel.totalSen += order.totalSen;
     }
 
     const breakdown: SalesReportDay[] = days.map((day) => {
-      const { count, totalSen } = takings.get(day)!;
-      return { day, count, totalSen, total: formatSen(totalSen) };
+      const { count, totalSen, dineIn, takeaway } = takings.get(day)!;
+      return {
+        day,
+        count,
+        totalSen,
+        total: formatSen(totalSen),
+        dineIn: split(dineIn),
+        takeaway: split(takeaway),
+      };
     });
+
     const totalSen = breakdown.reduce((sum, day) => sum + day.totalSen, 0);
+    const sum = (pick: (day: SalesReportDay) => ChannelSplit): ChannelSplit =>
+      split(
+        breakdown.reduce(
+          (running, day) => ({
+            count: running.count + pick(day).count,
+            totalSen: running.totalSen + pick(day).totalSen,
+          }),
+          { count: 0, totalSen: 0 },
+        ),
+      );
 
     return {
       startDate,
       endDate,
       timeZone,
-      count: breakdown.reduce((sum, day) => sum + day.count, 0),
+      count: breakdown.reduce((sum_, day) => sum_ + day.count, 0),
       totalSen,
       total: formatSen(totalSen),
+      dineIn: sum((day) => day.dineIn),
+      takeaway: sum((day) => day.takeaway),
       days: breakdown,
     };
   }
 
   /** "AB-4821" — short enough to read out at the counter. */
+  /**
+   * The next "Takeaway #N" for today.
+   *
+   * Counted from the day's own orders rather than held in a counter, so it
+   * resets at the business-day boundary by construction and survives a restart
+   * — a stored counter would have to be reset by something, and that something
+   * would be a scheduled job that can fail quietly overnight.
+   *
+   * Two staff ringing up at the same instant can land on the same number. That
+   * is a label shouted across a counter, not an identity: `reference` is the
+   * unique one, and it is what every lookup and every payment uses.
+   */
+  private async nextTakeawayNumber(timeZone: string = config.businessTimeZone): Promise<number> {
+    const { start } = businessDayRange(businessDay(new Date(), timeZone), timeZone);
+    const today = await this.orders.createdSince(start);
+    const highest = today.reduce((max, order) => Math.max(max, order.takeawayNumber ?? 0), 0);
+    return highest + 1;
+  }
+
   private async nextReference(): Promise<string> {
     for (let attempt = 0; attempt < 50; attempt += 1) {
       const letters = randomLetters(2);
@@ -453,4 +556,13 @@ function randomLetters(count: number): string {
     out += alphabet[Math.floor(Math.random() * alphabet.length)];
   }
   return out;
+}
+
+/** A running channel tally, before it is given its formatted total. */
+function tally(): { count: number; totalSen: number } {
+  return { count: 0, totalSen: 0 };
+}
+
+function split(counted: { count: number; totalSen: number }): ChannelSplit {
+  return { count: counted.count, totalSen: counted.totalSen, total: formatSen(counted.totalSen) };
 }

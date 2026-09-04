@@ -308,6 +308,39 @@ export function createServer(app: Services = services) {
     });
   });
 
+  // ------------------------------------------------------- staff takeaway
+  /**
+   * An order rung up at the counter.
+   *
+   * Builds on exactly the cart the customer app uses — the staff page creates a
+   * cart through `/api/carts` and adds lines through `/api/carts/:id/lines`,
+   * so pricing, options and validation are the same code and cannot drift.
+   * Only the last step is different, and it is this: a takeaway number instead
+   * of a table, and a choice of how it was paid.
+   */
+  server.post("/api/staff/orders/takeaway", (req, res) => {
+    void runAsync(res, async () => {
+      const input = takeawayInput.parse(req.body ?? {});
+
+      const order = await app.orders.confirm({
+        cartId: input.cartId,
+        ...(input.customerName === undefined ? {} : { customerName: input.customerName }),
+        // Card means the customer is at the counter with a terminal in front of
+        // them, so the ticket waits for the money. Cash is already in the till.
+        takeaway: { holdForPayment: input.payment === "card" },
+      });
+
+      if (input.payment === "cash") {
+        const paid = await app.orders.takeCash(order.id);
+        return { order: paid, payment: null };
+      }
+
+      // The same Stripe path a QR customer takes, settling on the same webhook.
+      const started = await app.payments.initiate(order.id, "card");
+      return { order: started, payment: started.payment ?? null };
+    });
+  });
+
   // ---------------------------------------------------------- staff QR codes
   /**
    * The table codes, as images the staff page can show, print or save.
@@ -582,6 +615,17 @@ const availabilityInput = z.object({ available: z.boolean() });
  * for printing codes that point somewhere this deployment is not serving from
  * yet — a staging box printing the live stickers.
  */
+/**
+ * Cash or card, and nothing else. Cash is not a `PaymentMethod` — it has no
+ * provider and no session — so it is spelled out here rather than reusing the
+ * customer's method enum, which would put it in the customer's picker.
+ */
+const takeawayInput = z.object({
+  cartId: z.string().min(1),
+  payment: z.enum(["cash", "card"]),
+  customerName: z.string().trim().min(1).max(60).optional(),
+});
+
 const qrQuery = z.object({
   tables: z.string().min(1),
   base_url: z.string().url().optional(),

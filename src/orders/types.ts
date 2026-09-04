@@ -178,6 +178,34 @@ export interface Order {
   customerName?: string;
   /** Carried from the cart, so the kitchen knows where the food goes. */
   tableNumber?: string;
+  /**
+   * The daily takeaway sequence, on staff-rung takeaway orders only.
+   *
+   * Resets to 1 with each business day, so it is the number called across the
+   * counter — "Takeaway #3" — not a global id. `reference` remains the unique
+   * one; this is deliberately the friendly, repeating one.
+   */
+  takeawayNumber?: number;
+  /**
+   * Paid in cash at the counter.
+   *
+   * Deliberately *not* a `PaymentMethod`: cash has no provider, no session and
+   * no webhook, and adding it to that union would put "Cash" in the customer's
+   * payment picker, which is the one place it must never appear. It carries no
+   * `payment` record for the same reason — `settledAt` already falls back to
+   * `updatedAt`, so the takings still land on the right day.
+   */
+  paidInCash?: boolean;
+  /**
+   * Keeps a ticket off the pass until its money lands.
+   *
+   * Set on staff takeaway orders paid by card, where the customer is standing
+   * at the counter with a card in hand: there is no reason to start frying
+   * before the terminal says yes. QR orders do not set it — the shop's existing
+   * choice is that a table's order goes to the kitchen the moment it is placed,
+   * paid or not — so this changes nothing about the customer flow.
+   */
+  holdForPayment?: boolean;
   /** Kitchen progress. Every order starts `received`; staff move it on. */
   kitchenStatus: KitchenStatus;
   createdAt: string;

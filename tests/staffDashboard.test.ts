@@ -317,3 +317,117 @@ describe("sales report", () => {
     expect(report.totalSen).toBe(order.totalSen);
   });
 });
+
+describe("staff takeaway orders", () => {
+  /** Builds a cart with one dory and rings it up as a takeaway. */
+  async function takeaway(holdForPayment: boolean) {
+    const cart = await carts.create();
+    await carts.addLine(cart.id, { itemId: "fish-dory-classic" });
+    return orders.confirm({ cartId: cart.id, takeaway: { holdForPayment } });
+  }
+
+  it("numbers takeaways from 1, in the order they are rung up", async () => {
+    const first = await takeaway(false);
+    const second = await takeaway(false);
+    const third = await takeaway(false);
+
+    expect([first.takeawayNumber, second.takeawayNumber, third.takeawayNumber]).toEqual([1, 2, 3]);
+    // The label is the friendly one; the reference stays the unique one.
+    expect(first.reference).not.toBe(second.reference);
+  });
+
+  it("does not number a table's order", async () => {
+    const order = await anOrder("6");
+    expect(order.takeawayNumber).toBeUndefined();
+    expect(order.tableNumber).toBe("6");
+  });
+
+  it("counts only today's takeaways, so the number resets with the day", async () => {
+    const yesterday = await takeaway(false);
+    expect(yesterday.takeawayNumber).toBe(1);
+
+    // Push it into a previous business day; the next one starts again at 1.
+    await backdate(yesterday, "2024-03-01T10:00:00.000Z");
+    const today = await takeaway(false);
+    expect(today.takeawayNumber).toBe(1);
+  });
+
+  it("puts a cash takeaway on the pass, paid, with no payment session", async () => {
+    const order = await takeaway(false);
+    const paid = await orders.takeCash(order.id);
+
+    expect(paid.paymentStatus).toBe("paid");
+    expect(paid.paidInCash).toBe(true);
+    // No provider was involved, so there is nothing for a webhook to settle.
+    expect(paid.payment).toBeUndefined();
+
+    const board = await orders.feed(KL);
+    expect(board.some((ticket) => ticket.id === order.id)).toBe(true);
+  });
+
+  it("counts cash takings on the day they were rung up", async () => {
+    const order = await takeaway(false);
+    await orders.takeCash(order.id);
+
+    const sales = await orders.dailySales(KL);
+    expect(sales.count).toBe(1);
+    expect(sales.totalSen).toBe(1859);
+  });
+
+  it("keeps a card takeaway off the pass until the payment lands", async () => {
+    const order = await takeaway(true);
+
+    expect(order.holdForPayment).toBe(true);
+    expect(order.paymentStatus).toBe("pending");
+    // The customer is at the counter with a card; there is nothing to fry yet.
+    let board = await orders.feed(KL);
+    expect(board.some((ticket) => ticket.id === order.id)).toBe(false);
+
+    await orders.markPaid(order.id);
+    board = await orders.feed(KL);
+    expect(board.some((ticket) => ticket.id === order.id)).toBe(true);
+  });
+
+  it("leaves an unpaid table order on the pass, as it has always been", async () => {
+    // The customer flow is untouched: a QR order reaches the kitchen when it is
+    // placed, paid or not. Only a staff card takeaway waits.
+    const order = await anOrder("4");
+    const board = await orders.feed(KL);
+
+    expect(order.paymentStatus).toBe("pending");
+    expect(board.some((ticket) => ticket.id === order.id)).toBe(true);
+  });
+
+  it("refuses cash on an order already paying by card", async () => {
+    const order = await takeaway(true);
+    // Stand in for a provider session having been opened.
+    const stored = (await orderRepository.get(order.id))!;
+    stored.payment = {
+      method: "card",
+      provider: "stripe",
+      providerPaymentId: "cs_live",
+      status: "pending",
+      simulated: false,
+      createdAt: new Date().toISOString(),
+    };
+    await orderRepository.save(stored);
+
+    await expect(orders.takeCash(order.id)).rejects.toThrow(OrderValidationError);
+  });
+
+  it("splits the sales report by where the food went", async () => {
+    const dineIn = await anOrder("2");
+    await orders.markPaid(dineIn.id);
+    const counter = await takeaway(false);
+    await orders.takeCash(counter.id);
+
+    const report = await orders.salesReport({ timeZone: KL });
+
+    expect(report.count).toBe(2);
+    expect(report.dineIn.count).toBe(1);
+    expect(report.takeaway.count).toBe(1);
+    expect(report.dineIn.totalSen + report.takeaway.totalSen).toBe(report.totalSen);
+    expect(report.days[0]!.takeaway.count).toBe(1);
+    expect(report.days[0]!.dineIn.total).toBe("RM18.59");
+  });
+});

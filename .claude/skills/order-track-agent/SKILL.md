@@ -55,7 +55,7 @@ stylesheet in `src/staff-web/assets/`:
 | Path | View | What it does |
 | --- | --- | --- |
 | `/` | **Dashboard** | Today's orders in Received / Cooking / Ready columns; running Today's Sales Total in the header |
-| `/kitchen` | **Kitchen & Counter** | The same active orders as cards, each with the one action its status calls for |
+| `/kitchen` | **Kitchen & Counter** | The same active orders as cards, each with the one action its status calls for; **New Takeaway Order** rings one up at the counter |
 | `/sales` | **Sales Report** | Date range (defaults to today), summary cards, sales-by-day chart, daily breakdown table |
 | `/menu` | **Menu** | Add / edit / delete items, upload photos, one-tap availability toggle |
 | `/qr` | **Table QR Codes** | Type the tables, generate, print the sheet or download a PNG each |
@@ -67,9 +67,20 @@ the view it was showing. Add a sixth view by adding one entry to `STAFF_VIEWS` i
 
 The mount path is substituted into each page at serve time (`{{STAFF_BASE}}` → the configured path),
 because relative asset URLs would resolve differently on `/staff` and `/staff/kitchen`. Live updates
-are short polling of `GET /api/staff/overview` every 2s, not a websocket: one shop, one process, and
-a dropped socket on a kitchen tablet that silently stops updating is worse than a request every two
-seconds. The header shows `not updating` when the feed stalls.
+are short polling of `GET /api/staff/overview`, not a websocket: one shop, one process, and a
+dropped socket on a kitchen tablet that silently stops updating is worse than a request every two
+seconds. **There is no WebSocket anywhere in this project** — if a bug report mentions one, it means
+this poller.
+
+`orderFeed` in `assets/common.js` is a `setTimeout` chain, not a `setInterval`: the next poll is
+scheduled only once the last one comes back, so a slow connection cannot stack requests on a tablet
+that is already struggling. It reports `live`/`stale` **from what has happened**, never from what is
+about to — reporting it in the same breath as firing the request is what used to paint a red "not
+updating" over a board that was drawing fine. It backs off while the server is down, snaps back on
+the first success, times a hung request out (a request that never answers is the one failure a
+poller cannot otherwise see), and re-polls on `visibilitychange`, `focus` and `online` — which is the
+one that matters during service, because a browser stops timers on a locked screen and a tablet
+picked up ten minutes later would otherwise sit on stale orders.
 
 ### Kitchen status: Received → Cooking → Ready → Collected
 
@@ -110,6 +121,48 @@ converts from ringgit and back; nothing on the wire is a float.
 
 Deleting an item leaves a cart that still holds it failing to price with `unknown_item` — the same
 400 an unavailable item already produced.
+
+### Takeaway orders, rung up by staff
+
+**New Takeaway Order** on the Kitchen & Counter page opens the customer's own menu — the same item
+cards and the same options sheet, imported from `/menu-browse.js`, which `src/web/app.js` also uses.
+Staff tap items, pick ice level and quantity in the same modal a customer sees, and the order is
+built on the **customer's own cart endpoints** (`POST /api/carts`, `POST /api/carts/:id/lines`), so
+pricing, option validation and tax are one code path and cannot drift. Only the last step is a staff
+route.
+
+```
+POST /api/staff/orders/takeaway   { cartId, payment: "cash" | "card", customerName? }
+```
+
+**Labelling.** A staff takeaway gets `takeawayNumber`, the daily sequence shown as **"Takeaway #N"**.
+It is counted from the day's own orders (`max(takeawayNumber) + 1` over `createdSince(dayStart)`),
+so it **resets to 1 with each business day** by construction — a stored counter would need something
+to reset it, and that something is a scheduled job that can fail quietly overnight. Two staff ringing
+up in the same instant can land on the same number; it is a label shouted across a counter, and
+`reference` remains the unique one that every lookup and payment uses.
+
+**Two payment paths, and the difference matters:**
+
+| | Cash | Card |
+| --- | --- | --- |
+| Marked paid | Immediately, by `OrderService.takeCash` | Only by the Stripe webhook, as for a QR order |
+| Provider | None | Stripe, the same adapter and the same `amount_total` check |
+| On the pass | At once | **Not until the payment confirms** (`holdForPayment`) |
+
+Cash is **not** a `PaymentMethod`. It has no provider, no session and no webhook, and adding it to
+that union would put "Cash" in the *customer's* payment picker — the one place it must never appear.
+It is `order.paidInCash` with no `payment` record; `settledAt` already falls back to `updatedAt`, so
+the takings still land on the right day. `takeCash` refuses an order that already has a card session
+open, because a second settlement would be a lie about which one the customer actually paid.
+
+`holdForPayment` keeps a card takeaway off `feed()` until it is paid. **Note this differs from a QR
+order**, which reaches the kitchen the moment it is placed, paid or not — that was the shop's
+existing choice and is deliberately untouched.
+
+Both boards badge anything not going to a table (`orderLabel` / `takeawayTag` in `assets/common.js`),
+and the sales report splits its takings into `dineIn` and `takeaway` — by where the food went, so a
+QR order with no table counts as a counter order.
 
 ### Table QR codes
 

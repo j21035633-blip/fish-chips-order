@@ -9,7 +9,7 @@ The agent's behaviour is defined in `.claude/skills/order-track-agent/SKILL.md`.
 | 2 | 2–3 — Cart, checkout, **real payments** | Done |
 | 3+ | 4–6 — Bonus chances, fishing game, order status | Not started |
 
-**336 tests, 15 files.** `npm test`.
+**355 tests, 15 files.** `npm test`.
 
 ## Run it
 
@@ -228,6 +228,7 @@ GET    /api/staff/overview                   # board + today's takings
 PATCH  /api/staff/orders/:orderId/status     { status: "received"|"cooking"|"ready"|"collected" }
 GET    /api/staff/sales-report?start_date=2026-09-01&end_date=2026-09-07
 
+POST   /api/staff/orders/takeaway            { cartId, payment: "cash" | "card" }
 GET    /api/staff/qr-codes?tables=1-12       # table codes as PNG data URIs
 
 GET    /api/staff/menu-items                 # every item, sold-out ones included
@@ -369,7 +370,7 @@ nav and one stylesheet:
 | Path | View |
 | --- | --- |
 | `/` | **Dashboard** — today's orders in Received / Cooking / Ready columns, running Today's Sales Total |
-| `/kitchen` | **Kitchen & Counter** — the same active orders as cards, one action button each |
+| `/kitchen` | **Kitchen & Counter** — the same active orders as cards, one action button each, plus **New Takeaway Order** |
 | `/sales` | **Sales Report** — date range, summary cards, sales-by-day chart, daily breakdown table |
 | `/menu` | **Menu** — add, edit, delete items; photo upload; one-tap availability toggle |
 | `/qr` | **Table QR Codes** — generate, print and download the scan-to-order codes |
@@ -490,3 +491,28 @@ customer's order page does not show it yet), plus the POS adapter and staff auth
 Two things in the skill are still TBD and need a decision before the phases that depend on them:
 the spend threshold for the bonus chance (written as "e.g. RM30+"), and the fishing game's win rate
 and voucher values.
+
+## Takeaway orders at the counter
+
+**New Takeaway Order** on the Kitchen & Counter page opens the customer's own menu — the same item
+cards and the same options sheet, from `src/web/menu-browse.js`, which the customer app imports too.
+The order is built on the customer's own cart endpoints, so pricing, options and tax are one code
+path; only the last step is a staff route.
+
+Each one gets **"Takeaway #N"**, counted from the day's own orders so it resets to 1 with every
+business day. That label is what gets called across the counter; `reference` is still the unique id.
+
+Then cash or card, and the difference is the point:
+
+- **Cash** — paid the moment it is rung up, straight onto the pass. No provider, no session, no
+  webhook. Cash is deliberately *not* a `PaymentMethod`: that union drives the customer's payment
+  picker, and "Cash" must never appear there.
+- **Card** — the same Stripe flow a QR customer takes, settling on the same webhook. The ticket is
+  **held off the pass until the payment confirms**, because the customer is standing at the counter
+  and there is no reason to start frying before the terminal says yes.
+
+That last point differs from a QR order, which reaches the kitchen the moment it is placed, paid or
+not. That was the existing choice for table orders and is deliberately unchanged.
+
+Both boards badge anything not going to a table, and the sales report splits its takings into
+dine-in and takeaway.

@@ -358,3 +358,12 @@ describe("table QR codes", () => {
     await expect(page.text()).resolves.toContain('data-staff-view="qr"');
   });
 });
+
+describe("takeaway is a staff route", () => {
+  it("cannot be rung up without a session", async () => {
+    // It creates paid orders. Open, it would let anyone mark food as paid for.
+    const response = await call("POST", "/api/staff/orders/takeaway", { cartId: "x", payment: "cash" });
+    expect(response.status).toBe(401);
+    await expect(json(response)).resolves.toMatchObject({ error: "staff_auth_required" });
+  });
+});

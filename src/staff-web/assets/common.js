@@ -90,26 +90,117 @@ export function errorBanner(id = "error") {
  * stops updating is worse than a request every two seconds. `onState` reports
  * staleness so a stall is visible rather than leaving the view quietly frozen.
  */
-export function orderFeed({ onData, onError, onState, intervalMs = 2000, staleAfterMs = 8000 }) {
+export function orderFeed({
+  onData,
+  onError,
+  onState,
+  intervalMs = 2000,
+  staleAfterMs = 8000,
+  maxIntervalMs = 30000,
+  requestTimeoutMs = 10000,
+}) {
   let lastOk = 0;
-  let timer;
+  let timer = null;
+  let polling = false;
+  let failures = 0;
+  let stopped = false;
+
+  /**
+   * Says what has happened, never what is about to.
+   *
+   * The old version reported staleness in the same synchronous breath as firing
+   * the request, so the first tick always read `lastOk === 0` and painted a red
+   * "not updating" over a board that was drawing correctly two hundred
+   * milliseconds later. The indicator was a tick behind the truth on every page
+   * load and every navigation between staff pages.
+   */
+  function report() {
+    onState?.(lastOk !== 0 && Date.now() - lastOk <= staleAfterMs ? "live" : "stale");
+  }
 
   async function refresh() {
-    const data = await api("/api/staff/overview");
+    // A request that never answers is the one failure a poller cannot see: no
+    // response, no error, and the next poll never gets scheduled. Give it a
+    // deadline so a dead connection becomes a normal failure.
+    const options = {};
+    if (typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
+      options.signal = AbortSignal.timeout(requestTimeoutMs);
+    }
+
+    const data = await api("/api/staff/overview", options);
     lastOk = Date.now();
+    failures = 0;
     onData(data);
+    report();
+    return data;
   }
 
-  function tick() {
-    refresh().catch((error) => onError?.(error));
-    const stale = lastOk === 0 || Date.now() - lastOk > staleAfterMs;
-    onState?.(stale ? "stale" : "live");
+  function schedule(delay) {
+    clearTimeout(timer);
+    if (stopped) return;
+    timer = setTimeout(poll, delay);
   }
 
-  tick();
-  timer = setInterval(tick, intervalMs);
+  /**
+   * One poll, then the next is scheduled — a chain rather than an interval.
+   *
+   * `setInterval` fires on the clock whether or not the last request came back,
+   * so a slow connection during service stacks requests on a tablet that is
+   * already struggling. This cannot overlap with itself.
+   */
+  async function poll() {
+    if (polling) return;
+    polling = true;
 
-  return { refresh, stop: () => clearInterval(timer) };
+    try {
+      await refresh();
+    } catch (error) {
+      failures += 1;
+      onError?.(error);
+      report();
+    } finally {
+      polling = false;
+      // Back off while it is down — a kitchen tablet hammering a dead server
+      // every two seconds helps nobody — and snap straight back on the first
+      // success, because `failures` resets there.
+      const backoff = Math.min(intervalMs * 2 ** Math.min(failures, 4), maxIntervalMs);
+      schedule(failures === 0 ? intervalMs : backoff);
+    }
+  }
+
+  /**
+   * Catch up the moment the tablet is usable again.
+   *
+   * This is the one that matters during service. A browser throttles timers in
+   * a background tab and stops them on a locked screen, so a tablet picked up
+   * after ten minutes would otherwise sit on stale orders until its next
+   * scheduled poll — which, after backoff, could be half a minute away.
+   */
+  function wake() {
+    if (stopped) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    report();
+    failures = 0;
+    schedule(0);
+  }
+
+  document.addEventListener("visibilitychange", wake);
+  window.addEventListener("online", wake);
+  window.addEventListener("focus", wake);
+
+  report();
+  void poll();
+
+  return {
+    refresh,
+    stop() {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("online", wake);
+      window.removeEventListener("focus", wake);
+    },
+  };
 }
 
 /** Formats `YYYY-MM-DD` for an axis or a table: "Wed 3 Sep". */
@@ -120,4 +211,23 @@ export function shortDay(day) {
     month: "short",
     timeZone: "UTC",
   });
+}
+
+/**
+ * How a ticket announces itself on the boards.
+ *
+ * Three cases, and the distinction that matters to a cook is the first one:
+ * food that goes to a table, versus food someone is waiting at the counter for.
+ * A staff-rung takeaway has the number that gets called out; a QR order with no
+ * table is the same kind of thing without one.
+ */
+export function orderLabel(order) {
+  if (order.tableNumber) return { text: `Table ${order.tableNumber}`, takeaway: false };
+  if (order.takeawayNumber) return { text: `Takeaway #${order.takeawayNumber}`, takeaway: true };
+  return { text: "Counter / takeaway", takeaway: true };
+}
+
+/** The badge that marks a ticket as not going to a table. */
+export function takeawayTag() {
+  return el("span", { class: "tag takeaway-tag", text: "Takeaway" });
 }
