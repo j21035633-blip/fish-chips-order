@@ -33,7 +33,7 @@ beforeEach(() => {
 describe("staff nav", () => {
   it("offers every view, in order", () => {
     const labels = [...nav.staffNav().querySelectorAll("a")].map((link: Element) => link.textContent);
-    expect(labels).toEqual(["Dashboard", "Kitchen & Counter", "Sales Report", "Menu"]);
+    expect(labels).toEqual(["Dashboard", "Kitchen & Counter", "Sales Report", "Menu", "Table QR Codes"]);
   });
 
   it("builds links from the path the area is mounted at", () => {
@@ -43,12 +43,13 @@ describe("staff nav", () => {
       "/staff-a8f3k2m9/kitchen",
       "/staff-a8f3k2m9/sales",
       "/staff-a8f3k2m9/menu",
+      "/staff-a8f3k2m9/qr",
     ]);
 
     // The mount point is configurable, so nothing may be hard-coded.
     mountAs("dashboard", "/staff");
     const moved = [...nav.staffNav().querySelectorAll("a")].map((link: Element) => link.getAttribute("href"));
-    expect(moved).toEqual(["/staff", "/staff/kitchen", "/staff/sales", "/staff/menu"]);
+    expect(moved).toEqual(["/staff", "/staff/kitchen", "/staff/sales", "/staff/menu", "/staff/qr"]);
   });
 
   it("marks exactly the view the page is, on each of the three", () => {
@@ -57,6 +58,7 @@ describe("staff nav", () => {
       ["kitchen", "Kitchen & Counter"],
       ["sales", "Sales Report"],
       ["menu", "Menu"],
+      ["qr", "Table QR Codes"],
     ];
     for (const [view, expected] of views) {
       mountAs(view);
@@ -80,7 +82,7 @@ describe("staff nav", () => {
   });
 
   it("puts a log out button on every view, last in the header", () => {
-    for (const view of ["dashboard", "kitchen", "sales", "menu"]) {
+    for (const view of ["dashboard", "kitchen", "sales", "menu", "qr"]) {
       mountAs(view);
       const { header } = nav.mountStaffChrome({ title: "Anything" });
 
@@ -99,6 +101,7 @@ describe("staff page markup", () => {
     ["kitchen.html", "kitchen"],
     ["sales.html", "sales"],
     ["menu.html", "menu"],
+    ["qr.html", "qr"],
     ["login.html", "login"],
   ];
 

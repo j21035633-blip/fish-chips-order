@@ -16,6 +16,7 @@ export const STAFF_VIEWS = [
   { id: "kitchen", label: "Kitchen & Counter", path: "/kitchen" },
   { id: "sales", label: "Sales Report", path: "/sales" },
   { id: "menu", label: "Menu", path: "/menu" },
+  { id: "qr", label: "Table QR Codes", path: "/qr" },
 ];
 
 /** The path the staff area is served under, e.g. "/staff-a8f3k2m9". */

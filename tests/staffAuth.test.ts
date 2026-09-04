@@ -313,3 +313,48 @@ describe("staff pages", () => {
     }
   });
 });
+
+describe("table QR codes", () => {
+  it("is behind the staff password like the rest of the area", async () => {
+    // The reason this can be a page at all: an open route that mints table
+    // codes hands anyone a link that opens an order against someone's table.
+    expect((await call("GET", "/api/staff/qr-codes?tables=1-4")).status).toBe(401);
+
+    const cookie = await signIn();
+    const response = await call("GET", "/api/staff/qr-codes?tables=1-4", undefined, cookie);
+    expect(response.status).toBe(200);
+
+    const body = await json(response);
+    expect(body.codes).toHaveLength(4);
+    expect(body.codes.map((code: any) => code.table)).toEqual(["1", "2", "3", "4"]);
+    expect(body.codes[0].png.startsWith("data:image/png;base64,")).toBe(true);
+    expect(body.codes[0].url).toContain("/order?table=1");
+  });
+
+  it("explains a table list it cannot read, rather than 500ing", async () => {
+    const cookie = await signIn();
+
+    const backwards = await call("GET", "/api/staff/qr-codes?tables=9-2", undefined, cookie);
+    expect(backwards.status).toBe(400);
+    await expect(json(backwards)).resolves.toMatchObject({ error: "invalid_table_list" });
+
+    const empty = await call("GET", "/api/staff/qr-codes?tables=", undefined, cookie);
+    expect(empty.status).toBe(400);
+
+    // A whole dining room is fine; a typo asking for a thousand is not.
+    const tooMany = await call("GET", "/api/staff/qr-codes?tables=1-400", undefined, cookie);
+    expect(tooMany.status).toBe(400);
+    await expect(json(tooMany)).resolves.toMatchObject({ error: "too_many_tables" });
+  });
+
+  it("serves the page itself only to a signed-in browser", async () => {
+    const unauthenticated = await fetch(`${base}/staff/qr`, { redirect: "manual" });
+    expect(unauthenticated.status).toBe(302);
+    expect(unauthenticated.headers.get("location")).toBe(`/staff/login?next=${encodeURIComponent("/staff/qr")}`);
+
+    const cookie = await signIn();
+    const page = await fetch(`${base}/staff/qr`, { headers: { cookie }, redirect: "manual" });
+    expect(page.status).toBe(200);
+    await expect(page.text()).resolves.toContain('data-staff-view="qr"');
+  });
+});

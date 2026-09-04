@@ -372,3 +372,45 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   width: 100%;
 }
 .login-card .advance { width: 100%; margin-top: 18px; padding: 12px 14px; font-size: 15px; }
+
+/* --- table QR codes ------------------------------------------------------ */
+.qr-sheet {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+.qr-card {
+  margin: 0;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  text-align: center;
+  /* A code split across two sheets is a code nobody can scan. */
+  break-inside: avoid;
+}
+.qr-card img { width: 100%; height: auto; display: block; }
+.qr-card figcaption { display: grid; gap: 3px; margin-top: 8px; }
+.qr-card strong { font-size: 16px; }
+.qr-url { font-size: 10px; color: var(--ink-soft); word-break: break-all; }
+.qr-download {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--sea);
+}
+.controls code { font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 4px; }
+
+/*
+ * Print the stickers, not the screen. The nav, the form and the header have no
+ * business on a sheet that is going to be cut up and stuck to tables.
+ */
+@media print {
+  header, .controls, .error, .empty { display: none !important; }
+  main { padding: 0; }
+  body { background: #fff; }
+  .qr-sheet { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .qr-card { border-color: #999; }
+  .qr-download { display: none; }
+}

@@ -1,10 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
-import QRCode from "qrcode";
-
 import { config } from "../config/env.js";
-import { parseTableNumber } from "../orders/types.js";
+import { expandTables, orderUrl, writeTableCode } from "../qr/tables.js";
 
 /**
  * Generates the scannable QR code for each table.
@@ -16,9 +14,9 @@ import { parseTableNumber } from "../orders/types.js";
  * Each code points at `<base>/order?table=<n>`, which always opens a fresh
  * session — see `renderTableLanding` in the web app.
  *
- * A script rather than an admin page on purpose: there is no staff auth yet
- * (JWT for staff/admin is a later phase), and an unauthenticated route that
- * mints table codes is not something to leave on a public deployment.
+ * The staff area has the same thing as a page now — Table QR Codes, behind the
+ * staff password. This stays for a bulk run from a laptop: writing forty PNGs
+ * into a folder is a job for a script, not for a browser.
  */
 
 const args = process.argv.slice(2);
@@ -27,38 +25,6 @@ function flag(name: string): string | undefined {
   const index = args.indexOf(`--${name}`);
   if (index === -1) return undefined;
   return args[index + 1];
-}
-
-/**
- * Expands "1-4,7,A1" into ["1", "2", "3", "4", "7", "A1"].
- *
- * Ranges apply to plain numbers only; "A1-A4" is a label, not a range, because
- * there is no sensible way to count between arbitrary labels.
- */
-export function expandTables(spec: string): string[] {
-  const seen = new Set<string>();
-
-  for (const part of spec.split(",").map((entry) => entry.trim()).filter(Boolean)) {
-    const range = /^(\d+)-(\d+)$/.exec(part);
-    if (range) {
-      const from = Number(range[1]);
-      const to = Number(range[2]);
-      if (from > to) throw new Error(`"${part}" counts backwards.`);
-      if (to - from > 500) throw new Error(`"${part}" is more than 500 tables; that is probably a typo.`);
-      for (let table = from; table <= to; table += 1) seen.add(parseTableNumber(String(table)));
-      continue;
-    }
-    seen.add(parseTableNumber(part));
-  }
-
-  if (seen.size === 0) throw new Error("No tables given. Try --tables 1-12");
-  return [...seen];
-}
-
-export function orderUrl(baseUrl: string, table: string): string {
-  const url = new URL("/order", baseUrl);
-  url.searchParams.set("table", table);
-  return url.toString();
 }
 
 /** A print sheet, because twelve loose PNGs are not what anyone actually wants. */
@@ -110,12 +76,7 @@ async function main(): Promise<void> {
   for (const table of tables) {
     const url = orderUrl(baseUrl, table);
     const file = `table-${table}.png`;
-    await QRCode.toFile(join(outDir, file), url, {
-      // A sticker on a table in a chip shop gets smudged; "Q" survives ~25% damage.
-      errorCorrectionLevel: "Q",
-      margin: 2,
-      width: 800,
-    });
+    await writeTableCode(join(outDir, file), url);
     entries.push({ table, file, url });
     console.log(`table ${table.padEnd(8)} ${file}  ${url}`);
   }

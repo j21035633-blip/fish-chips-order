@@ -9,7 +9,7 @@ The agent's behaviour is defined in `.claude/skills/order-track-agent/SKILL.md`.
 | 2 | 2–3 — Cart, checkout, **real payments** | Done |
 | 3+ | 4–6 — Bonus chances, fishing game, order status | Not started |
 
-**331 tests, 15 files.** `npm test`.
+**336 tests, 15 files.** `npm test`.
 
 ## Run it
 
@@ -178,7 +178,7 @@ src/tools/         agent tools, Zod-validated
 src/app/           service container
 src/http/          routes (app.ts) and listener (server.ts)
 src/web/           customer page
-src/staff-web/     staff area — four views, a login screen, and the shared nav in assets/
+src/staff-web/     staff area — five views, a login screen, and the shared nav in assets/
 src/cli/           menu stdout harness
 ```
 
@@ -227,6 +227,8 @@ GET    /api/staff/session                    # { authenticated, authRequired }
 GET    /api/staff/overview                   # board + today's takings
 PATCH  /api/staff/orders/:orderId/status     { status: "received"|"cooking"|"ready"|"collected" }
 GET    /api/staff/sales-report?start_date=2026-09-01&end_date=2026-09-07
+
+GET    /api/staff/qr-codes?tables=1-12       # table codes as PNG data URIs
 
 GET    /api/staff/menu-items                 # every item, sold-out ones included
 POST   /api/staff/menu-items                 # multipart: image? + name, priceSen, category, …
@@ -361,7 +363,7 @@ than by assuming an offset — the offset for a zone is itself a function of the
 
 ## Staff area
 
-Four views under `STAFF_DASHBOARD_PATH` (default `/staff`), behind one shared password, sharing one
+Five views under `STAFF_DASHBOARD_PATH` (default `/staff`), behind one shared password, sharing one
 nav and one stylesheet:
 
 | Path | View |
@@ -370,6 +372,7 @@ nav and one stylesheet:
 | `/kitchen` | **Kitchen & Counter** — the same active orders as cards, one action button each |
 | `/sales` | **Sales Report** — date range, summary cards, sales-by-day chart, daily breakdown table |
 | `/menu` | **Menu** — add, edit, delete items; photo upload; one-tap availability toggle |
+| `/qr` | **Table QR Codes** — generate, print and download the scan-to-order codes |
 | `/login` | **Sign in** — the one page outside the gate; no nav, one password field |
 
 Each view is its own document rather than a client-side router, so a tablet on the pass reloads into
@@ -453,16 +456,29 @@ status stays freely reversible. The customer API is untouched and stays open, wh
 
 ## Table QR codes
 
+Two ways to the same codes, both from `src/qr/tables.ts`.
+
+**In the staff area**, at `/qr`: type the tables (`1-12`, or `1-8,PATIO-1`), press **Generate
+codes**, and the codes appear — with **Print sheet**, which prints the cards and nothing else, and a
+**Download PNG** on each. Nothing is stored: a code is a pure function of the public URL and the
+table number, so there is nothing to keep and nothing to go stale the day `PUBLIC_BASE_URL` changes.
+This is a page now because there is a staff password now — an open route that mints table codes
+hands anyone a link that opens an order against someone else's table.
+
+**On the command line**, for a bulk run that lands as files:
+
 ```
 npm run qr -- --tables 1-12
 npm run qr -- --tables 1-8,PATIO-1 --base-url https://order.example.com --out qr
 ```
 
-Writes a scannable PNG per table plus an `index.html` print sheet. Codes use error-correction level
-`Q`, which tolerates a smudged sticker. A script rather than an admin page: staff auth is a later
-phase, and an unauthenticated route that mints table codes is not something to leave on a public
-deployment. A test decodes the generated PNGs with a real QR reader and compares them against the
-URL they should carry.
+Writes a scannable PNG per table plus an `index.html` print sheet — writing forty PNGs into a folder
+is a job for a script, not for a browser.
+
+Codes use error-correction level `Q`, which tolerates a smudged sticker, and each points at
+`/order?table=N`, which always starts a fresh session. A test decodes both the files and the page's
+data URIs with a real QR reader and compares them against the URL they should carry — the risk here
+is a code that renders and does not scan.
 
 ## Not built yet
 

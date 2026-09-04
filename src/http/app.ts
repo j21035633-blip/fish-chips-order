@@ -14,6 +14,7 @@ import type { MenuItemInput } from "../menu/store.js";
 import { MenuValidationError } from "../menu/types.js";
 import { KITCHEN_STATUSES, OrderValidationError, PAYMENT_METHODS, PAYMENT_PROVIDERS } from "../orders/types.js";
 import { PaymentProviderError } from "../payments/types.js";
+import { expandTables, MAX_TABLES, tableCodes } from "../qr/tables.js";
 import {
   clearLoginFailures,
   hasStaffSession,
@@ -307,6 +308,50 @@ export function createServer(app: Services = services) {
     });
   });
 
+  // ---------------------------------------------------------- staff QR codes
+  /**
+   * The table codes, as images the staff page can show, print or save.
+   *
+   * Generated per request rather than stored: a code is a pure function of the
+   * public URL and the table number, so there is nothing worth keeping — and
+   * nothing to go stale the day `PUBLIC_BASE_URL` changes.
+   *
+   * Behind the staff password like everything else under `/api/staff`, which is
+   * what makes this page possible at all: minting table codes on an open route
+   * would hand anyone a link that opens an order against someone else's table.
+   */
+  server.get("/api/staff/qr-codes", (req, res) => {
+    void runAsync(res, async () => {
+      const { tables: spec, base_url: baseUrl } = qrQuery.parse({
+        tables: single(req.query.tables),
+        base_url: single(req.query.base_url),
+      });
+
+      let tables: string[];
+      try {
+        tables = expandTables(spec);
+      } catch (error) {
+        // "9-2 counts backwards" is the useful half; the form shows it as typed.
+        throw new OrderValidationError(
+          error instanceof Error ? error.message : "That is not a list of tables.",
+          "invalid_table_list",
+          { tables: spec },
+        );
+      }
+
+      if (tables.length > MAX_TABLES) {
+        throw new OrderValidationError(
+          `${tables.length} tables at once is more than this will do; ${MAX_TABLES} is the limit.`,
+          "too_many_tables",
+          { count: tables.length, max: MAX_TABLES },
+        );
+      }
+
+      const base = baseUrl ?? config.publicBaseUrl;
+      return { baseUrl: base, codes: await tableCodes(base, tables) };
+    });
+  });
+
   // -------------------------------------------------------- staff menu admin
   /**
    * Menu management. Behind the same gate as the rest of `/api/staff` — which
@@ -456,6 +501,7 @@ export function createServer(app: Services = services) {
     server.get(`${config.staffDashboardPath}/kitchen`, requireStaffPage, staffPage("kitchen.html"));
     server.get(`${config.staffDashboardPath}/sales`, requireStaffPage, staffPage("sales.html"));
     server.get(`${config.staffDashboardPath}/menu`, requireStaffPage, staffPage("menu.html"));
+    server.get(`${config.staffDashboardPath}/qr`, requireStaffPage, staffPage("qr.html"));
 
     // The shared nav, styles and helpers the three pages import. Mounted under
     // the dashboard's own path so nothing about the staff area leaks a route at
@@ -529,6 +575,17 @@ const staffStatusInput = z.object({ status: z.enum(KITCHEN_STATUSES) });
 const staffLoginInput = z.object({ password: z.string().min(1).max(200) });
 
 const availabilityInput = z.object({ available: z.boolean() });
+
+/**
+ * The table spec is validated by `expandTables`, which knows what a table
+ * number is; this only checks something was typed. `base_url` is an override
+ * for printing codes that point somewhere this deployment is not serving from
+ * yet — a staging box printing the live stickers.
+ */
+const qrQuery = z.object({
+  tables: z.string().min(1),
+  base_url: z.string().url().optional(),
+});
 
 /**
  * One optional image, on the field named `image`.

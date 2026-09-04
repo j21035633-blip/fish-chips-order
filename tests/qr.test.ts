@@ -12,7 +12,7 @@ import { PNG } from "pngjs";
 import QRCode from "qrcode";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { expandTables, orderUrl } from "../src/cli/qr.js";
+import { expandTables, orderUrl, tableCodes } from "../src/qr/tables.js";
 import { OrderValidationError } from "../src/orders/types.js";
 
 let outDir: string;
@@ -84,5 +84,32 @@ describe("generated codes", () => {
 
       expect(await decode(file)).toBe(url);
     }
+  });
+});
+
+describe("the staff page's codes", () => {
+  /** Decodes a data URI the same way the file test decodes a PNG on disk. */
+  function decodeDataUrl(dataUrl: string): string | undefined {
+    const base64 = dataUrl.replace(/^data:image\/png;base64,/, "");
+    const png = PNG.sync.read(Buffer.from(base64, "base64"));
+    const result = jsQR(new Uint8ClampedArray(png.data), png.width, png.height);
+    return result?.data;
+  }
+
+  it("hands back a scannable code per table, not just a data URI", async () => {
+    const codes = await tableCodes("https://order.example.com", ["1", "PATIO-1"]);
+
+    expect(codes.map((code) => code.table)).toEqual(["1", "PATIO-1"]);
+    for (const code of codes) {
+      expect(code.png.startsWith("data:image/png;base64,"), code.table).toBe(true);
+      // The point of this file: a real reader gets the ordering URL back out.
+      expect(decodeDataUrl(code.png), code.table).toBe(code.url);
+      expect(code.url).toBe(orderUrl("https://order.example.com", code.table));
+    }
+  });
+
+  it("points every code at a fresh session for that table", async () => {
+    const [code] = await tableCodes("https://order.example.com", ["7"]);
+    expect(decodeDataUrl(code!.png)).toBe("https://order.example.com/order?table=7");
   });
 });

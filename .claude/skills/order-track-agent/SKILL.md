@@ -32,8 +32,8 @@ The plan called for FastAPI + Next.js. What actually shipped is Node, and new wo
    confirmed orders, table carried from the scan onto the ticket
 3. **Payments** — Stripe (cards) + Revenue Monster (e-wallets/DuitNow) behind a `PaymentAdapter`,
    webhooks with real signature verification, simulated when no credentials are configured
-4. **Staff area** — four views, kitchen status, daily sales total, sales reporting, menu management,
-   all behind one shared password. See *Staff area* and *Staff auth* below.
+4. **Staff area** — five views: kitchen status, daily sales total, sales reporting, menu management
+   and table QR codes, all behind one shared password. See *Staff area* and *Staff auth* below.
 
 ### Not built yet
 5. POS adapter — behind a `POSAdapter` interface so the backend is swappable. **[DECISION NEEDED]**
@@ -49,7 +49,7 @@ Ask before deciding anything not specified here (exact menu items, styling detai
 
 ## Staff area
 
-Four views plus a login screen under `STAFF_DASHBOARD_PATH` (default `/staff`), sharing one nav and one
+Five views plus a login screen under `STAFF_DASHBOARD_PATH` (default `/staff`), sharing one nav and one
 stylesheet in `src/staff-web/assets/`:
 
 | Path | View | What it does |
@@ -58,10 +58,11 @@ stylesheet in `src/staff-web/assets/`:
 | `/kitchen` | **Kitchen & Counter** | The same active orders as cards, each with the one action its status calls for |
 | `/sales` | **Sales Report** | Date range (defaults to today), summary cards, sales-by-day chart, daily breakdown table |
 | `/menu` | **Menu** | Add / edit / delete items, upload photos, one-tap availability toggle |
+| `/qr` | **Table QR Codes** | Type the tables, generate, print the sheet or download a PNG each |
 | `/login` | **Sign in** | The one page outside the gate. No nav, one password field — see *Staff auth* |
 
 Each view is its own document rather than a client-side router, so a tablet on the pass reloads into
-the view it was showing. Add a fifth view by adding one entry to `STAFF_VIEWS` in
+the view it was showing. Add a sixth view by adding one entry to `STAFF_VIEWS` in
 `src/staff-web/assets/nav.js`, one HTML file, and one route — the nav is defined once.
 
 The mount path is substituted into each page at serve time (`{{STAFF_BASE}}` → the configured path),
@@ -109,6 +110,22 @@ converts from ringgit and back; nothing on the wire is a float.
 
 Deleting an item leaves a cart that still holds it failing to price with `unknown_item` — the same
 400 an unavailable item already produced.
+
+### Table QR codes
+
+`src/qr/tables.ts` owns the table list, the URL each code carries and the image; the staff page and
+`npm run qr` are two callers of it. **Generated per request, never stored** — a code is a pure
+function of the public URL and the table number, so there is nothing to keep and nothing to go stale
+when `PUBLIC_BASE_URL` changes. The page gets data URIs (shown, printed, saved with `<a download>`);
+the CLI writes PNGs plus a print sheet, which is the right shape for forty stickers.
+
+Error correction is level `Q` — a sticker in a chip shop gets smudged. Codes point at
+`/order?table=N`, which always opens a fresh session. Tests decode both the files and the page's
+data URIs with a real QR reader: the failure worth catching is a code that renders and does not scan.
+
+The route sits behind the staff password like the rest of `/api/staff`, which is the reason this can
+be a page at all: an open route that mints table codes hands anyone a link that opens an order
+against someone else's table.
 
 ### Image upload storage — and the Railway volume it needs
 
@@ -201,6 +218,8 @@ GET    /api/staff/session                       # { authenticated, authRequired 
 GET    /api/staff/overview                      # board + today's takings (polled by the pages)
 PATCH  /api/staff/orders/:orderId/status        { status: received|cooking|ready|collected }
 GET    /api/staff/sales-report?start_date=&end_date=
+
+GET    /api/staff/qr-codes?tables=1-12&base_url=  # table codes as PNG data URIs
 
 GET    /api/staff/menu-items                    # every item, sold-out ones included
 POST   /api/staff/menu-items                    # multipart: image? + name, priceSen, category, …
