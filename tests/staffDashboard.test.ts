@@ -159,8 +159,10 @@ describe("today's sales total", () => {
 
     const sales = await orders.dailySales(KL);
     expect(sales.count).toBe(3);
-    expect(sales.totalSen).toBe(1690 * 3);
-    expect(sales.total).toBe("RM50.70");
+    // Takings are what was collected, so they include the tax charged on top of
+    // RM16.90 of food: 1690 + 169 each.
+    expect(sales.totalSen).toBe(1859 * 3);
+    expect(sales.total).toBe("RM55.77");
   });
 
   it("excludes yesterday's takings", async () => {
@@ -255,8 +257,8 @@ describe("sales report", () => {
     // A chart with a hole in its x-axis lies about the shape of the week.
     expect(report.days[1]).toMatchObject({ totalSen: 0, total: "RM0.00" });
     expect(report.count).toBe(3);
-    expect(report.totalSen).toBe(1690 * 3);
-    expect(report.total).toBe("RM50.70");
+    expect(report.totalSen).toBe(1859 * 3);
+    expect(report.total).toBe("RM55.77");
   });
 
   it("counts paid orders only", async () => {
@@ -275,7 +277,7 @@ describe("sales report", () => {
 
     const report = await orders.salesReport({ startDate: "2024-03-01", endDate: "2024-03-01", timeZone: KL });
     expect(report.count).toBe(1);
-    expect(report.totalSen).toBe(1690);
+    expect(report.totalSen).toBe(1859);
   });
 
   it("treats a single date as a single day, whichever end it is given as", async () => {

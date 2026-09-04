@@ -130,8 +130,13 @@ export interface PricedCart {
   itemCount: number;
   subtotalSen: number;
   subtotal: string;
-  /** No tax or service charge modelled yet, so total === subtotal. Kept separate
-   *  so adding SST later does not change every caller. */
+  /** Tax on the subtotal, rounded once for the whole order. See `orderTotals`. */
+  taxSen: number;
+  tax: string;
+  /** The fraction `taxSen` was worked out at, so a stored order still explains
+   *  its own arithmetic after the rate changes. */
+  taxRate: number;
+  /** Subtotal plus tax. This is what gets charged. */
   totalSen: number;
   total: string;
 }
@@ -160,8 +165,13 @@ export interface Order {
   lines: PricedLine[];
   itemCount: number;
   subtotalSen: number;
+  taxSen: number;
   totalSen: number;
+  /** The rate this order was taxed at, kept with it so a receipt reprinted after
+   *  a rate change still adds up. */
+  taxRate: number;
   subtotal: string;
+  tax: string;
   total: string;
   paymentStatus: PaymentStatus;
   payment?: OrderPayment;

@@ -221,9 +221,15 @@ export class OrderService {
       reference: await this.nextReference(),
       lines: priced.lines,
       itemCount: priced.itemCount,
+      // Carried across whole rather than recomputed: the order is charged the
+      // number the customer was shown, and there is only one place that number
+      // is worked out.
       subtotalSen: priced.subtotalSen,
+      taxSen: priced.taxSen,
       totalSen: priced.totalSen,
+      taxRate: priced.taxRate,
       subtotal: priced.subtotal,
+      tax: priced.tax,
       total: priced.total,
       paymentStatus: "pending",
       // The kitchen has the ticket the moment the order exists; whether to cook

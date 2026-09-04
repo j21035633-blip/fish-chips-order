@@ -1,5 +1,6 @@
 import { MongoClient, type Collection, type Db, type Filter } from "mongodb";
 
+import { formatSen } from "../menu/money.js";
 import type { MenuPersistence } from "../menu/store.js";
 import type { Menu } from "../menu/types.js";
 import type { CartRepository, OrderRepository } from "../orders/repository.js";
@@ -236,5 +237,15 @@ function toCart(doc: StoredCart): Cart {
 
 function toOrder(doc: StoredOrder): Order {
   const { _id, ...order } = doc;
+
+  // An order placed before tax was modelled has no tax fields, and genuinely
+  // paid none — zero is the truthful answer, and it keeps subtotal + tax ===
+  // total for every order the staff report and the receipts read back. Filled
+  // in on read rather than by migrating: the stored document is the record of
+  // what was actually charged, and nothing should rewrite that after the fact.
+  const stored = order as typeof order & { taxSen?: number };
+  if (stored.taxSen === undefined) {
+    return { ...order, taxSen: 0, taxRate: 0, tax: formatSen(0) };
+  }
   return order;
 }

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { menuService } from "../src/menu/service.js";
-import { priceLine } from "../src/orders/pricing.js";
+import { orderTotals, priceLine, TAX_RATE } from "../src/orders/pricing.js";
 import { renderCart, renderOrder } from "../src/orders/render.js";
 import { InMemoryCartRepository, InMemoryOrderRepository } from "../src/orders/repository.js";
 import { CartService, OrderService } from "../src/orders/service.js";
@@ -210,7 +210,11 @@ describe("cart", async () => {
 
     expect(cart.itemCount).toBe(3);
     expect(cart.subtotalSen).toBe(1690 + 790 * 2);
-    expect(cart.total).toBe("RM32.70");
+    // 3270 of food, 327 of tax on top: the running total is what gets charged.
+    expect(cart.subtotal).toBe("RM32.70");
+    expect(cart.taxSen).toBe(327);
+    expect(cart.totalSen).toBe(3597);
+    expect(cart.total).toBe("RM35.97");
   });
 
   it("updates a line quantity", async () => {
@@ -270,8 +274,13 @@ describe("orders", async () => {
     const order = await orders.confirm({ cartId, customerName: "Aisyah" });
 
     expect(order.paymentStatus).toBe("pending");
-    expect(order.totalSen).toBe(3380);
-    expect(order.total).toBe("RM33.80");
+    expect(order.subtotalSen).toBe(3380);
+    expect(order.taxSen).toBe(338);
+    expect(order.totalSen).toBe(3718);
+    expect(order.total).toBe("RM37.18");
+    // The rate rides along with the order, so the receipt still adds up after
+    // the day the rate changes.
+    expect(order.taxRate).toBe(0.1);
     expect(order.customerName).toBe("Aisyah");
     expect(order.reference).toMatch(/^[A-Z]{2}-\d{4}$/);
     expect(order.payment).toBeUndefined();
@@ -355,7 +364,9 @@ describe("rendering", async () => {
     const text = renderCart(await carts.price(cartId));
 
     expect(text).toContain("2x Classic Battered Dory");
-    expect(text).toContain("Total: RM33.80");
+    expect(text).toContain("Subtotal: RM33.80");
+    expect(text).toContain("Tax (10%): RM3.38");
+    expect(text).toContain("Total: RM37.18");
   });
 
   it("omits no-cost default options but keeps paid upgrades", async () => {
@@ -380,5 +391,98 @@ describe("rendering", async () => {
 
     expect(text).toContain(`Order ${order.reference}`);
     expect(text).toContain("Payment pending");
+  });
+});
+
+describe("tax", () => {
+  it("is 10%, rounded to the sen", () => {
+    expect(TAX_RATE).toBe(0.1);
+    expect(orderTotals(1000)).toMatchObject({ subtotalSen: 1000, taxSen: 100, totalSen: 1100 });
+  });
+
+  it("rounds the half-sen up, and never leaves a fraction behind", () => {
+    // RM10.85 is the awkward one: 108.5 sen of tax. It has to land on a whole
+    // sen, because nothing downstream — the order, the provider, the till —
+    // can hold half of one.
+    expect(orderTotals(1085)).toMatchObject({ taxSen: 109, totalSen: 1194, tax: "RM1.09", total: "RM11.94" });
+
+    const cases: [number, number][] = [
+      [0, 0],
+      [1, 0], // 0.1 sen: rounds away entirely
+      [5, 1], // exactly a half: up
+      [14, 1], // 1.4: down
+      [15, 2], // 1.5: up
+      [99, 10],
+      [1085, 109],
+      [1690, 169],
+      [2345, 235], // 234.5: up
+      [3270, 327],
+      [999_99, 10_000],
+    ];
+
+    for (const [subtotalSen, expected] of cases) {
+      const totals = orderTotals(subtotalSen);
+      expect(totals.taxSen, `tax on ${subtotalSen}`).toBe(expected);
+      expect(Number.isInteger(totals.taxSen), `integer tax on ${subtotalSen}`).toBe(true);
+      expect(totals.totalSen, `total on ${subtotalSen}`).toBe(subtotalSen + expected);
+    }
+  });
+
+  it("adds up, for every subtotal from nothing to a big table's order", () => {
+    // The invariant, not a sample of it: subtotal + tax === total, always, and
+    // the tax is never more than half a sen off the true 10%.
+    for (let subtotalSen = 0; subtotalSen <= 20_000; subtotalSen += 1) {
+      const { taxSen, totalSen } = orderTotals(subtotalSen);
+      if (subtotalSen + taxSen !== totalSen) throw new Error(`does not add up at ${subtotalSen}`);
+      if (Math.abs(taxSen - subtotalSen * TAX_RATE) > 0.5) throw new Error(`drifts at ${subtotalSen}`);
+      if (!Number.isInteger(taxSen)) throw new Error(`fractional sen at ${subtotalSen}`);
+    }
+    expect(true).toBe(true);
+  });
+
+  it("is worked out once on the order, not once per line", async () => {
+    // Two lines of RM7.85 would round to 79 sen of tax each — 158 — while the
+    // order's own RM15.70 subtotal is taxed 157. The order-level answer is the
+    // one that has to win: it is the one a customer can check by adding up what
+    // is on the screen. (Every seed price is a round 10 sen, so this case
+    // cannot be built from the menu — which is exactly why it is asserted on
+    // the function rather than through a cart.)
+    const lineTotals = [785, 785];
+    const perLine = lineTotals.reduce((sum, line) => sum + Math.round(line * TAX_RATE), 0);
+    const totals = orderTotals(lineTotals.reduce((sum, line) => sum + line, 0));
+
+    expect(perLine).toBe(158);
+    expect(totals.taxSen).toBe(157);
+
+    // And a real cart takes its tax from its own subtotal, not from its lines.
+    const cart = await carts.create();
+    await carts.addLine(cart.id, { itemId: "drink-teh-ais", quantity: 3 });
+    const priced = await carts.price(cart.id);
+    expect(priced.taxSen).toBe(Math.round(priced.subtotalSen * TAX_RATE));
+    expect(priced.subtotalSen + priced.taxSen).toBe(priced.totalSen);
+  });
+
+  it("carries the same numbers from cart to order to receipt", async () => {
+    const cartId = await cartWithDory(2);
+    const priced = await carts.price(cartId);
+    const order = await orders.confirm({ cartId });
+
+    // The customer is charged what the cart showed them, field for field.
+    expect(order.subtotalSen).toBe(priced.subtotalSen);
+    expect(order.taxSen).toBe(priced.taxSen);
+    expect(order.totalSen).toBe(priced.totalSen);
+    expect(order.subtotal).toBe(priced.subtotal);
+    expect(order.tax).toBe(priced.tax);
+    expect(order.total).toBe(priced.total);
+    expect(order.taxRate).toBe(priced.taxRate);
+  });
+
+  it("charges nothing on an empty cart", async () => {
+    const cart = await carts.create();
+    const priced = await carts.price(cart.id);
+
+    expect(priced.taxSen).toBe(0);
+    expect(priced.totalSen).toBe(0);
+    expect(priced.tax).toBe("RM0.00");
   });
 });

@@ -9,7 +9,7 @@ The agent's behaviour is defined in `.claude/skills/order-track-agent/SKILL.md`.
 | 2 | 2–3 — Cart, checkout, **real payments** | Done |
 | 3+ | 4–6 — Bonus chances, fishing game, order status | Not started |
 
-**315 tests, 15 files.** `npm test`.
+**331 tests, 15 files.** `npm test`.
 
 ## Run it
 
@@ -88,6 +88,11 @@ table and has to load on a bad connection.
   swipe down on its handle.
 - Checkout with the **payment method picker** — Card (Stripe) or E-wallet/QR (Revenue Monster)
 - Order page polling payment status, since payment settles on a webhook
+
+The options sheet also carries **View cart (N items)** once there is something in the cart. It stands
+the sheet down and brings the cart up, then puts it back exactly as it was — a `<dialog>` in the top
+layer cannot be drawn over, and `close()` leaves its DOM untouched, so the ice level stays checked
+and the quantity stays put with no state to save and restore.
 
 Prices are never computed in the browser. It sends item and choice *ids*; the server re-derives
 every price. `tests/web.test.ts` boots this page in jsdom against the real server, so a broken
@@ -282,6 +287,28 @@ rounding. Stripe and RM both take the smallest currency unit, so sen passes thro
 **The server owns pricing.** The browser sends ids; `priceLine` re-derives everything against the
 live menu and re-prices again at `confirm_order`, so a menu change mid-session cannot be exploited.
 A tampered payload carrying its own `unitPriceSen` is ignored — there is a test for exactly that.
+
+**One function works out every total.** `orderTotals` in `src/orders/pricing.ts`:
+
+```
+subtotalSen = Σ line totals (item price + option deltas, × quantity)
+taxSen      = Math.round(subtotalSen * 0.10)
+totalSen    = subtotalSen + taxSen
+```
+
+Everything goes through it — the cart, the confirmed order, and the amount handed to a provider — so
+the number shown and the number charged cannot drift apart. Tax is rounded **once on the subtotal**,
+never per line: rounding each line and summing gives a different answer, and the one a customer can
+check by adding up what is on screen is this one. All three land on the order as their own fields
+(`subtotalSen`, `taxSen`, `totalSen`, plus the `taxRate` they were worked out at), so a receipt
+reprinted after a rate change still adds up.
+
+Stripe gets the tax as **its own line item**, because a Checkout Session's total is the sum of its
+lines and nothing else — and the webhook refuses any `amount_total` that is not `order.totalSen`, so
+charging the subtotal would reject the customer's own payment. Orders written before tax existed
+read back with `taxSen: 0`, which is what they actually paid.
+
+Note that **the staff sales report counts what was collected**, so its takings now include tax.
 
 **Allergen exclusion defaults to `strict`.** Excluding gluten also drops plain chips, because they
 share a fryer with battered fish. The response includes a `withheld` list with a per-item reason,

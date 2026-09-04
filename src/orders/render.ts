@@ -20,7 +20,26 @@ export function renderCart(cart: PricedCart): string {
   if (cart.lines.length === 0) return "Cart's empty.";
 
   const lines = cart.lines.map((line) => `- ${renderLine(line)}`);
-  return `${lines.join("\n")}\n\nTotal: ${cart.total}`;
+  return `${lines.join("\n")}\n\n${renderTotals(cart)}`;
+}
+
+/**
+ * The three money lines, wherever a total is read back.
+ *
+ * Read out in full rather than as one number: a customer told "RM18.59" for
+ * RM16.90 of food will ask why, and the answer should already be on the screen.
+ */
+export function renderTotals(totals: Pick<PricedCart, "subtotal" | "tax" | "taxRate" | "total">): string {
+  return [
+    `Subtotal: ${totals.subtotal}`,
+    `Tax (${formatRate(totals.taxRate)}): ${totals.tax}`,
+    `Total: ${totals.total}`,
+  ].join("\n");
+}
+
+/** "10%" from 0.1, without the trailing zeroes a fixed 2dp would leave. */
+export function formatRate(rate: number): string {
+  return `${Number((rate * 100).toFixed(2))}%`;
 }
 
 /** The full read-back before checkout. */
@@ -32,7 +51,7 @@ export function renderOrder(order: Order): string {
     : `Order ${order.reference} · Table ${order.tableNumber}`;
   const status = order.paymentStatus === "paid" ? "Paid" : `Payment ${order.paymentStatus}`;
 
-  return `${head}\n${lines.join("\n")}\n\nTotal: ${order.total}\n${status}`;
+  return `${head}\n${lines.join("\n")}\n\n${renderTotals(order)}\n${status}`;
 }
 
 /** Everything in the order that someone might be allergic to, deduped. */

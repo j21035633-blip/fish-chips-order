@@ -52,9 +52,12 @@
       </div>
       <div id="cart-body" class="cart-body"></div>
       <div class="cart-foot">
-        <div class="cart-total">
-          <span>Total</span>
-          <strong id="cart-total">RM0.00</strong>
+        <!-- Three lines, not one: a customer who sees RM18.59 for RM16.90 of
+             food should find the answer here rather than at the counter. -->
+        <div class="totals">
+          <div class="totals-row"><span>Subtotal</span><span id="cart-subtotal">RM0.00</span></div>
+          <div class="totals-row"><span id="cart-tax-label">Tax</span><span id="cart-tax">RM0.00</span></div>
+          <div class="totals-row grand"><span>Total</span><strong id="cart-total">RM0.00</strong></div>
         </div>
         <button id="checkout-button" class="primary wide" type="button" disabled>Checkout</button>
       </div>
@@ -75,12 +78,18 @@
         </div>
         <div id="item-dialog-body"></div>
         <footer class="dialog-foot">
-          <div class="qty">
-            <button type="button" class="icon-button" data-qty="-1" aria-label="Fewer">&minus;</button>
-            <output id="item-qty">1</output>
-            <button type="button" class="icon-button" data-qty="1" aria-label="More">+</button>
+          <!-- A way back to the order without abandoning what is being chosen
+               here. Hidden while the cart is empty: there would be nothing to
+               look at. -->
+          <button type="button" id="item-view-cart" class="view-cart" hidden>View cart (0 items)</button>
+          <div class="dialog-actions">
+            <div class="qty">
+              <button type="button" class="icon-button" data-qty="-1" aria-label="Fewer">&minus;</button>
+              <output id="item-qty">1</output>
+              <button type="button" class="icon-button" data-qty="1" aria-label="More">+</button>
+            </div>
+            <button type="button" id="item-add" class="primary">Add — <span id="item-price"></span></button>
           </div>
-          <button type="button" id="item-add" class="primary">Add — <span id="item-price"></span></button>
         </footer>
       </form>
     </dialog>

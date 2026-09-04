@@ -1,4 +1,5 @@
 import { isPlaceholder, type StripeConfig } from "../config/env.js";
+import { formatRate } from "../orders/render.js";
 import type { PaymentMethod } from "../orders/types.js";
 import { hmacHex, simulatedSession, timingSafeEqualHex } from "./simulation.js";
 import {
@@ -107,6 +108,22 @@ export class StripeAdapter implements PaymentAdapter {
       params.set(`line_items[${index}][price_data][unit_amount]`, String(line.unitPriceSen));
       params.set(`line_items[${index}][quantity]`, String(line.quantity));
     });
+
+    // Tax as its own line, so what Stripe collects is `order.totalSen` and not
+    // the subtotal. It has to be a line item rather than a flat amount: a
+    // Checkout Session's total is the sum of its lines and nothing else, and
+    // the webhook refuses any `amount_total` that is not the order's total —
+    // charging the subtotal here would reject the customer's own payment.
+    if (request.order.taxSen > 0) {
+      const index = request.order.lines.length;
+      params.set(`line_items[${index}][price_data][currency]`, "myr");
+      params.set(
+        `line_items[${index}][price_data][product_data][name]`,
+        `Tax (${formatRate(request.order.taxRate)})`,
+      );
+      params.set(`line_items[${index}][price_data][unit_amount]`, String(request.order.taxSen));
+      params.set(`line_items[${index}][quantity]`, "1");
+    }
 
     return params;
   }

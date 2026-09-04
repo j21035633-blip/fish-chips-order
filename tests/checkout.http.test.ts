@@ -142,11 +142,14 @@ describe("checkout flow", async () => {
       await post(`/api/carts/${cartId}/lines`, { itemId: "chips-classic", quantity: 2 }),
     );
     expect(first.cart.subtotalSen).toBe(790 * 2);
-    expect(first.text).toContain("Total: RM15.80");
+    expect(first.text).toContain("Subtotal: RM15.80");
+    expect(first.text).toContain("Tax (10%): RM1.58");
+    expect(first.text).toContain("Total: RM17.38");
 
     const second = await json(await post(`/api/carts/${cartId}/lines`, { itemId: "drink-teh-ais" }));
     expect(second.cart.itemCount).toBe(3);
-    expect(second.cart.total).toBe("RM20.70");
+    expect(second.cart.subtotal).toBe("RM20.70");
+    expect(second.cart.total).toBe("RM22.77");
   });
 
   it("prices options server-side, ignoring anything the client sends", async () => {
@@ -372,7 +375,8 @@ describe("checkout flow", async () => {
     const { cartId } = await json(await post("/api/tools/create_cart"));
     const added = await json(await post("/api/tools/add_to_cart", { cartId, itemId: "combo-classic" }));
 
-    expect(added.cart.total).toBe("RM24.90");
+    expect(added.cart.subtotal).toBe("RM24.90");
+    expect(added.cart.total).toBe("RM27.39");
 
     const confirmed = await json(await post("/api/tools/confirm_order", { cartId }));
     expect(confirmed.order.paymentStatus).toBe("pending");
@@ -452,7 +456,7 @@ describe("checkout flow", async () => {
     const orderId = placed.order.id;
 
     type Overview = {
-      orders: { id: string; lines: unknown[]; total: string }[];
+      orders: { id: string; lines: unknown[]; subtotal: string; tax: string; total: string }[];
       sales: { count: number; timeZone: string };
     };
     const before = (await json(await fetch(`${base}/api/staff/overview`))) as Overview;
@@ -460,7 +464,8 @@ describe("checkout flow", async () => {
     const ticket = before.orders.find((order) => order.id === orderId)!;
     expect(ticket).toMatchObject({ tableNumber: "6", kitchenStatus: "received", paymentStatus: "pending" });
     expect(ticket.lines).toHaveLength(1);
-    expect(ticket.total).toBe("RM33.80");
+    expect(ticket.subtotal).toBe("RM33.80");
+    expect(ticket.total).toBe("RM37.18");
 
     // Pending orders are on the board but not in the takings.
     const countBefore = before.sales.count;

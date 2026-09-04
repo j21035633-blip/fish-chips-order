@@ -230,6 +230,29 @@ Hiding it only moves "do you still do the cod?" to the counter.
 The agent's own `get_menu` tool still hides them by default, because it must never offer something
 the fryer cannot make. That is the one deliberate difference between the two.
 
+## Totals: one function, tax included
+
+`orderTotals(subtotalSen)` in `src/orders/pricing.ts` is **the only place an order total is worked
+out**. `subtotalSen` is the sum of the priced lines (item price + option deltas, × quantity);
+`taxSen = Math.round(subtotalSen * TAX_RATE)` with `TAX_RATE = 0.1`; `totalSen` is the two added.
+Sen are integers throughout — the single `Math.round` is the only place a fraction ever exists.
+
+- **Tax is rounded once, on the order's subtotal, never per line.** Rounding each line and summing
+  gives a different answer; the one a customer can check against what is on their screen is this one.
+- **The order stores all three** plus the `taxRate` they were computed at, so a receipt reprinted
+  after a rate change still adds up. Orders written before tax existed read back with `taxSen: 0` —
+  filled in on read, never by rewriting the record of what was actually charged.
+- **`order.totalSen` is what gets charged.** Stripe receives the tax as its own line item, because a
+  Checkout Session's total is the sum of its lines and nothing else — and `PaymentService` refuses
+  any webhook whose `amount_total` is not `order.totalSen`, so charging the subtotal would reject
+  the customer's own payment. Revenue Monster is handed `order.totalSen` directly.
+- Customer-facing surfaces show three lines (Subtotal / Tax (10%) / Total): the cart sheet, the
+  checkout page, the receipt, and `renderTotals` for the agent's text. The rate is read from the
+  payload, never written into the page.
+- **The staff sales report counts what was collected, so its takings include tax.**
+
+Changing the rate, or adding a service charge, is a change to `orderTotals` and nothing else.
+
 ## The customer cart is two states, never three
 
 `src/web/`. **Empty cart: nothing on screen.** No bar, no sheet, and no reserved strip at the foot of
@@ -250,6 +273,13 @@ Rules worth keeping if you touch this:
   is the dialog element itself. Every dismissal goes through `dismissItem()`, so an abandoned ice
   level or quantity is discarded in exactly one place — nothing is ordered unless Add is tapped.
   **Add a third sheet by reusing this chrome, not by inventing a second dismiss mechanism.**
+- **"View cart (N items)" in the options sheet** stands that sheet down (`close()`, *not* the
+  dismiss path) and opens the cart, then reopens it when the cart closes. A `<dialog>` opened with
+  `showModal()` sits in the top layer, above every z-index on the page, so the cart cannot be drawn
+  over it — and standing it down costs nothing, because `close()` leaves its DOM as it was: the ice
+  level stays checked and the quantity stays put, with no state to save and restore. Navigating away
+  clears the stand-down first, so the options sheet cannot reappear over the checkout page. Hidden
+  while the cart is empty.
 - **Emptying the cart from inside the sheet closes the sheet**, because there is nothing left to
   look at.
 - The order and checkout views call `setCartVisible(false)`: those pages are about an order that is

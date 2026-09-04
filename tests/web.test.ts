@@ -156,7 +156,11 @@ describe("customer page", async () => {
     await settle();
 
     expect(document.getElementById("cart-count")!.textContent).toBe("1");
-    expect(document.getElementById("cart-total")!.textContent).toBe("RM16.90");
+    // The sheet shows the breakdown; the total is what will be charged.
+    expect(document.getElementById("cart-subtotal")!.textContent).toBe("RM16.90");
+    expect(document.getElementById("cart-tax-label")!.textContent).toBe("Tax (10%)");
+    expect(document.getElementById("cart-tax")!.textContent).toBe("RM1.69");
+    expect(document.getElementById("cart-total")!.textContent).toBe("RM18.59");
     expect(document.getElementById("cart-body")!.textContent).toContain("Classic Battered Dory");
     expect((document.getElementById("checkout-button") as HTMLButtonElement).disabled).toBe(false);
   });
@@ -191,7 +195,7 @@ describe("customer page", async () => {
 
     // No keys configured in tests, so both rails advertise test mode.
     expect(view.querySelectorAll(".method-sim")).toHaveLength(2);
-    expect(view.textContent).toContain("Pay RM16.90");
+    expect(view.textContent).toContain("Pay RM18.59");
   });
 
   it("renders an order page for an unknown order without crashing", async () => {
@@ -229,7 +233,7 @@ describe("customer page", async () => {
     // The recovery panel is a full method picker, not a dead end.
     expect(view.textContent).toContain("How would you like to pay?");
     expect(view.querySelectorAll(".method")).toHaveLength(2);
-    expect(view.textContent).toContain("Pay RM16.90");
+    expect(view.textContent).toContain("Pay RM18.59");
   });
 
   it("attaches a payment session when the order page's pay button is used", async () => {
@@ -266,7 +270,7 @@ describe("customer page", async () => {
     const view = document.getElementById("view")!;
     expect(view.textContent).toContain("We couldn't get a payment page from the provider.");
     expect(view.textContent).toContain("How would you like to pay?");
-    expect(view.textContent).toContain("Pay RM16.90");
+    expect(view.textContent).toContain("Pay RM18.59");
     // The dead end this replaces.
     expect(view.textContent).not.toContain("Waiting for payment to confirm");
   });
@@ -445,7 +449,8 @@ describe("cart bar and sheet", async () => {
 
     expect(bar().hidden).toBe(false);
     expect(bar().textContent).toContain("1");
-    expect(document.getElementById("cart-bar-total")!.textContent).toBe("RM16.90");
+    // The bar carries the charged total; the breakdown is one tap away.
+    expect(document.getElementById("cart-bar-total")!.textContent).toBe("RM18.59");
     expect(bar().getAttribute("aria-expanded")).toBe("false");
 
     // Adding does not interrupt browsing — the menu is still what is on screen.
@@ -706,5 +711,136 @@ describe("item options sheet", async () => {
     expect(isOpen()).toBe(false);
     expect(cartCount()).toBe("1");
     expect((document.getElementById("cart-bar") as HTMLElement).hidden).toBe(false);
+  });
+});
+
+describe("view cart from the options sheet", async () => {
+  const dialog = () => document.getElementById("item-dialog") as HTMLElement;
+  const viewCart = () => document.getElementById("item-view-cart") as HTMLButtonElement;
+  const panel = () => document.getElementById("cart-panel") as HTMLElement;
+
+  async function openItem(name: string) {
+    const row = [...document.querySelectorAll("button.item")].find((item) =>
+      item.textContent?.includes(name),
+    ) as HTMLButtonElement;
+    row.click();
+    await settle(2);
+  }
+
+  async function addDory() {
+    await openItem("Classic Battered Dory");
+    (document.getElementById("item-add") as HTMLButtonElement).click();
+    await settle();
+  }
+
+  it("is not offered while the cart is empty", async () => {
+    await bootPage("/");
+    await openItem("Hand-Cut Chips");
+
+    // Nothing to go and look at yet.
+    expect(viewCart().hidden).toBe(true);
+  });
+
+  it("appears with the count once there is something in the cart", async () => {
+    await bootPage("/");
+    await addDory();
+    await openItem("Hand-Cut Chips");
+
+    expect(viewCart().hidden).toBe(false);
+    expect(viewCart().textContent).toBe("View cart (1 item)");
+
+    // Singular and plural, because "1 items" reads like a bug.
+    (document.getElementById("item-add") as HTMLButtonElement).click();
+    await settle();
+    await openItem("Hand-Cut Chips");
+    expect(viewCart().textContent).toBe("View cart (2 items)");
+  });
+
+  it("opens the cart, and comes back with the selection untouched", async () => {
+    await bootPage("/");
+    await addDory();
+    await openItem("Hand-Cut Chips");
+
+    // Mid-customisation: upsized, quantity 3.
+    const large = document.querySelector('#item-dialog-body input[value="large"]') as HTMLInputElement;
+    large.checked = true;
+    large.dispatchEvent(new window.Event("change", { bubbles: true }));
+    const more = document.querySelector('#item-dialog [data-qty="1"]') as HTMLButtonElement;
+    more.click();
+    more.click();
+    expect(document.getElementById("item-qty")!.textContent).toBe("3");
+    expect(document.getElementById("item-price")!.textContent).toBe("RM35.70");
+
+    viewCart().click();
+    await settle(2);
+
+    // The cart is what is on screen, showing the order so far.
+    expect(panel().hidden).toBe(false);
+    expect(document.getElementById("cart-body")!.textContent).toContain("Classic Battered Dory");
+
+    (document.getElementById("cart-close") as HTMLButtonElement).click();
+    await settle(2);
+
+    // And back to exactly where they were — nothing reset, nothing ordered.
+    expect(dialog().hasAttribute("open")).toBe(true);
+    expect(document.getElementById("item-title")!.textContent).toBe("Hand-Cut Chips");
+    expect((document.querySelector('#item-dialog-body input[value="large"]') as HTMLInputElement).checked).toBe(true);
+    expect(document.getElementById("item-qty")!.textContent).toBe("3");
+    expect(document.getElementById("item-price")!.textContent).toBe("RM35.70");
+    expect(document.getElementById("cart-count")!.textContent).toBe("1");
+  });
+
+  it("comes back however the cart was dismissed", async () => {
+    await bootPage("/");
+    await addDory();
+
+    for (const dismiss of [
+      () => (document.getElementById("scrim") as HTMLElement).click(),
+      () => document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    ]) {
+      await openItem("Hand-Cut Chips");
+      viewCart().click();
+      await settle(2);
+      expect(panel().hidden).toBe(false);
+
+      dismiss();
+      await settle(2);
+      expect(dialog().hasAttribute("open")).toBe(true);
+
+      (document.getElementById("item-close") as HTMLButtonElement).click();
+      await settle(2);
+    }
+  });
+
+  it("does not come back when the customer leaves for checkout", async () => {
+    await bootPage("/");
+    await addDory();
+    await openItem("Hand-Cut Chips");
+
+    viewCart().click();
+    await settle(2);
+    (document.getElementById("checkout-button") as HTMLButtonElement).click();
+    await settle();
+
+    // The options sheet must not reappear over the payment page.
+    expect(window.location.pathname).toBe("/checkout");
+    expect(dialog().hasAttribute("open")).toBe(false);
+    expect(panel().hidden).toBe(true);
+  });
+
+  it("shows the tax breakdown on the checkout page it leads to", async () => {
+    await bootPage("/");
+    await addDory();
+    (document.getElementById("cart-bar") as HTMLButtonElement).click();
+    (document.getElementById("checkout-button") as HTMLButtonElement).click();
+    await settle();
+
+    const view = document.getElementById("view")!;
+    expect(view.textContent).toContain("Subtotal");
+    expect(view.textContent).toContain("RM16.90");
+    expect(view.textContent).toContain("Tax (10%)");
+    expect(view.textContent).toContain("RM1.69");
+    // And the button charges the total, not the subtotal.
+    expect(view.textContent).toContain("Pay RM18.59");
   });
 });

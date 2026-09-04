@@ -5,6 +5,9 @@ const view = document.getElementById("view");
 const cartPanel = document.getElementById("cart-panel");
 const cartBody = document.getElementById("cart-body");
 const cartTotalEl = document.getElementById("cart-total");
+const cartSubtotalEl = document.getElementById("cart-subtotal");
+const cartTaxEl = document.getElementById("cart-tax");
+const cartTaxLabelEl = document.getElementById("cart-tax-label");
 const cartCountEl = document.getElementById("cart-count");
 const cartBar = document.getElementById("cart-bar");
 const cartBarTotal = document.getElementById("cart-bar-total");
@@ -17,6 +20,7 @@ const itemDialogBody = document.getElementById("item-dialog-body");
 const itemTitle = document.getElementById("item-title");
 const itemGrip = document.getElementById("item-grip");
 const itemClose = document.getElementById("item-close");
+const itemViewCart = document.getElementById("item-view-cart");
 const itemQtyEl = document.getElementById("item-qty");
 const itemPriceEl = document.getElementById("item-price");
 const itemAddButton = document.getElementById("item-add");
@@ -97,6 +101,38 @@ function centsFromPrice(text) {
   return Math.round(Number(String(text).replace(/[^0-9.-]/g, "")) * 100);
 }
 
+/**
+ * "Tax (10%)". The rate comes back with the cart rather than being written in
+ * here, so it is stated in exactly one place — the server's.
+ */
+function taxLabel(priced) {
+  const rate = priced?.taxRate;
+  return rate === undefined ? "Tax" : `Tax (${Number((rate * 100).toFixed(2))}%)`;
+}
+
+/**
+ * Subtotal, tax and total as three rows, for any view that sums an order up.
+ *
+ * One builder, so the checkout page and the receipt cannot end up showing the
+ * breakdown differently from each other or from the cart sheet.
+ */
+function totalLines(priced) {
+  return [
+    el("div", { class: "summary-line" }, [
+      el("span", { class: "muted", text: "Subtotal" }),
+      el("span", { text: priced.subtotal }),
+    ]),
+    el("div", { class: "summary-line" }, [
+      el("span", { class: "muted", text: taxLabel(priced) }),
+      el("span", { text: priced.tax }),
+    ]),
+    el("div", { class: "summary-total" }, [
+      el("span", { text: "Total" }),
+      el("span", { text: priced.total }),
+    ]),
+  ];
+}
+
 function formatSen(sen) {
   const sign = sen < 0 ? "-" : "";
   const abs = Math.abs(sen);
@@ -159,11 +195,21 @@ function renderCart() {
   const cart = state.cart;
   const lines = cart?.lines ?? [];
   const total = cart?.total ?? "RM0.00";
+  const count = cart?.itemCount ?? 0;
 
-  cartCountEl.textContent = String(cart?.itemCount ?? 0);
+  cartCountEl.textContent = String(count);
   cartTotalEl.textContent = total;
   cartBarTotal.textContent = total;
+  // The bar shows the total, which includes tax; the breakdown that explains it
+  // is one tap away in the sheet.
+  cartSubtotalEl.textContent = cart?.subtotal ?? "RM0.00";
+  cartTaxEl.textContent = cart?.tax ?? "RM0.00";
+  cartTaxLabelEl.textContent = taxLabel(cart);
   checkoutButton.disabled = lines.length === 0;
+
+  // Only offered from the options sheet when there is an order to go back to.
+  itemViewCart.hidden = count === 0;
+  itemViewCart.textContent = `View cart (${count} ${count === 1 ? "item" : "items"})`;
 
   // Nothing in the cart, nothing on screen: no bar, no sheet, and no reserved
   // strip at the bottom of the menu either. An order the customer emptied from
@@ -229,13 +275,32 @@ async function changeQuantity(line, quantity) {
 }
 
 /**
+ * Set while the cart sheet was opened *from* the options sheet, which is put
+ * away for the duration and brought back when the cart closes.
+ *
+ * A <dialog> opened with showModal() sits in the browser's top layer, above
+ * every z-index on the page, so the cart could not be drawn over it — and
+ * stacking a second dialog would mean two ways of opening the cart. Standing
+ * the options sheet down instead costs nothing, because `close()` leaves its
+ * DOM exactly as it was: the ice level stays checked and the quantity stays
+ * put, so there is no state to save and restore and nothing to get wrong.
+ */
+let itemSheetStoodDown = false;
+
+/**
  * Shows or hides the whole cart affordance for a view.
  *
  * Called by every route, so a view never has to remember to put it back.
  */
 function setCartVisible(visible) {
   state.cartVisible = visible;
-  if (!visible) closeCart();
+  if (!visible) {
+    // Leaving the menu entirely. Whatever was half-chosen goes with it, rather
+    // than reappearing over the checkout page.
+    itemSheetStoodDown = false;
+    dismissItem();
+    closeCart();
+  }
   renderCart();
 }
 
@@ -259,6 +324,12 @@ function closeCart() {
   cartPanel.classList.remove("dragging");
   cartBar.setAttribute("aria-expanded", "false");
   document.body.classList.remove("cart-open");
+
+  // Back to what they were in the middle of choosing, untouched.
+  if (itemSheetStoodDown) {
+    itemSheetStoodDown = false;
+    itemDialog.showModal();
+  }
 }
 
 /**
@@ -474,6 +545,20 @@ function updateDialogPrice() {
 
 itemClose.addEventListener("click", dismissItem);
 
+/**
+ * Straight to the order, and back again.
+ *
+ * `close()` rather than `dismissItem()` — deliberately not the dismiss path,
+ * because nothing here is being abandoned: the selection has to be exactly
+ * where it was left when the cart is closed again.
+ */
+itemViewCart.addEventListener("click", () => {
+  if (itemViewCart.hidden) return;
+  itemSheetStoodDown = true;
+  itemDialog.close();
+  openCart();
+});
+
 // The backdrop. A click that lands on the dialog element itself was outside the
 // sheet, because the form fills it edge to edge — that is the standard way to
 // tell "outside" from "inside" on a <dialog>, which has no separate scrim node.
@@ -584,7 +669,9 @@ async function renderCheckoutView() {
           el("span", { text: line.lineTotal }),
         ]),
       ),
-      el("div", { class: "summary-total" }, [el("span", { text: "Total" }), el("span", { text: cart.total })]),
+      // The same three lines as the cart sheet, and the same numbers: the Pay
+      // button below charges `cart.total`, tax included.
+      ...totalLines(cart),
     ]),
 
     el("section", { class: "panel" }, [
@@ -758,10 +845,9 @@ async function renderOrderView(orderId) {
             el("span", { text: line.lineTotal }),
           ]),
         ),
-        el("div", { class: "summary-total" }, [
-          el("span", { text: "Total" }),
-          el("span", { text: order.total }),
-        ]),
+        // This is the receipt, so it shows what was charged and how it was
+        // arrived at — from the order's own stored fields, not recomputed.
+        ...totalLines(order),
       ]),
 
       el("button", { class: "secondary wide", type: "button", text: "Start a new order", onClick: () => navigate("/") }),

@@ -317,8 +317,20 @@ body.has-cart .view { padding-bottom: calc(var(--cart-bar-h) + 24px + env(safe-a
  * breaks first when a sheet is sized by content.
  */
 .cart-foot { padding: 16px; border-top: 1px solid var(--line); padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
-.cart-total { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 17px; }
-.cart-total strong { font-variant-numeric: tabular-nums; }
+/* Subtotal / tax / total, wherever the money is summed up. */
+.totals { margin-bottom: 12px; }
+.totals-row {
+  display: flex; justify-content: space-between; gap: 12px;
+  font-size: 14px; color: var(--ink-soft); padding: 2px 0;
+}
+.totals-row span:last-child, .totals-row strong { font-variant-numeric: tabular-nums; }
+.totals-row.grand {
+  font-size: 17px;
+  color: var(--ink);
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
 
 .cart-line { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .cart-line:last-child { border-bottom: 0; }
@@ -415,10 +427,26 @@ body.cart-open { overflow: hidden; }
    groups an item has. */
 #item-dialog-body { padding: 4px 20px 20px; flex: 1; overflow-y: auto; }
 .dialog-foot {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  display: flex; flex-direction: column; gap: 12px;
   padding: 14px 20px; border-top: 1px solid var(--line);
   padding-bottom: calc(14px + env(safe-area-inset-bottom));
 }
+.dialog-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+/* Quiet, and above the actions rather than beside them: leaving for the cart is
+   not what this sheet is for, but it must not mean losing the choices made in
+   it either. */
+.view-cart {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 650;
+  font-size: 14px;
+  cursor: pointer;
+}
+.view-cart:hover { color: var(--sea); border-color: var(--sea); }
 @media (prefers-reduced-motion: reduce) {
   .dialog { animation: none; }
 }

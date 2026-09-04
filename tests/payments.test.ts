@@ -557,3 +557,111 @@ function request(order: Order, method: "card" | "ewallet" = "card") {
     idempotencyKey: `${order.id}:test`,
   };
 }
+
+describe("what Stripe is asked to charge", () => {
+  /** Sums the line items in a Checkout Session's form body. */
+  function sessionTotalSen(body: URLSearchParams): number {
+    let total = 0;
+    for (let index = 0; body.has(`line_items[${index}][price_data][unit_amount]`); index += 1) {
+      total +=
+        Number(body.get(`line_items[${index}][price_data][unit_amount]`)) *
+        Number(body.get(`line_items[${index}][quantity]`));
+    }
+    return total;
+  }
+
+  /** Builds a cart of the given items, confirms it, and returns the order. */
+  async function orderOf(items: { itemId: string; quantity?: number }[]): Promise<Order> {
+    const cart = await carts.create();
+    for (const item of items) await carts.addLine(cart.id, item);
+    return orders.confirm({ cartId: cart.id });
+  }
+
+  async function stripeBody(order: Order): Promise<URLSearchParams> {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ id: "cs_test_1", url: "https://pay.stripe/x" }));
+    const adapter = new StripeAdapter(liveStripe, BASE_URL, fetchImpl as unknown as typeof fetch);
+    await adapter.createPayment(request(order));
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    return new URLSearchParams(init.body as string);
+  }
+
+  it("charges the total with tax, not the subtotal", async () => {
+    const order = await orderOf([{ itemId: "fish-dory-classic" }]);
+    const body = await stripeBody(order);
+
+    expect(order.subtotalSen).toBe(1690);
+    expect(order.taxSen).toBe(169);
+    expect(order.totalSen).toBe(1859);
+    // The number that actually leaves for Stripe.
+    expect(sessionTotalSen(body)).toBe(order.totalSen);
+    expect(sessionTotalSen(body)).not.toBe(order.subtotalSen);
+  });
+
+  it("sends the tax as its own line, named with the rate", async () => {
+    const order = await orderOf([{ itemId: "fish-dory-classic" }]);
+    const body = await stripeBody(order);
+    const taxIndex = order.lines.length;
+
+    expect(body.get(`line_items[${taxIndex}][price_data][product_data][name]`)).toBe("Tax (10%)");
+    expect(body.get(`line_items[${taxIndex}][price_data][unit_amount]`)).toBe(String(order.taxSen));
+    expect(body.get(`line_items[${taxIndex}][quantity]`)).toBe("1");
+  });
+
+  it("matches totalSen exactly across carts that round differently", async () => {
+    // Each of these lands on a different side of the half-sen, so a rounding
+    // slip anywhere shows up as a mismatch rather than as a rounding argument.
+    const carts_: { itemId: string; quantity?: number }[][] = [
+      [{ itemId: "fish-dory-classic" }],
+      [{ itemId: "chips-classic", quantity: 3 }],
+      [{ itemId: "fish-dory-classic" }, { itemId: "chips-classic" }, { itemId: "drink-teh-ais" }],
+      [{ itemId: "drink-teh-ais", quantity: 7 }],
+      [{ itemId: "combo-classic", quantity: 2 }, { itemId: "chips-classic" }],
+    ];
+
+    for (const items of carts_) {
+      const order = await orderOf(items);
+      const body = await stripeBody(order);
+
+      expect(order.subtotalSen + order.taxSen, JSON.stringify(items)).toBe(order.totalSen);
+      expect(sessionTotalSen(body), JSON.stringify(items)).toBe(order.totalSen);
+    }
+  });
+
+  it("is the amount the webhook then insists on", async () => {
+    // The two halves of the same number: charge the subtotal and the customer's
+    // own payment would come back and be refused as an amount mismatch.
+    const order = await orderOf([{ itemId: "fish-dory-classic" }]);
+    const body = await stripeBody(order);
+
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ id: "cs_test_webhook", url: "https://pay.stripe/x" }));
+    const service = new PaymentService(
+      orders,
+      [new StripeAdapter(liveStripe, BASE_URL, fetchImpl as unknown as typeof fetch)],
+      BASE_URL,
+    );
+    await service.initiate(order.id, "card");
+
+    const stored = (await orders.get(order.id))!;
+    const event = {
+      id: "evt_1",
+      type: "checkout.session.completed",
+      created: Math.floor(Date.now() / 1000),
+      data: {
+        object: {
+          id: stored.payment!.providerPaymentId,
+          payment_status: "paid",
+          amount_total: sessionTotalSen(body),
+          currency: "myr",
+        },
+      },
+    };
+    const raw = JSON.stringify(event);
+    const timestamp = Math.floor(Date.now() / 1000);
+    const outcome = await service.handleWebhook("stripe", raw, {
+      "stripe-signature": `t=${timestamp},v1=${hmacHex(STRIPE_WEBHOOK_SECRET, `${timestamp}.${raw}`)}`,
+    });
+
+    expect(outcome.handled).toBe(true);
+    expect(outcome.order?.paymentStatus).toBe("paid");
+  });
+});

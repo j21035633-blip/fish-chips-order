@@ -13,6 +13,48 @@ import {
 /** A single order line cannot exceed this. Guards against a fat-fingered quantity. */
 export const MAX_LINE_QUANTITY = 20;
 
+/** Tax on the whole order, as a fraction. 10%. */
+export const TAX_RATE = 0.1;
+
+export interface OrderTotals {
+  subtotalSen: number;
+  taxSen: number;
+  totalSen: number;
+  taxRate: number;
+  subtotal: string;
+  tax: string;
+  total: string;
+}
+
+/**
+ * The only place an order total is worked out.
+ *
+ * Every caller goes through here — the cart, the confirmed order, and the
+ * amount handed to a payment provider — so the number the customer is shown and
+ * the number they are charged cannot drift apart. Adding a service charge later
+ * is a change to this function and nothing else.
+ *
+ * Tax is rounded **once, on the order's subtotal**, never per line: rounding
+ * each line and summing gives a different answer, and the one the customer can
+ * check by adding up what is on the screen is this one. Sen are integers all the
+ * way through — `Math.round` on a single multiplication is the only place a
+ * fraction exists, and it never survives the statement.
+ */
+export function orderTotals(subtotalSen: number): OrderTotals {
+  const taxSen = Math.round(subtotalSen * TAX_RATE);
+  const totalSen = subtotalSen + taxSen;
+
+  return {
+    subtotalSen,
+    taxSen,
+    totalSen,
+    taxRate: TAX_RATE,
+    subtotal: formatSen(subtotalSen),
+    tax: formatSen(taxSen),
+    total: formatSen(totalSen),
+  };
+}
+
 /**
  * Turns what the customer asked for into what it costs, validating against the
  * live menu on the way. Pricing never trusts a client-supplied price — the
@@ -83,17 +125,13 @@ export function priceCart(
   tableNumber?: string,
 ): PricedCart {
   const priced = lines.map((line) => priceLine(line, menu));
-  const subtotalSen = priced.reduce((total, line) => total + line.lineTotalSen, 0);
+  const totals = orderTotals(priced.reduce((total, line) => total + line.lineTotalSen, 0));
 
   const cart: PricedCart = {
     cartId,
     lines: priced,
     itemCount: priced.reduce((count, line) => count + line.quantity, 0),
-    subtotalSen,
-    subtotal: formatSen(subtotalSen),
-    // No SST or service charge modelled yet.
-    totalSen: subtotalSen,
-    total: formatSen(subtotalSen),
+    ...totals,
   };
   if (tableNumber !== undefined) cart.tableNumber = tableNumber;
   return cart;
