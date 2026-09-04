@@ -198,3 +198,46 @@ describe("staff dialogs stay shut until opened", () => {
     }
   });
 });
+
+describe("quick add on the pass", () => {
+  const html = readFileSync(resolve(staffDir, "kitchen.html"), "utf8");
+  const css = readFileSync(resolve(staffDir, "assets/staff.css"), "utf8");
+
+  it("makes `hidden` beat any class that sets display", () => {
+    // The staff sheet needs this as much as the customer one: `.cat-items`
+    // sets `display: grid`, which outranks the UA's `[hidden]` rule and left a
+    // section expanded after it had been closed.
+    expect(css).toMatch(/\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+  });
+
+  it("has no button-and-modal entry point left", () => {
+    // The panel is the only way in now; the old dialog is gone entirely.
+    expect(html).not.toContain("New Takeaway Order");
+    expect(html).not.toContain('id="takeaway"');
+    expect(html).not.toContain("takeaway-panel");
+  });
+
+  it("keeps the quick-add panel in the page, not behind anything", () => {
+    // Markup, not script: it has to be there on load rather than built on a tap.
+    expect(html).toContain("Quick add (take away)");
+    expect(html).toContain('id="categories"');
+    expect(html).toContain('id="walkin-lines"');
+    expect(html).toContain('id="create-order"');
+    // And the section is not itself hidden.
+    expect(html).not.toMatch(/<section class="quick-add"[^>]*hidden/);
+  });
+
+  it("still posts to the takeaway route the backend already has", () => {
+    expect(html).toContain("/api/staff/orders/takeaway");
+    expect(html).toContain('JSON.stringify({ cartId: walkin.cartId, payment })');
+    // Built on the customer's own cart endpoints, not a second pricing path.
+    expect(html).toContain("/api/carts");
+  });
+
+  it("reuses the customer's option groups rather than a second modal", () => {
+    expect(html).toContain('from "/menu-browse.js"');
+    expect(html).toContain("optionGroup(group, priceOptions)");
+    // An item with no options must not open an empty sheet.
+    expect(html).toContain("if (item.optionGroups.length === 0)");
+  });
+});

@@ -55,7 +55,7 @@ stylesheet in `src/staff-web/assets/`:
 | Path | View | What it does |
 | --- | --- | --- |
 | `/` | **Dashboard** | Today's orders in Received / Cooking / Ready columns; running Today's Sales Total in the header |
-| `/kitchen` | **Kitchen & Counter** | The same active orders as cards, each with the one action its status calls for; **New Takeaway Order** rings one up at the counter |
+| `/kitchen` | **Kitchen & Counter** | Live orders as cards, each with the one action its status calls for, over an always-visible **Quick add (take away)** panel |
 | `/sales` | **Sales Report** | Date range (defaults to today), summary cards, sales-by-day chart, daily breakdown table |
 | `/menu` | **Menu** | Add / edit / delete items, upload photos, one-tap availability toggle |
 | `/qr` | **Table QR Codes** | Type the tables, generate, print the sheet or download a PNG each |
@@ -124,12 +124,24 @@ Deleting an item leaves a cart that still holds it failing to price with `unknow
 
 ### Takeaway orders, rung up by staff
 
-**New Takeaway Order** on the Kitchen & Counter page opens the customer's own menu — the same item
-cards and the same options sheet, imported from `/menu-browse.js`, which `src/web/app.js` also uses.
-Staff tap items, pick ice level and quantity in the same modal a customer sees, and the order is
-built on the **customer's own cart endpoints** (`POST /api/carts`, `POST /api/carts/:id/lines`), so
-pricing, option validation and tax are one code path and cannot drift. Only the last step is a staff
-route.
+**Quick add (take away)** sits permanently below the live orders on the Kitchen & Counter page — not
+behind a button, because a walk-in is the busiest thing that happens at this counter and it should be
+two taps deep. One tile per menu **category**, expanding **in place** to that category's items in a
+grid; the running order sits beside it the whole time and never leaves the screen.
+
+Tapping an item with options opens the customer's own options sheet (`optionGroup` from
+`/menu-browse.js`, the module `src/web/app.js` imports too), so ice level and quantity are asked in
+the same way a customer is asked. An item with **no** option groups goes straight in — an empty sheet
+would be a tap for nothing. **Create order** then asks cash or card.
+
+The order is built on the **customer's own cart endpoints** (`POST /api/carts`, `POST
+/api/carts/:id/lines`), so pricing, option validation and tax are one code path and cannot drift.
+Only the last step is a staff route.
+
+**Category tiles wear a photo, never an icon.** Categories carry no image of their own — only items
+do, uploaded on the Menu page — so a section shows the first photo among its items, and a section
+whose items have no photo yet gets a plain panel rather than an emoji. Give a section a picture by
+uploading one to an item in it.
 
 ```
 POST /api/staff/orders/takeaway   { cartId, payment: "cash" | "card", customerName? }

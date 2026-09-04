@@ -11,38 +11,65 @@
     <p id="error" class="error" hidden></p>
 
     <main>
-      <div id="cards" class="cards"></div>
-      <p id="empty" class="empty" hidden>Nothing on the pass.</p>
+      <section class="live-orders">
+        <h2 class="section-head">Live orders</h2>
+        <div id="cards" class="cards"></div>
+        <p id="empty" class="empty" hidden>Nothing on the pass.</p>
+      </section>
+
+      <!--
+        Quick add, always on screen. A walk-in is the busiest thing that happens
+        at this counter, so it is not behind a button: the categories are there
+        the moment the page is, and the whole order is two taps deep.
+      -->
+      <section class="quick-add">
+        <div class="section-head-row">
+          <h2 class="section-head">Quick add (take away)</h2>
+          <span id="quick-hint" class="card-count">Tap a section, then an item</span>
+        </div>
+
+        <div class="quick-add-body">
+          <div>
+            <div id="categories" class="cat-tiles"><p class="empty">Loading the menu…</p></div>
+            <!-- The tapped category's items, opened in place under the tiles
+                 rather than in a dialog: the running order stays on screen. -->
+            <div id="cat-items" class="cat-items" hidden></div>
+          </div>
+
+          <aside class="walkin">
+            <h3>This order</h3>
+            <div id="walkin-lines"><p class="empty">Nothing added yet.</p></div>
+            <div id="walkin-totals" class="totals" hidden>
+              <div class="totals-row"><span>Subtotal</span><span id="walkin-subtotal">RM0.00</span></div>
+              <div class="totals-row"><span id="walkin-tax-label">Tax</span><span id="walkin-tax">RM0.00</span></div>
+              <div class="totals-row grand"><span>Total</span><strong id="walkin-total">RM0.00</strong></div>
+            </div>
+            <p id="walkin-error" class="form-error" hidden></p>
+
+            <div class="walkin-actions">
+              <button id="create-order" class="advance" type="button" disabled>Create order</button>
+              <button id="clear-order" class="undo" type="button" hidden>Clear</button>
+            </div>
+            <p id="walkin-note" class="hint" hidden></p>
+          </aside>
+        </div>
+      </section>
     </main>
 
     <!--
-      Ringing up a takeaway at the counter. The menu inside is the customer
-      app's own cards and option groups, imported from /menu-browse.js, so an
-      item looks and behaves the same whoever is tapping it.
+      How it was paid, asked only once there is an order to pay for. Cash and
+      card are the two paths the backend already knows: one settles here, the
+      other waits on the Stripe webhook.
     -->
-    <dialog id="takeaway" class="takeaway-panel" aria-label="New takeaway order">
+    <dialog id="pay" class="pay-dialog" aria-label="Payment method">
       <div class="sheet-head">
-        <h2 id="takeaway-title">New takeaway order</h2>
-        <button id="takeaway-close" class="icon-button" type="button" aria-label="Close">&times;</button>
+        <h2 id="pay-title">How is it being paid?</h2>
+        <button id="pay-close" class="icon-button" type="button" aria-label="Cancel">&times;</button>
       </div>
-
-      <div class="takeaway-body">
-        <div id="takeaway-menu" class="takeaway-menu"><p class="empty">Loading the menu…</p></div>
-        <aside class="takeaway-cart">
-          <h3>This order</h3>
-          <div id="takeaway-lines"><p class="empty">Tap an item to start.</p></div>
-          <div id="takeaway-totals" class="totals" hidden>
-            <div class="totals-row"><span>Subtotal</span><span id="takeaway-subtotal">RM0.00</span></div>
-            <div class="totals-row"><span id="takeaway-tax-label">Tax</span><span id="takeaway-tax">RM0.00</span></div>
-            <div class="totals-row grand"><span>Total</span><strong id="takeaway-total">RM0.00</strong></div>
-          </div>
-          <p id="takeaway-error" class="form-error" hidden></p>
-          <div class="takeaway-pay">
-            <button id="pay-cash" class="advance" type="button" disabled>Cash — paid now</button>
-            <button id="pay-card" class="ghost" type="button" disabled>Card — Stripe</button>
-          </div>
-          <p id="takeaway-note" class="hint" hidden></p>
-        </aside>
+      <div class="pay-body">
+        <p id="pay-total" class="pay-total">RM0.00</p>
+        <button id="pay-cash" class="advance wide" type="button">Cash — paid now</button>
+        <button id="pay-card" class="ghost wide" type="button">Card — Stripe</button>
       </div>
     </dialog>
 
@@ -68,7 +95,7 @@
       import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
       // The customer app's own menu UI. Public because it is menu rendering, the
       // same code /app.js already serves — see the note at the top of that file.
-      import { itemDetails, menuSections, optionGroup, pricedSelection, selectedChoices, formatSen }
+      import { formatSen, itemDetails, optionGroup, pricedSelection, selectedChoices }
         from "/menu-browse.js";
 
       // One card per order still on the pass, each showing the single action its
@@ -85,14 +112,7 @@
       const { slot } = mountStaffChrome({ title: "Kitchen & Counter" });
       const feedState = el("span", { id: "feed-state", class: "feed-state", text: "connecting…" });
       const count = el("span", { class: "card-count", text: "—" });
-      const newTakeaway = el("button", {
-        id: "new-takeaway",
-        class: "advance",
-        type: "button",
-        text: "New Takeaway Order",
-        onClick: () => openTakeaway(),
-      });
-      slot.append(feedState, count, newTakeaway);
+      slot.append(feedState, count);
 
       const cardsEl = document.getElementById("cards");
       const emptyEl = document.getElementById("empty");
@@ -173,78 +193,172 @@
         emptyEl.hidden = active.length > 0;
       }
 
-      // ------------------------------------------------------ takeaway order
+      // --------------------------------------------------- quick add (walk-in)
       //
       // Built on the customer's own cart endpoints — POST /api/carts, then
-      // /api/carts/:id/lines — so pricing, options and validation are the same
-      // code path a QR order takes. Only the last step differs, and that is the
-      // one staff route: /api/staff/orders/takeaway.
+      // /api/carts/:id/lines — so pricing, options, tax and validation are the
+      // same code path a QR order takes. Only the last step differs, and that is
+      // the one staff route: /api/staff/orders/takeaway.
 
-      const panel = document.getElementById("takeaway");
+      const categoriesEl = document.getElementById("categories");
+      const catItemsEl = document.getElementById("cat-items");
+      const walkinLines = document.getElementById("walkin-lines");
+      const walkinTotals = document.getElementById("walkin-totals");
+      const walkinNote = document.getElementById("walkin-note");
+      const walkinError = document.getElementById("walkin-error");
+      const createOrder = document.getElementById("create-order");
+      const clearOrder = document.getElementById("clear-order");
       const optsDialog = document.getElementById("opts");
-      const takeawayMenu = document.getElementById("takeaway-menu");
-      const takeawayLines = document.getElementById("takeaway-lines");
-      const takeawayTotals = document.getElementById("takeaway-totals");
-      const takeawayNote = document.getElementById("takeaway-note");
-      const takeawayError = document.getElementById("takeaway-error");
-      const payCash = document.getElementById("pay-cash");
-      const payCard = document.getElementById("pay-card");
       const optsBody = document.getElementById("opts-body");
-      const optsTitle = document.getElementById("opts-title");
-      const optsQty = document.getElementById("opts-qty");
-      const optsPrice = document.getElementById("opts-price");
+      const payDialog = document.getElementById("pay");
 
-      const ticket = { cartId: null, cart: null, item: null, qty: 1 };
+      const walkin = { cartId: null, cart: null, menu: [], openCategory: null, item: null, qty: 1 };
 
-      function showTakeawayError(message) {
-        takeawayError.textContent = message ?? "";
-        takeawayError.hidden = !message;
+      function showWalkinError(message) {
+        walkinError.textContent = message ?? "";
+        walkinError.hidden = !message;
       }
 
-      async function openTakeaway() {
-        showTakeawayError();
-        takeawayNote.hidden = true;
-        panel.showModal();
+      /**
+       * A category's tile picture.
+       *
+       * Categories carry no image of their own — only items do, uploaded on the
+       * Menu page — so a section wears the first photo among its items. That is
+       * a real photo of the food in that section rather than an icon, and it
+       * follows the menu: change the picture on the Menu page and this follows.
+       */
+      function categoryImage(category) {
+        return category.items.find((item) => item.imageUrl)?.imageUrl;
+      }
 
+      function categoryTile(category) {
+        const image = categoryImage(category);
+        const open = walkin.openCategory === category.id;
+
+        return el(
+          "button",
+          {
+            class: `cat-tile${open ? " open" : ""}`,
+            type: "button",
+            "aria-expanded": open ? "true" : "false",
+            onClick: () => toggleCategory(category.id),
+          },
+          [
+            image
+              ? el("img", { class: "cat-thumb", src: image, alt: "", loading: "lazy" })
+              // No photo uploaded in this section yet. A neutral panel rather
+              // than an emoji, which would be the one thing this must not be.
+              : el("div", { class: "cat-thumb cat-thumb-blank", "aria-hidden": "true" }),
+            el("span", { class: "cat-name", text: category.name }),
+            el("span", { class: "cat-count", text: `${category.items.length} items` }),
+          ],
+        );
+      }
+
+      /** One item in an opened section: picture, name, price. */
+      function itemTile(item) {
+        const sellable = item.available !== false;
+
+        return el(
+          "button",
+          {
+            class: "quick-item",
+            type: "button",
+            "aria-disabled": sellable ? undefined : "true",
+            onClick: () => sellable && pickItem(item),
+          },
+          [
+            item.imageUrl
+              ? el("img", { class: "quick-thumb", src: item.imageUrl, alt: "", loading: "lazy" })
+              : el("div", { class: "quick-thumb cat-thumb-blank", "aria-hidden": "true" }),
+            el("span", { class: "quick-name", text: item.name }),
+            sellable
+              ? el("span", { class: "quick-price", text: item.price })
+              : el("span", { class: "quick-price sold-out", text: "Sold out" }),
+          ],
+        );
+      }
+
+      function toggleCategory(categoryId) {
+        walkin.openCategory = walkin.openCategory === categoryId ? null : categoryId;
+        drawCategories();
+      }
+
+      function drawCategories() {
+        categoriesEl.replaceChildren(...walkin.menu.map(categoryTile));
+
+        const open = walkin.menu.find((category) => category.id === walkin.openCategory);
+        catItemsEl.hidden = open === undefined;
+        if (open) catItemsEl.replaceChildren(...open.items.map(itemTile));
+      }
+
+      /**
+       * Straight in if there is nothing to choose, and through the options sheet
+       * if there is — the same sheet, and the same option groups, the customer
+       * sees. A drink with an ice level asks; a side with no options does not.
+       */
+      function pickItem(item) {
+        if (item.optionGroups.length === 0) {
+          void addLine(item, 1, []);
+          return;
+        }
+
+        walkin.item = item;
+        walkin.qty = 1;
+        document.getElementById("opts-title").textContent = item.name;
+        document.getElementById("opts-qty").textContent = "1";
+        optsBody.replaceChildren(
+          ...itemDetails(item),
+          ...item.optionGroups.map((group) => optionGroup(group, priceOptions)),
+        );
+        priceOptions();
+        optsDialog.showModal();
+      }
+
+      function priceOptions() {
+        if (!walkin.item) return;
+        document.getElementById("opts-price").textContent =
+          formatSen(pricedSelection(walkin.item, optsBody, walkin.qty));
+      }
+
+      /** Opens the walk-in cart on first use; there is no cart until something is added. */
+      async function addLine(item, quantity, selections) {
+        showWalkinError();
         try {
-          // A cart per order, opened fresh: nothing carries over from the last
-          // customer at the counter.
-          const [{ categories }, { cartId }] = await Promise.all([
-            api("/api/menu"),
-            api("/api/carts", { method: "POST", body: JSON.stringify({}) }),
-          ]);
-          ticket.cartId = cartId;
-          takeawayMenu.replaceChildren(...menuSections(categories, openOptions));
-          await refreshTicket();
+          if (!walkin.cartId) {
+            const { cartId } = await api("/api/carts", { method: "POST", body: JSON.stringify({}) });
+            walkin.cartId = cartId;
+          }
+          await api(`/api/carts/${walkin.cartId}/lines`, {
+            method: "POST",
+            body: JSON.stringify({ itemId: item.id, quantity, selections }),
+          });
+          await refreshWalkin();
         } catch (error) {
-          showTakeawayError(error.message);
+          showWalkinError(error.message);
         }
       }
 
-      function closeTakeaway() {
-        panel.close();
-        ticket.cartId = null;
-        ticket.cart = null;
-      }
+      async function refreshWalkin() {
+        if (!walkin.cartId) return resetWalkin();
 
-      async function refreshTicket() {
-        const { cart } = await api(`/api/carts/${ticket.cartId}`);
-        ticket.cart = cart;
+        const { cart } = await api(`/api/carts/${walkin.cartId}`);
+        walkin.cart = cart;
 
         const lines = cart.lines ?? [];
-        takeawayTotals.hidden = lines.length === 0;
-        payCash.disabled = lines.length === 0;
-        payCard.disabled = lines.length === 0;
+        walkinTotals.hidden = lines.length === 0;
+        createOrder.disabled = lines.length === 0;
+        clearOrder.hidden = lines.length === 0;
 
-        document.getElementById("takeaway-subtotal").textContent = cart.subtotal;
-        document.getElementById("takeaway-tax").textContent = cart.tax;
-        document.getElementById("takeaway-tax-label").textContent =
+        document.getElementById("walkin-subtotal").textContent = cart.subtotal;
+        document.getElementById("walkin-tax").textContent = cart.tax;
+        document.getElementById("walkin-tax-label").textContent =
           cart.taxRate === undefined ? "Tax" : `Tax (${Number((cart.taxRate * 100).toFixed(2))}%)`;
-        document.getElementById("takeaway-total").textContent = cart.total;
+        document.getElementById("walkin-total").textContent = cart.total;
 
-        takeawayLines.replaceChildren(
+        walkinLines.replaceChildren(
           lines.length === 0
-            ? el("p", { class: "empty", text: "Tap an item to start." })
+            ? el("p", { class: "empty", text: "Nothing added yet." })
             : el(
                 "div",
                 {},
@@ -253,10 +367,7 @@
                     el("div", { class: "cart-line-main" }, [
                       el("div", { class: "cart-line-name", text: `${line.quantity}× ${line.name}` }),
                       line.options.length > 0
-                        ? el("div", {
-                            class: "opts",
-                            text: line.options.map((option) => option.choiceName).join(", "),
-                          })
+                        ? el("div", { class: "opts", text: line.options.map((o) => o.choiceName).join(", ") })
                         : null,
                     ]),
                     el("span", { class: "cart-line-total", text: line.lineTotal }),
@@ -272,102 +383,119 @@
         );
       }
 
+      function resetWalkin() {
+        walkin.cartId = null;
+        walkin.cart = null;
+        walkinTotals.hidden = true;
+        createOrder.disabled = true;
+        clearOrder.hidden = true;
+        walkinLines.replaceChildren(el("p", { class: "empty", text: "Nothing added yet." }));
+      }
+
       async function removeLine(lineId) {
         try {
-          await api(`/api/carts/${ticket.cartId}/lines/${lineId}`, { method: "DELETE" });
-          await refreshTicket();
+          await api(`/api/carts/${walkin.cartId}/lines/${lineId}`, { method: "DELETE" });
+          await refreshWalkin();
         } catch (error) {
-          showTakeawayError(error.message);
+          showWalkinError(error.message);
         }
       }
 
-      function openOptions(item) {
-        ticket.item = item;
-        ticket.qty = 1;
-        optsTitle.textContent = item.name;
-        optsQty.textContent = "1";
-        optsBody.replaceChildren(
-          ...itemDetails(item),
-          ...item.optionGroups.map((group) => optionGroup(group, priceOptions)),
-        );
-        priceOptions();
-        optsDialog.showModal();
-      }
-
-      function priceOptions() {
-        if (!ticket.item) return;
-        optsPrice.textContent = formatSen(pricedSelection(ticket.item, optsBody, ticket.qty));
-      }
-
+      // ------------------------------------------------------- options sheet
       optsDialog.addEventListener("click", (event) => {
         // The backdrop, same test the customer sheet uses.
         if (event.target === optsDialog) return optsDialog.close();
         const step = event.target.closest("[data-qty]");
         if (!step) return;
-        ticket.qty = Math.min(20, Math.max(1, ticket.qty + Number(step.dataset.qty)));
-        optsQty.textContent = String(ticket.qty);
+        walkin.qty = Math.min(20, Math.max(1, walkin.qty + Number(step.dataset.qty)));
+        document.getElementById("opts-qty").textContent = String(walkin.qty);
         priceOptions();
       });
       document.getElementById("opts-close").addEventListener("click", () => optsDialog.close());
 
       document.getElementById("opts-add").addEventListener("click", async () => {
+        const item = walkin.item;
+        const quantity = walkin.qty;
         const selections = selectedChoices(optsBody).map(({ groupId, choiceId }) => ({ groupId, choiceId }));
-        try {
-          await api(`/api/carts/${ticket.cartId}/lines`, {
-            method: "POST",
-            body: JSON.stringify({ itemId: ticket.item.id, quantity: ticket.qty, selections }),
-          });
-          optsDialog.close();
-          await refreshTicket();
-        } catch (error) {
-          optsDialog.close();
-          showTakeawayError(error.message);
-        }
+        optsDialog.close();
+        await addLine(item, quantity, selections);
+      });
+
+      // ------------------------------------------------------------- payment
+      createOrder.addEventListener("click", () => {
+        document.getElementById("pay-total").textContent = walkin.cart?.total ?? "RM0.00";
+        payDialog.showModal();
+      });
+      document.getElementById("pay-close").addEventListener("click", () => payDialog.close());
+      payDialog.addEventListener("click", (event) => {
+        if (event.target === payDialog) payDialog.close();
       });
 
       async function place(payment) {
-        payCash.disabled = true;
-        payCard.disabled = true;
-        showTakeawayError();
+        payDialog.close();
+        createOrder.disabled = true;
+        showWalkinError();
+        walkinNote.hidden = true;
 
         try {
           const result = await api("/api/staff/orders/takeaway", {
             method: "POST",
-            body: JSON.stringify({ cartId: ticket.cartId, payment }),
+            body: JSON.stringify({ cartId: walkin.cartId, payment }),
           });
           const label = `Takeaway #${result.order.takeawayNumber}`;
 
+          // The cart is spent either way; the next walk-in starts from nothing.
+          resetWalkin();
+          walkin.openCategory = null;
+          drawCategories();
+
           if (payment === "cash") {
-            // Paid and on the pass already; nothing left to wait for.
-            closeTakeaway();
             await feed.refresh();
             showError(`${label} is paid and on the pass.`);
             return;
           }
 
-          // Card: the ticket stays off the board until the webhook says paid,
-          // exactly as it would for a customer paying from their own phone.
-          takeawayNote.hidden = false;
-          takeawayNote.replaceChildren(
+          // Card: it joins the board when the webhook confirms, exactly as a
+          // customer's own payment would.
+          walkinNote.hidden = false;
+          walkinNote.replaceChildren(
             el("strong", { text: `${label} — waiting for payment. ` }),
-            document.createTextNode("It joins the pass when the payment confirms. "),
+            document.createTextNode("It joins the live orders when the payment confirms. "),
             result.payment?.checkoutUrl
-              ? el("a", { href: result.payment.checkoutUrl, target: "_blank", rel: "noopener", text: "Open the payment page" })
+              ? el("a", {
+                  href: result.payment.checkoutUrl,
+                  target: "_blank",
+                  rel: "noopener",
+                  text: "Open the payment page",
+                })
               : document.createTextNode("No payment link came back from the provider."),
           );
         } catch (error) {
-          showTakeawayError(error.message);
-        } finally {
-          const lines = ticket.cart?.lines?.length ?? 0;
-          payCash.disabled = lines === 0;
-          payCard.disabled = lines === 0;
+          showWalkinError(error.message);
+          createOrder.disabled = (walkin.cart?.lines?.length ?? 0) === 0;
         }
       }
 
-      payCash.addEventListener("click", () => place("cash"));
-      payCard.addEventListener("click", () => place("card"));
-      document.getElementById("takeaway-close").addEventListener("click", closeTakeaway);
-      panel.addEventListener("cancel", closeTakeaway);
+      document.getElementById("pay-cash").addEventListener("click", () => place("cash"));
+      document.getElementById("pay-card").addEventListener("click", () => place("card"));
+      clearOrder.addEventListener("click", async () => {
+        // Abandoned at the counter. The cart is dropped rather than emptied —
+        // the next walk-in opens a fresh one on its first tap.
+        resetWalkin();
+        showWalkinError();
+      });
+
+      async function loadQuickAdd() {
+        try {
+          const { categories } = await api("/api/menu");
+          walkin.menu = categories;
+          drawCategories();
+        } catch (error) {
+          categoriesEl.replaceChildren(el("p", { class: "empty", text: error.message }));
+        }
+      }
+
+      void loadQuickAdd();
 
       const feed = orderFeed({
         onData: draw,

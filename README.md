@@ -9,7 +9,7 @@ The agent's behaviour is defined in `.claude/skills/order-track-agent/SKILL.md`.
 | 2 | 2–3 — Cart, checkout, **real payments** | Done |
 | 3+ | 4–6 — Bonus chances, fishing game, order status | Not started |
 
-**355 tests, 15 files.** `npm test`.
+**360 tests, 15 files.** `npm test`.
 
 ## Run it
 
@@ -370,7 +370,7 @@ nav and one stylesheet:
 | Path | View |
 | --- | --- |
 | `/` | **Dashboard** — today's orders in Received / Cooking / Ready columns, running Today's Sales Total |
-| `/kitchen` | **Kitchen & Counter** — the same active orders as cards, one action button each, plus **New Takeaway Order** |
+| `/kitchen` | **Kitchen & Counter** — live orders as cards, one action each, over an always-visible quick-add panel |
 | `/sales` | **Sales Report** — date range, summary cards, sales-by-day chart, daily breakdown table |
 | `/menu` | **Menu** — add, edit, delete items; photo upload; one-tap availability toggle |
 | `/qr` | **Table QR Codes** — generate, print and download the scan-to-order codes |
@@ -494,8 +494,15 @@ and voucher values.
 
 ## Takeaway orders at the counter
 
-**New Takeaway Order** on the Kitchen & Counter page opens the customer's own menu — the same item
-cards and the same options sheet, from `src/web/menu-browse.js`, which the customer app imports too.
+**Quick add (take away)** sits permanently below the live orders on the Kitchen & Counter page. One
+tile per menu category, expanding in place to that section's items; the running order stays beside
+it. An item with options opens the customer's own options sheet (ice level, quantity) from
+`src/web/menu-browse.js`, the module the customer app imports too; an item with none goes straight
+in. **Create order** then asks cash or card.
+
+Category tiles wear a photo, never an icon: categories carry no image of their own, so a section
+shows the first photo among its items — upload one on the Menu page to give a section a picture.
+
 The order is built on the customer's own cart endpoints, so pricing, options and tax are one code
 path; only the last step is a staff route.
 
