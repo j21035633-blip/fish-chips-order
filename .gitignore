@@ -2,12 +2,17 @@ node_modules/
 dist/
 *.log
 
-# Generated table QR codes and their print sheet.
-qr/
+# Generated table QR codes and their print sheet, at the repo root.
+#
+# The leading slash matters. Unanchored, "qr/" matches a directory of that name
+# at ANY depth — which silently swallowed src/qr/, so the module built locally
+# and was missing from the clone Railway builds from. Anything naming one
+# specific output directory gets anchored for that reason.
+/qr/
 
 # Menu-item photos staff have uploaded. On Railway this is a mounted volume;
 # locally it is whatever UPLOADS_DIR points at. Never source.
-uploads/
+/uploads/
 
 # Credentials. .env.example is the only one that ships.
 .env
@@ -15,6 +20,6 @@ uploads/
 !.env.example
 
 # Provider private keys (REVENUE_MONSTER_PRIVATE_KEY_PATH points in here).
-secrets/
+/secrets/
 *.pem
 *.key
