@@ -1,3 +1,4 @@
+import { InMemoryProofRepository, type ProofRepository } from "../game/proofs.js";
 import { MenuService } from "../menu/service.js";
 import { MenuStore } from "../menu/store.js";
 import { config } from "../config/env.js";
@@ -43,6 +44,8 @@ export interface Services {
   menu: MenuService;
   /** Writes, for the staff menu page. Backs `menu` above — same snapshot. */
   menuStore: MenuStore;
+  /** Review and share screenshots, and the queue staff approve them from. */
+  proofs: ProofRepository;
 }
 
 export function createServices(): Services {
@@ -61,7 +64,15 @@ export function createServices(): Services {
   const orders = new OrderService(orderRepository, carts, menu);
   const payments = createPaymentService(orders);
 
-  return { carts, orders, payments, storage: mongo ?? memoryStorage(), menu, menuStore };
+  return {
+    carts,
+    orders,
+    payments,
+    storage: mongo ?? memoryStorage(),
+    menu,
+    menuStore,
+    proofs: mongo ? mongo.proofs() : new InMemoryProofRepository(),
+  };
 }
 
 /** Nothing to open or close; the maps live and die with the process. */

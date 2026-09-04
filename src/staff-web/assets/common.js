@@ -94,6 +94,9 @@ export function orderFeed({
   onData,
   onError,
   onState,
+  // The board is the usual caller, so it is the default; the approvals queue
+  // points the same poller at its own endpoint rather than growing a second one.
+  path = "/api/staff/overview",
   intervalMs = 2000,
   staleAfterMs = 8000,
   maxIntervalMs = 30000,
@@ -127,7 +130,7 @@ export function orderFeed({
       options.signal = AbortSignal.timeout(requestTimeoutMs);
     }
 
-    const data = await api("/api/staff/overview", options);
+    const data = await api(path, options);
     lastOk = Date.now();
     failures = 0;
     onData(data);

@@ -13,6 +13,7 @@ import {
   pricedSelection,
   selectedChoices as choicesIn,
 } from "./menu-browse.js";
+import { mountFishing } from "./fishing.js";
 
 const view = document.getElementById("view");
 const cartPanel = document.getElementById("cart-panel");
@@ -38,6 +39,14 @@ const itemQtyEl = document.getElementById("item-qty");
 const itemPriceEl = document.getElementById("item-price");
 const itemAddButton = document.getElementById("item-add");
 const tableBadge = document.getElementById("table-badge");
+const cartDiscountRow = document.getElementById("cart-discount-row");
+const cartDiscountEl = document.getElementById("cart-discount");
+const chancePill = document.getElementById("chance-pill");
+const chanceText = document.getElementById("chance-text");
+const earn = document.getElementById("earn");
+const earnNote = document.getElementById("earn-note");
+const proofFile = document.getElementById("proof-file");
+const fishDialog = document.getElementById("fish");
 
 const CART_KEY = "fishchips.cartId";
 // The table survives checkout: the customer is still sitting there, so a second
@@ -51,6 +60,8 @@ const state = {
   dialogItem: null,
   dialogQty: 1,
   pendingOrder: null,
+  /** The chance ledger, as the server last reported it. */
+  chances: null,
   /**
    * Whether this view has a cart to show at all.
    *
@@ -130,6 +141,7 @@ async function ensureCart() {
       const { cart } = await api(`/api/carts/${stored}`);
       setTable(cart.tableNumber ?? null);
       state.cart = cart;
+      void refreshChances();
       return cart;
     } catch (error) {
       // A restarted server drops in-memory carts; quietly start a new one.
@@ -157,6 +169,7 @@ async function startFreshCart(table) {
   const { cart } = await api(`/api/carts/${cartId}`);
   state.cart = cart;
   renderCart();
+  void refreshChances();
   return cart;
 }
 
@@ -188,6 +201,13 @@ function renderCart() {
   cartTaxEl.textContent = cart?.tax ?? "RM0.00";
   cartTaxLabelEl.textContent = taxLabel(cart);
   checkoutButton.disabled = lines.length === 0;
+
+  // The rewards line appears only when something was won, so an ordinary order
+  // still reads as three lines and not four.
+  const discountSen = cart?.discountSen ?? 0;
+  cartDiscountRow.hidden = discountSen === 0;
+  if (discountSen > 0) cartDiscountEl.textContent = `−${cart.discount}`;
+  earn.hidden = lines.length === 0;
 
   // Only offered from the options sheet when there is an order to go back to.
   itemViewCart.hidden = count === 0;
@@ -360,6 +380,174 @@ function trackSheetDrag(sheet, grip, dismiss) {
   grip.addEventListener("pointerup", end);
   grip.addEventListener("pointercancel", end);
 }
+
+// ------------------------------------------------------------- the fishing
+//
+// Chances live on the server, on this session's cart. This half of it does two
+// things: show what the customer has, and let them earn more. It never decides
+// what a cast is worth — see `fishing.js` and `/api/order/fish/play`.
+
+/**
+ * Polls the chance ledger while something is waiting on a staff member.
+ *
+ * There is no WebSocket in this project — the staff boards have always short
+ * polled — so this is the customer's half of the same pattern. It runs only
+ * while a proof is pending, because that is the only thing that can change
+ * without the customer touching anything; the rest of the time it costs nothing.
+ */
+let chanceTimer = null;
+
+function watchChances() {
+  clearTimeout(chanceTimer);
+  if (!state.chances?.chancesPending) return;
+  chanceTimer = setTimeout(() => void refreshChances(), 4000);
+}
+
+async function refreshChances() {
+  if (!state.cart?.cartId) return;
+  try {
+    state.chances = await api(`/api/order/chances?cartId=${encodeURIComponent(state.cart.cartId)}`);
+    renderChances();
+  } catch (error) {
+    // A poll that fails is not worth a banner; the next one will do.
+    console.warn(error);
+  }
+  watchChances();
+}
+
+function renderChances() {
+  const ledger = state.chances;
+  const available = ledger?.chances ?? 0;
+  const pending = ledger?.chancesPending ?? 0;
+
+  // Nothing earned, nothing pending: no pill. A customer who has not played
+  // should not be nagged by a floating button.
+  chancePill.hidden = available === 0 && pending === 0;
+  chancePill.disabled = available === 0;
+
+  if (available > 0) {
+    chanceText.textContent = available === 1 ? "1 chance" : `${available} chances`;
+    chancePill.classList.remove("waiting");
+  } else if (pending > 0) {
+    chanceText.textContent = pending === 1 ? "1 pending approval…" : `${pending} pending approval…`;
+    chancePill.classList.add("waiting");
+  }
+
+  // Each trigger is good once, so a spent button says so rather than failing.
+  const claimed = ledger?.claimed ?? [];
+  markEarnButton("earn-review", claimed.includes("review"), ledger, "review");
+  markEarnButton("earn-share", claimed.includes("share"), ledger, "share");
+  const contactDone = claimed.includes("register");
+  document.getElementById("earn-contact").disabled = contactDone;
+  document.getElementById("earn-contact-go").disabled = contactDone;
+  earnNote.textContent = claimed.includes("spend")
+    ? "RM50 spent — chance added."
+    : "Spend RM50 and one is added automatically.";
+}
+
+function markEarnButton(id, claimed, ledger, type) {
+  const button = document.getElementById(id);
+  const proof = ledger?.proofs?.find((entry) => entry.type === type);
+  button.disabled = claimed;
+  if (!claimed) return;
+  button.textContent = proof?.status === "pending" ? "Waiting for staff…" : "Chance added";
+}
+
+/**
+ * Opens the place a proof comes from, then asks for the screenshot.
+ *
+ * The share sheet and the review page are the customer's own apps; we cannot
+ * see what happens in them, which is exactly why a human looks at a screenshot
+ * afterwards rather than this trying to verify anything.
+ */
+async function earnByProof(type) {
+  if (type === "review") {
+    // A real deployment points this at the shop's own Google listing.
+    window.open("https://search.google.com/local/writereview?placeid=anchor-and-batter", "_blank", "noopener");
+  } else if (navigator.share) {
+    await navigator.share({
+      title: "Anchor & Batter",
+      text: "Ordering from Anchor & Batter",
+      url: location.origin,
+    }).catch(() => {});
+  } else {
+    window.open(`https://wa.me/?text=${encodeURIComponent(`Ordering from Anchor & Batter — ${location.origin}`)}`, "_blank", "noopener");
+  }
+
+  // Then the screenshot. One picker, told which type it is collecting for.
+  proofFile.dataset.proofType = type;
+  proofFile.value = "";
+  proofFile.click();
+}
+
+proofFile.addEventListener("change", async () => {
+  const file = proofFile.files?.[0];
+  const type = proofFile.dataset.proofType;
+  if (!file || !type || !state.cart?.cartId) return;
+
+  const body = new FormData();
+  body.set("cartId", state.cart.cartId);
+  body.set("type", type);
+  body.set("image", file);
+
+  try {
+    // No content-type header: the browser sets the multipart boundary itself.
+    const response = await fetch("/api/order/proof", { method: "POST", body });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message ?? payload.error ?? "Upload failed");
+
+    state.chances = payload.chances;
+    renderChances();
+    watchChances();
+  } catch (error) {
+    alert(error.message);
+  }
+});
+
+document.getElementById("earn-review").addEventListener("click", () => void earnByProof("review"));
+document.getElementById("earn-share").addEventListener("click", () => void earnByProof("share"));
+
+document.getElementById("earn-contact-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const contact = document.getElementById("earn-contact").value.trim();
+  if (!contact || !state.cart?.cartId) return;
+
+  try {
+    state.chances = await api("/api/order/chances/register", {
+      method: "POST",
+      body: JSON.stringify({ cartId: state.cart.cartId, contact }),
+    });
+    renderChances();
+  } catch (error) {
+    alert(error.message);
+  }
+});
+
+const fishing = mountFishing({
+  dialog: fishDialog,
+  /** The one call that spends a chance. The server rolls; this only asks. */
+  onPlay: async () => {
+    const result = await api("/api/order/fish/play", {
+      method: "POST",
+      body: JSON.stringify({ cartId: state.cart.cartId }),
+    });
+    // The cart comes back already carrying the reward, so the total on screen
+    // is right the moment the animation finishes.
+    state.chances = result.chances;
+    setCart(result.cart);
+    return result;
+  },
+  onFinished: () => {
+    renderChances();
+    // Straight to the order, so the customer sees what it did to the total.
+    openCart();
+  },
+});
+
+chancePill.addEventListener("click", () => {
+  if ((state.chances?.chances ?? 0) > 0) fishing.open();
+});
+fishDialog.querySelector("#fish-close").addEventListener("click", () => fishDialog.close());
 
 // -------------------------------------------------------------- menu view
 
@@ -887,3 +1075,4 @@ checkoutButton.addEventListener("click", () => navigate("/checkout"));
 window.addEventListener("popstate", route);
 
 route();
+

@@ -1,3 +1,4 @@
+import type { Reward } from "../game/rewards.js";
 import type { Allergen } from "../menu/types.js";
 
 /**
@@ -54,7 +55,27 @@ export interface CartLine {
   quantity: number;
   selections: OptionSelection[];
   note?: string;
+  /**
+   * Set when the line came from a won reward rather than from a tap.
+   *
+   * Prices at zero, options included: a free drink is free however it is
+   * garnished. Holds the reward id so removing the reward removes the line.
+   */
+  freeFromReward?: string;
 }
+
+/**
+ * The one-time things a session can claim a fishing chance for.
+ *
+ * Kept as a list of claimed keys rather than four booleans so a proof can claim
+ * under its own id — a second review screenshot is a different proof, but the
+ * *review* slot is still only good once.
+ */
+export const CHANCE_TRIGGERS = ["spend", "register", "review", "share"] as const;
+export type ChanceTrigger = (typeof CHANCE_TRIGGERS)[number];
+
+/** Spend this much on food, before tax, and the session earns a cast. */
+export const SPEND_CHANCE_THRESHOLD_SEN = 5000;
 
 export interface Cart {
   id: string;
@@ -68,6 +89,29 @@ export interface Cart {
   tableNumber?: string;
   createdAt: string;
   updatedAt: string;
+
+  /**
+   * Fishing chances, held on the cart because the cart *is* the session: it is
+   * created by the scan, keyed to the browser, and already the thing every
+   * other per-customer fact hangs off. Nothing here is keyed by table, so two
+   * people at one table earn and spend their own casts.
+   */
+  chances: number;
+  /** Submitted, waiting on a staff member to look at the screenshot. */
+  chancesPending: number;
+  chancesUsed: number;
+  /** Which one-time triggers this session has already claimed. */
+  claimed: ChanceTrigger[];
+  /**
+   * A phone number or an email, captured in exchange for a chance.
+   *
+   * Stored as the customer typed it and nothing more — no consent flag, no
+   * unsubscribe, no marketing list. It is a contact for *this order*, and
+   * anything beyond that would need a consent model this does not have.
+   */
+  contact?: string;
+  /** What has been caught. Frozen at the moment of the catch — see `Reward`. */
+  rewards: Reward[];
 }
 
 /**
@@ -130,7 +174,12 @@ export interface PricedCart {
   itemCount: number;
   subtotalSen: number;
   subtotal: string;
-  /** Tax on the subtotal, rounded once for the whole order. See `orderTotals`. */
+  /** What the fishing rewards take off, before tax. Zero when nothing was won. */
+  discountSen: number;
+  discount: string;
+  /** The rewards behind that discount, so the page can name each one. */
+  rewards: Reward[];
+  /** Tax on the subtotal *after* the discount, rounded once. See `orderTotals`. */
   taxSen: number;
   tax: string;
   /** The fraction `taxSen` was worked out at, so a stored order still explains
@@ -165,6 +214,10 @@ export interface Order {
   lines: PricedLine[];
   itemCount: number;
   subtotalSen: number;
+  /** Carried from the cart, so the receipt shows what was knocked off and why. */
+  discountSen: number;
+  discount: string;
+  rewards: Reward[];
   taxSen: number;
   totalSen: number;
   /** The rate this order was taxed at, kept with it so a receipt reprinted after

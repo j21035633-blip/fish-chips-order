@@ -9,7 +9,7 @@ The agent's behaviour is defined in `.claude/skills/order-track-agent/SKILL.md`.
 | 2 | 2–3 — Cart, checkout, **real payments** | Done |
 | 3+ | 4–6 — Bonus chances, fishing game, order status | Not started |
 
-**360 tests, 15 files.** `npm test`.
+**381 tests, 16 files.** `npm test`.
 
 ## Run it
 
@@ -216,6 +216,11 @@ DELETE /api/carts/:cartId/lines/:lineId
 
 POST   /api/orders                           { cartId, customerName? }
 GET    /api/orders/:orderId
+GET    /api/order/chances?cartId=            # the session own chance ledger
+POST   /api/order/chances/register           { cartId, contact }
+POST   /api/order/proof                      # multipart: cartId, type, image
+POST   /api/order/fish/play                  { cartId }
+
 GET    /api/payments/methods
 POST   /api/orders/:orderId/payment          { method: "card" | "ewallet" }
 
@@ -229,6 +234,9 @@ PATCH  /api/staff/orders/:orderId/status     { status: "received"|"cooking"|"rea
 GET    /api/staff/sales-report?start_date=2026-09-01&end_date=2026-09-07
 
 POST   /api/staff/orders/takeaway            { cartId, payment: "cash" | "card" }
+GET    /api/staff/proofs?status=pending      # the approval queue
+PATCH  /api/staff/proofs/:id/approve         # + 1 chance on that session
+PATCH  /api/staff/proofs/:id/reject          # no chance, trigger released
 GET    /api/staff/qr-codes?tables=1-12       # table codes as PNG data URIs
 
 GET    /api/staff/menu-items                 # every item, sold-out ones included
@@ -364,7 +372,7 @@ than by assuming an offset — the offset for a zone is itself a function of the
 
 ## Staff area
 
-Five views under `STAFF_DASHBOARD_PATH` (default `/staff`), behind one shared password, sharing one
+Six views under `STAFF_DASHBOARD_PATH` (default `/staff`), behind one shared password, sharing one
 nav and one stylesheet:
 
 | Path | View |
@@ -374,6 +382,7 @@ nav and one stylesheet:
 | `/sales` | **Sales Report** — date range, summary cards, sales-by-day chart, daily breakdown table |
 | `/menu` | **Menu** — add, edit, delete items; photo upload; one-tap availability toggle |
 | `/qr` | **Table QR Codes** — generate, print and download the scan-to-order codes |
+| `/approvals` | **Approvals** — review and share screenshots waiting on a yes or a no |
 | `/login` | **Sign in** — the one page outside the gate; no nav, one password field |
 
 Each view is its own document rather than a client-side router, so a tablet on the pass reloads into
@@ -523,3 +532,46 @@ not. That was the existing choice for table orders and is deliberately unchanged
 
 Both boards badge anything not going to a table, and the sales report splits its takings into
 dine-in and takeaway.
+
+## The fishing game
+
+A customer earns a **chance** four ways, each once per session — the session being their cart:
+
+| Trigger | How | Lands as |
+| --- | --- | --- |
+| Spend | Subtotal reaches RM50 | available at once |
+| Contact | A phone or email, handed over at checkout | available at once |
+| Review | A screenshot of a Google review | **pending** until staff approve |
+| Share | A screenshot of a social post | **pending** until staff approve |
+
+The contact is a string on the cart and nothing more — **no consent flag, no unsubscribe, no
+mailing list**. Anything beyond "reach this customer about this order" would need a consent model
+this project does not have.
+
+Screenshots go through the same image module as the menu photos — same 5 MB cap, same formats, same
+refusal of SVG — into `uploads/proofs/`. **The same Railway volume caveat applies**: without a
+volume at `/app/uploads`, a redeploy leaves staff judging broken images.
+
+Staff work them at **`/approvals`**. An approval moves one chance from pending to available **on that
+customer's session and no other**; a rejection grants nothing and frees the slot for a better photo.
+
+**The server rolls, applies and returns; the client only animates.**
+
+| Tier | Weight | Reward |
+| --- | --- | --- |
+| small_fry | 55% | RM2 off |
+| uncommon | 25% | 10% off the subtotal |
+| rare | 15% | a free drink, as a real RM0 line |
+| jackpot | 5% | RM10 off |
+
+Every tier is a real reward — there is no miss. Discounts come off **before tax**, clamped so two
+rewards cannot take an order below zero; a free item is a real line that prices at zero and still
+reaches the kitchen. The reward is on the cart before the play responds, so the total on screen and
+the amount the provider is asked for are the same number.
+
+A discounted order goes to **Stripe as a single line item** at the order total: a Checkout Session's
+total is the sum of its lines, Stripe has no negative line, and an itemised list plus a reward would
+charge the pre-reward amount — which our own webhook then refuses as a mismatch.
+
+Live updates are polling, not a WebSocket: the customer page polls its own chance ledger only while
+something of theirs is pending, and the Approvals view uses the same poller the boards do.

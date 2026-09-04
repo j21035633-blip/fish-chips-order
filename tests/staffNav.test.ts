@@ -33,7 +33,7 @@ beforeEach(() => {
 describe("staff nav", () => {
   it("offers every view, in order", () => {
     const labels = [...nav.staffNav().querySelectorAll("a")].map((link: Element) => link.textContent);
-    expect(labels).toEqual(["Dashboard", "Kitchen & Counter", "Sales Report", "Menu", "Table QR Codes"]);
+    expect(labels).toEqual(["Dashboard", "Kitchen & Counter", "Sales Report", "Menu", "Table QR Codes", "Approvals"]);
   });
 
   it("builds links from the path the area is mounted at", () => {
@@ -44,12 +44,20 @@ describe("staff nav", () => {
       "/staff-a8f3k2m9/sales",
       "/staff-a8f3k2m9/menu",
       "/staff-a8f3k2m9/qr",
+      "/staff-a8f3k2m9/approvals",
     ]);
 
     // The mount point is configurable, so nothing may be hard-coded.
     mountAs("dashboard", "/staff");
     const moved = [...nav.staffNav().querySelectorAll("a")].map((link: Element) => link.getAttribute("href"));
-    expect(moved).toEqual(["/staff", "/staff/kitchen", "/staff/sales", "/staff/menu", "/staff/qr"]);
+    expect(moved).toEqual([
+      "/staff",
+      "/staff/kitchen",
+      "/staff/sales",
+      "/staff/menu",
+      "/staff/qr",
+      "/staff/approvals",
+    ]);
   });
 
   it("marks exactly the view the page is, on each of the three", () => {
@@ -59,6 +67,7 @@ describe("staff nav", () => {
       ["sales", "Sales Report"],
       ["menu", "Menu"],
       ["qr", "Table QR Codes"],
+      ["approvals", "Approvals"],
     ];
     for (const [view, expected] of views) {
       mountAs(view);
@@ -82,7 +91,7 @@ describe("staff nav", () => {
   });
 
   it("puts a log out button on every view, last in the header", () => {
-    for (const view of ["dashboard", "kitchen", "sales", "menu", "qr"]) {
+    for (const view of ["dashboard", "kitchen", "sales", "menu", "qr", "approvals"]) {
       mountAs(view);
       const { header } = nav.mountStaffChrome({ title: "Anything" });
 
@@ -102,6 +111,7 @@ describe("staff page markup", () => {
     ["sales.html", "sales"],
     ["menu.html", "menu"],
     ["qr.html", "qr"],
+    ["approvals.html", "approvals"],
     ["login.html", "login"],
   ];
 

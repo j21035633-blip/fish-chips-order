@@ -32,24 +32,27 @@ The plan called for FastAPI + Next.js. What actually shipped is Node, and new wo
    confirmed orders, table carried from the scan onto the ticket
 3. **Payments** — Stripe (cards) + Revenue Monster (e-wallets/DuitNow) behind a `PaymentAdapter`,
    webhooks with real signature verification, simulated when no credentials are configured
-4. **Staff area** — five views: kitchen status, daily sales total, sales reporting, menu management
-   and table QR codes, all behind one shared password. See *Staff area* and *Staff auth* below.
+4. **Staff area** — six views: kitchen status, daily sales total, sales reporting, menu management,
+   table QR codes and the proof-approval queue, all behind one shared password. See *Staff area* and
+   *Staff auth* below.
+5. **Fishing game** — session-scoped chances, four earning triggers, staff-approved review/share
+   proofs, and a server-rolled weighted reward applied to the cart. See *The fishing game* below.
 
 ### Not built yet
-5. POS adapter — behind a `POSAdapter` interface so the backend is swappable. **[DECISION NEEDED]**
+6. POS adapter — behind a `POSAdapter` interface so the backend is swappable. **[DECISION NEEDED]**
    Loyverse, Square, something local, or none yet — start with a mock adapter that logs + prints a ticket
-6. Customer-facing order status tracking (`get_order_status`) — staff set the status, but the
+7. Customer-facing order status tracking (`get_order_status`) — staff set the status, but the
    customer cannot yet watch it. Reuses the same field the staff pages update.
-7. Fishing mini-game + voucher generation. **[DECISION NEEDED]** guaranteed reward per order vs.
-   true random chance of nothing
-8. Staff voucher redemption screen
+8. **Vouchers for a *next* visit.** The game's rewards apply to the order being built, in this
+   session; nothing yet issues a redeemable code that survives checkout, and there is no staff
+   redemption screen. That is the half of the original gamification spec still outstanding.
 9. AI agent conversational layer ("Order & Track") on top of the above
 
 Ask before deciding anything not specified here (exact menu items, styling details, etc.).
 
 ## Staff area
 
-Five views plus a login screen under `STAFF_DASHBOARD_PATH` (default `/staff`), sharing one nav and one
+Six views plus a login screen under `STAFF_DASHBOARD_PATH` (default `/staff`), sharing one nav and one
 stylesheet in `src/staff-web/assets/`:
 
 | Path | View | What it does |
@@ -59,10 +62,11 @@ stylesheet in `src/staff-web/assets/`:
 | `/sales` | **Sales Report** | Date range (defaults to today), summary cards, sales-by-day chart, daily breakdown table |
 | `/menu` | **Menu** | Add / edit / delete items, upload photos, one-tap availability toggle |
 | `/qr` | **Table QR Codes** | Type the tables, generate, print the sheet or download a PNG each |
+| `/approvals` | **Approvals** | Review and share screenshots waiting on a yes or a no — see *The fishing game* |
 | `/login` | **Sign in** | The one page outside the gate. No nav, one password field — see *Staff auth* |
 
 Each view is its own document rather than a client-side router, so a tablet on the pass reloads into
-the view it was showing. Add a sixth view by adding one entry to `STAFF_VIEWS` in
+the view it was showing. Add a seventh view by adding one entry to `STAFF_VIEWS` in
 `src/staff-web/assets/nav.js`, one HTML file, and one route — the nav is defined once.
 
 The mount path is substituted into each page at serve time (`{{STAFF_BASE}}` → the configured path),
@@ -175,6 +179,86 @@ existing choice and is deliberately untouched.
 Both boards badge anything not going to a table (`orderLabel` / `takeawayTag` in `assets/common.js`),
 and the sales report splits its takings into `dineIn` and `takeaway` — by where the food went, so a
 QR order with no table counts as a counter order.
+
+### The fishing game, chances, and the approval queue
+
+Session-scoped, where the **session is the cart** — it is created by the scan, keyed to the browser,
+and already the thing every other per-customer fact hangs off. Two people at one table have two
+carts and therefore two independent chance ledgers. `Cart` carries `chances`, `chancesPending`,
+`chancesUsed`, `claimed[]` and `rewards[]`.
+
+**Earning a chance.** Four triggers, each good **once per session**, tracked by the `claimed` list:
+
+| Trigger | How | Lands as |
+| --- | --- | --- |
+| `spend` | Subtotal reaches **RM50** (`SPEND_CHANCE_THRESHOLD_SEN`) | `chances` immediately |
+| `register` | `POST /api/order/chances/register { cartId, contact }` | `chances` immediately |
+| `review` | Screenshot of a Google review | `chancesPending` until staff approve |
+| `share` | Screenshot of a social post | `chancesPending` until staff approve |
+
+The spend check runs on **every** cart mutation, not only on add — someone who crosses RM50 by
+bumping a quantity has crossed it just the same — and the claim list makes it idempotent, so
+crossing, dropping under and crossing again is still one chance.
+
+**Contact capture is not a mailing list.** `cart.contact` is a string and nothing else: no consent
+flag, no unsubscribe, no marketing scope. Anything beyond "reach this customer about this order"
+needs a consent model this project does not have — do not quietly grow one here.
+
+**Proofs and the Approvals view.** `POST /api/order/proof` (multipart: `cartId`, `type`, `image`)
+saves the screenshot **through the same image module as the menu photos** — same 5 MB cap, same
+JPEG/PNG/WebP/GIF/AVIF list, same SVG refusal, differing only by subdirectory (`uploads/proofs/`).
+**The same Railway volume caveat therefore applies**: without a persistent volume mounted at
+`/app/uploads`, these screenshots vanish on the next redeploy and a staff member opening the queue
+sees a broken image with nothing to judge.
+
+The chance is claimed **at submission**, not at approval, so a screenshot cannot be resubmitted while
+one is already in the queue. A rejection frees the slot again so a better photo can be sent.
+
+Staff work the queue at **`/approvals`**, the sixth staff view:
+
+```
+GET   /api/staff/proofs?status=pending
+PATCH /api/staff/proofs/{id}/approve   → chancesPending − 1, chances + 1, on that cart
+PATCH /api/staff/proofs/{id}/reject    → chancesPending − 1, no chance, trigger released
+```
+
+The chance lands on `proof.cartId` and nowhere else — that scoping is what keeps one customer's
+approval off everybody else's counter, and there is a test whose whole job is to prove it. A second
+tap on an already-decided proof is a no-op, because two tablets share one queue.
+
+**The play is server-authoritative.** `POST /api/order/fish/play { cartId }` spends one chance (400
+`no_chances` if there are none), rolls a tier, applies the reward to the cart, and returns the tier
+so the client can animate it. Nothing in the request influences the outcome; the client picks
+nothing and discounts nothing.
+
+| Tier | Weight | Reward |
+| --- | --- | --- |
+| `small_fry` | 55% | RM2 off |
+| `uncommon` | 25% | 10% off the subtotal |
+| `rare` | 15% | A free drink, added as a real RM0 line |
+| `jackpot` | 5% | RM10 off |
+
+**Every tier is a real reward — there is no miss.** Someone who earned a cast by leaving a review
+should not be told they caught an old boot. The table lives in `src/game/rewards.ts`; retuning it is
+one edit, and a won reward freezes its own terms so a retune cannot change what an unpaid customer
+was already promised.
+
+**How a reward reaches the bill.** Discounts come off the subtotal *before* tax — taxing food that
+was given away would be wrong — and are clamped so two rewards can never take an order below zero. A
+free item is a real cart line with `freeFromReward` set, which prices at zero (options included) and
+still prints on the kitchen ticket. `orderTotals(subtotalSen, discountSen)` remains the single place
+any of this is worked out, and `confirm_order` carries `discountSen`/`rewards` onto the order, so the
+amount a provider is asked for is the amount the customer was shown.
+
+**Stripe:** a discounted order is sent as **one line item** at `order.totalSen`. A Checkout Session's
+total is the sum of its lines and Stripe has no negative line, so an itemised list plus a reward
+would charge the pre-reward amount — which `PaymentService` then refuses as an amount mismatch on
+the customer's own payment. Undiscounted orders are itemised exactly as before.
+
+**Live updates are polling, not a WebSocket** — there is none in this project. The customer page
+polls `GET /api/order/chances?cartId=…` while something of theirs is pending and stops when nothing
+is, so an approval moves their counter within seconds without a refresh. The Approvals view uses the
+same `orderFeed` poller as the boards, pointed at the proofs queue.
 
 ### Table QR codes
 

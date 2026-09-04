@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { Services } from "../src/app/container.js";
 import type { RevenueMonsterConfig, StripeConfig } from "../src/config/env.js";
+import { InMemoryProofRepository } from "../src/game/proofs.js";
 import { createServer } from "../src/http/app.js";
 import { MenuService } from "../src/menu/service.js";
 import { MenuStore } from "../src/menu/store.js";
@@ -61,6 +62,7 @@ function buildServices(): Services {
     payments,
     menu,
     menuStore,
+    proofs: new InMemoryProofRepository(),
     storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} } as const,
   };
 }

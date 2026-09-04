@@ -52,10 +52,36 @@
       </div>
       <div id="cart-body" class="cart-body"></div>
       <div class="cart-foot">
+        <!--
+          Earning a cast, at the point where someone is looking at their order
+          and deciding whether to pay. Hidden until there is a cart to earn on.
+        -->
+        <div id="earn" class="earn" hidden>
+          <div class="earn-head">🎣 Earn a fishing chance</div>
+          <div class="earn-row">
+            <button id="earn-review" class="earn-button" type="button">Leave a review</button>
+            <button id="earn-share" class="earn-button" type="button">Share this</button>
+          </div>
+          <form id="earn-contact-form" class="earn-row">
+            <input
+              id="earn-contact"
+              class="earn-input"
+              type="text"
+              inputmode="text"
+              autocomplete="tel email"
+              placeholder="Phone or email"
+              maxlength="120"
+            />
+            <button id="earn-contact-go" class="earn-button" type="submit">Add</button>
+          </form>
+          <p id="earn-note" class="earn-note">Spend RM50 and one is added automatically.</p>
+        </div>
+
         <!-- Three lines, not one: a customer who sees RM18.59 for RM16.90 of
              food should find the answer here rather than at the counter. -->
         <div class="totals">
           <div class="totals-row"><span>Subtotal</span><span id="cart-subtotal">RM0.00</span></div>
+          <div class="totals-row" id="cart-discount-row" hidden><span id="cart-discount-label">Rewards</span><span id="cart-discount">-RM0.00</span></div>
           <div class="totals-row"><span id="cart-tax-label">Tax</span><span id="cart-tax">RM0.00</span></div>
           <div class="totals-row grand"><span>Total</span><strong id="cart-total">RM0.00</strong></div>
         </div>
@@ -63,6 +89,46 @@
       </div>
     </aside>
     <div id="scrim" class="scrim" hidden></div>
+
+    <!--
+      The chance indicator. Sits above the cart bar and appears only once there
+      is something to say — a customer who has earned nothing is not nagged.
+    -->
+    <button id="chance-pill" class="chance-pill" type="button" hidden aria-haspopup="dialog">
+      <span class="chance-rod" aria-hidden="true">🎣</span>
+      <span id="chance-text">1 chance</span>
+    </button>
+
+    <!--
+      The game. A <dialog> for the same reasons the options sheet is one:
+      Escape, a focus trap and an inert page behind it, for free.
+    -->
+    <dialog id="fish" class="fish-sheet" aria-label="Fishing">
+      <div class="sheet-head">
+        <h2 id="fish-title">Cast a line</h2>
+        <button id="fish-close" class="icon-button" type="button" aria-label="Close">&times;</button>
+      </div>
+
+      <div id="fish-stage" class="fish-stage">
+        <div class="sea" aria-hidden="true">
+          <div id="fish-line" class="line"></div>
+          <div id="fish-float" class="float">●</div>
+        </div>
+        <p id="fish-say" class="fish-say" role="status">Swipe up to cast.</p>
+        <!-- The reel's tension. Shown only while reeling. -->
+        <div id="fish-tension" class="tension" hidden><div id="fish-tension-fill" class="tension-fill"></div></div>
+      </div>
+
+      <div id="fish-prize" class="fish-prize" hidden>
+        <div id="fish-prize-tier" class="prize-tier"></div>
+        <div id="fish-prize-label" class="prize-label"></div>
+        <button id="fish-done" class="primary wide" type="button">Add it to my order</button>
+      </div>
+    </dialog>
+
+    <!-- The screenshot picker, opened by the review and share buttons. A plain
+         file input, so a phone offers its camera roll and its camera. -->
+    <input id="proof-file" type="file" accept="image/*" hidden />
 
     <!--
       Item options. Same sheet as the cart: a grip to swipe, a head with an X,

@@ -3,6 +3,7 @@ import { MongoClient, type Collection, type Db, type Filter } from "mongodb";
 import { formatSen } from "../menu/money.js";
 import type { MenuPersistence } from "../menu/store.js";
 import type { Menu } from "../menu/types.js";
+import type { Proof, ProofRepository, ProofStatus } from "../game/proofs.js";
 import type { CartRepository, OrderRepository } from "../orders/repository.js";
 import type { Cart, Order } from "../orders/types.js";
 
@@ -26,6 +27,7 @@ export type IndexState = "pending" | "ready" | "failed";
 type StoredCart = Cart & { _id: string; expiresAt: Date };
 type StoredOrder = Order & { _id: string };
 type StoredMenu = Menu & { _id: string };
+type StoredProof = Proof & { _id: string };
 
 /**
  * The menu is one document under a fixed id. Staff edits replace it wholesale,
@@ -113,6 +115,29 @@ export class MongoStorage {
     return new MongoOrderRepository(() => this.database.collection<StoredOrder>("orders"));
   }
 
+  proofs(): ProofRepository {
+    const collection = () => this.database.collection<StoredProof>("proofs");
+    return {
+      async get(id: string): Promise<Proof | undefined> {
+        const doc = await collection().findOne({ _id: id });
+        return doc === null ? undefined : strip(doc);
+      },
+      async save(proof: Proof): Promise<void> {
+        // The upsert takes `_id` from the filter and the driver refuses it in
+        // the replacement, so the document lands under the proof's own id.
+        await collection().replaceOne({ _id: proof.id }, proof, { upsert: true });
+      },
+      async byStatus(status: ProofStatus): Promise<Proof[]> {
+        const docs = await collection().find({ status }).sort({ submittedAt: 1 }).toArray();
+        return docs.map(strip);
+      },
+      async forCart(cartId: string): Promise<Proof[]> {
+        const docs = await collection().find({ cartId }).toArray();
+        return docs.map(strip);
+      },
+    };
+  }
+
   menu(): MenuPersistence {
     const collection = () => this.database.collection<StoredMenu>("menu");
     return {
@@ -148,6 +173,8 @@ export class MongoStorage {
    * hand the same code to two customers.
    */
   private async ensureIndexes(): Promise<void> {
+    await this.db.collection("proofs").createIndex({ status: 1, submittedAt: 1 });
+    await this.db.collection("proofs").createIndex({ cartId: 1 });
     await this.db.collection("carts").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
     await this.db.collection("orders").createIndex({ reference: 1 }, { unique: true });
     await this.db.collection("orders").createIndex({ "payment.providerPaymentId": 1 });
@@ -233,6 +260,11 @@ class MongoOrderRepository implements OrderRepository {
 function toCart(doc: StoredCart): Cart {
   const { _id, expiresAt, ...cart } = doc;
   return cart;
+}
+
+function strip(doc: StoredProof): Proof {
+  const { _id, ...proof } = doc;
+  return proof;
 }
 
 function toOrder(doc: StoredOrder): Order {

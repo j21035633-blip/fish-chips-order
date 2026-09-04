@@ -8,7 +8,8 @@ import { z, ZodError } from "zod";
 
 import { services, type Services } from "../app/container.js";
 import { config } from "../config/env.js";
-import { deleteImage, menuImageUpload, servedImageUrl } from "../menu/images.js";
+import { newProof, PROOF_STATUSES, PROOF_TYPES, triggerFor } from "../game/proofs.js";
+import { deleteImage, imageUpload, MENU_IMAGES, PROOF_IMAGES, servedImageUrl } from "../menu/images.js";
 import { toItemView } from "../menu/service.js";
 import type { MenuItemInput } from "../menu/store.js";
 import { MenuValidationError } from "../menu/types.js";
@@ -176,6 +177,84 @@ export function createServer(app: Services = services) {
     void runAsync(res, () => tools.get_order({ orderId: req.params.orderId }));
   });
 
+  // -------------------------------------------------------- chances and game
+  /**
+   * The customer's own chance ledger, polled.
+   *
+   * This is the "real time" half of the approval loop: there is no WebSocket in
+   * this project — the staff boards have always short-polled — so the customer
+   * page polls this while something of theirs is pending, and the count moves
+   * the moment a staff member taps Approve. Scoped to one cart id, which is the
+   * session, so nobody sees anyone else's.
+   */
+  server.get("/api/order/chances", (req, res) => {
+    void runAsync(res, async () => chancesView(app, single(req.query.cartId) ?? ""));
+  });
+
+  /**
+   * A contact, for a chance.
+   *
+   * Stored on the session and nowhere else: no consent flag, no unsubscribe, no
+   * list. Anything beyond "reach this customer about this order" would need a
+   * consent model this does not have — see the note on `Cart.contact`.
+   */
+  server.post("/api/order/chances/register", (req, res) => {
+    void runAsync(res, async () => {
+      const { cartId, contact } = registerInput.parse(req.body ?? {});
+      await app.carts.registerContact(cartId, contact);
+      return chancesView(app, cartId);
+    });
+  });
+
+  /**
+   * A screenshot of a review or a share.
+   *
+   * Same upload machinery as the menu photos — same limits, same volume, same
+   * refusal of SVG — differing only in the subdirectory. **The same Railway
+   * volume caveat applies**: without one mounted at `/app/uploads`, these
+   * screenshots vanish on the next redeploy, and a staff member opening the
+   * queue would see a broken image with no way to judge it.
+   */
+  server.post("/api/order/proof", withProofImage, (req, res) => {
+    void runAsync(res, async () => {
+      const file = (req as Request & { file?: { filename: string } }).file;
+      const { cartId, type } = proofInput.parse(req.body ?? {});
+
+      if (!file) {
+        throw new OrderValidationError("A screenshot is required.", "missing_image", { cartId });
+      }
+
+      const imageUrl = servedImageUrl(file, PROOF_IMAGES);
+      try {
+        // The hold comes first: it is the call that refuses a second submission
+        // for the same trigger, and an orphaned upload is cheaper than a
+        // duplicate claim.
+        const cart = await app.carts.holdChanceForProof(cartId, triggerFor(type));
+        const proof = newProof({ cartId, type, imageUrl, tableNumber: cart.tableNumber });
+        await app.proofs.save(proof);
+        return { proof, chances: await chancesView(app, cartId) };
+      } catch (error) {
+        await deleteImage(imageUrl, PROOF_IMAGES);
+        throw error;
+      }
+    });
+  });
+
+  /**
+   * One cast. The server rolls and applies; the client animates what it is told.
+   *
+   * Nothing in the request influences the outcome, and the reward is on the cart
+   * before this responds — so the total in the reply, and the amount Stripe is
+   * later asked for, already have it in.
+   */
+  server.post("/api/order/fish/play", (req, res) => {
+    void runAsync(res, async () => {
+      const { cartId } = playInput.parse(req.body ?? {});
+      const { cart, reward } = await app.carts.play(cartId);
+      return { cart, reward, chances: await chancesView(app, cartId) };
+    });
+  });
+
   // ---------------------------------------------------------------- payments
   server.get("/api/payments/methods", (_req, res) => {
     run(res, () => tools.get_payment_methods());
@@ -339,6 +418,29 @@ export function createServer(app: Services = services) {
       const started = await app.payments.initiate(order.id, "card");
       return { order: started, payment: started.payment ?? null };
     });
+  });
+
+  // --------------------------------------------------------- staff approvals
+  /**
+   * The queue. Polled by the Approvals view, like every other staff feed.
+   *
+   * Defaults to `pending` because that is the only status anyone works from;
+   * the others are there for looking back at a decision.
+   */
+  server.get("/api/staff/proofs", (req, res) => {
+    void runAsync(res, async () => {
+      const { status } = proofQuery.parse({ status: single(req.query.status) });
+      const proofs = await app.proofs.byStatus(status);
+      return { status, proofs };
+    });
+  });
+
+  server.patch("/api/staff/proofs/:id/approve", (req, res) => {
+    void runAsync(res, () => decideProof(app, req.params.id, "approved"));
+  });
+
+  server.patch("/api/staff/proofs/:id/reject", (req, res) => {
+    void runAsync(res, () => decideProof(app, req.params.id, "rejected"));
   });
 
   // ---------------------------------------------------------- staff QR codes
@@ -535,6 +637,7 @@ export function createServer(app: Services = services) {
     server.get(`${config.staffDashboardPath}/sales`, requireStaffPage, staffPage("sales.html"));
     server.get(`${config.staffDashboardPath}/menu`, requireStaffPage, staffPage("menu.html"));
     server.get(`${config.staffDashboardPath}/qr`, requireStaffPage, staffPage("qr.html"));
+    server.get(`${config.staffDashboardPath}/approvals`, requireStaffPage, staffPage("approvals.html"));
 
     // The shared nav, styles and helpers the three pages import. Mounted under
     // the dashboard's own path so nothing about the staff area leaks a route at
@@ -626,6 +729,72 @@ const takeawayInput = z.object({
   customerName: z.string().trim().min(1).max(60).optional(),
 });
 
+const registerInput = z.object({
+  cartId: z.string().min(1),
+  // Phone or email, and not validated beyond "they typed something": a shop
+  // rejecting a customer's own phone number over a format guess is worse than
+  // storing a string nobody ends up using.
+  contact: z.string().trim().min(3).max(120),
+});
+
+const proofInput = z.object({ cartId: z.string().min(1), type: z.enum(PROOF_TYPES) });
+const playInput = z.object({ cartId: z.string().min(1) });
+const proofQuery = z.object({ status: z.enum(PROOF_STATUSES).default("pending") });
+
+/** One optional image on the field named `image`, into the proofs directory. */
+function withProofImage(req: Request, res: Response, next: NextFunction): void {
+  imageUpload(PROOF_IMAGES).single("image")(req, res, (error: unknown) => {
+    if (error) {
+      respondToError(res, error);
+      return;
+    }
+    next();
+  });
+}
+
+/** What the customer's page needs to draw the indicator, and nothing else. */
+async function chancesView(app: Services, cartId: string) {
+  const cart = await app.carts.get(cartId);
+  const proofs = await app.proofs.forCart(cartId);
+
+  return {
+    cartId,
+    chances: cart.chances,
+    chancesPending: cart.chancesPending,
+    chancesUsed: cart.chancesUsed,
+    claimed: cart.claimed,
+    rewards: cart.rewards,
+    proofs: proofs.map((proof) => ({ id: proof.id, type: proof.type, status: proof.status })),
+  };
+}
+
+/**
+ * Approve or reject, and move the session's ledger with it.
+ *
+ * The chance lands on `proof.cartId` — the session that submitted it — which is
+ * what keeps one customer's approval off everybody else's counter.
+ */
+async function decideProof(app: Services, id: string, status: "approved" | "rejected") {
+  const proof = await app.proofs.get(id);
+  if (!proof) {
+    throw new OrderValidationError(`No proof "${id}".`, "unknown_proof", { id });
+  }
+  if (proof.status !== "pending") {
+    // Two staff tablets, one queue: the second tap is a no-op rather than a
+    // second chance granted.
+    return { proof, changed: false };
+  }
+
+  proof.status = status;
+  proof.decidedAt = new Date().toISOString();
+  await app.proofs.save(proof);
+
+  if (status === "approved") await app.carts.approveChance(proof.cartId);
+  else await app.carts.rejectChance(proof.cartId, triggerFor(proof.type));
+
+  return { proof, changed: true };
+}
+
 const qrQuery = z.object({
   tables: z.string().min(1),
   base_url: z.string().url().optional(),
@@ -639,7 +808,7 @@ const qrQuery = z.object({
  * everything else instead of express's default HTML 500.
  */
 function withMenuImage(req: Request, res: Response, next: NextFunction): void {
-  menuImageUpload().single("image")(req, res, (error: unknown) => {
+  imageUpload(MENU_IMAGES).single("image")(req, res, (error: unknown) => {
     if (error) {
       respondToError(res, error);
       return;

@@ -4,6 +4,7 @@ import { config } from "../config/env.js";
 import { menuService, type MenuService } from "../menu/service.js";
 import { formatSen } from "../menu/money.js";
 import { businessDay, businessDayRange, businessDaysBetween, isBusinessDay } from "./businessDay.js";
+import { rollTier, toReward, type Reward } from "../game/rewards.js";
 import { priceCart } from "./pricing.js";
 import {
   InMemoryCartRepository,
@@ -16,7 +17,9 @@ import {
   OrderValidationError,
   parseTableNumber,
   settledAt,
+  SPEND_CHANCE_THRESHOLD_SEN,
   type Cart,
+  type ChanceTrigger,
   type CartLine,
   type OptionSelection,
   type KitchenStatus,
@@ -49,7 +52,17 @@ export class CartService {
 
   async create(tableNumber?: string): Promise<Cart> {
     const now = new Date().toISOString();
-    const cart: Cart = { id: randomUUID(), lines: [], createdAt: now, updatedAt: now };
+    const cart: Cart = {
+      id: randomUUID(),
+      lines: [],
+      createdAt: now,
+      updatedAt: now,
+      chances: 0,
+      chancesPending: 0,
+      chancesUsed: 0,
+      claimed: [],
+      rewards: [],
+    };
     if (tableNumber !== undefined) cart.tableNumber = parseTableNumber(tableNumber);
     await this.carts.save(cart);
     return cart;
@@ -65,7 +78,7 @@ export class CartService {
 
   async price(cartId: string): Promise<PricedCart> {
     const cart = await this.get(cartId);
-    return priceCart(cart.id, cart.lines, this.menu, cart.tableNumber);
+    return priceCart(cart.id, cart.lines, this.menu, cart.tableNumber, cart.rewards);
   }
 
   /** Adds a line. Prices it first, so an invalid selection never reaches the cart. */
@@ -84,7 +97,7 @@ export class CartService {
     if (input.note !== undefined) line.note = input.note;
 
     const next = [...cart.lines, line];
-    const priced = priceCart(cart.id, next, this.menu, cart.tableNumber);
+    const priced = priceCart(cart.id, next, this.menu, cart.tableNumber, cart.rewards);
 
     await this.commit(cart, next);
     return priced;
@@ -101,7 +114,7 @@ export class CartService {
     }
 
     const next = cart.lines.map((line) => (line.lineId === lineId ? { ...line, quantity } : line));
-    const priced = priceCart(cart.id, next, this.menu, cart.tableNumber);
+    const priced = priceCart(cart.id, next, this.menu, cart.tableNumber, cart.rewards);
 
     await this.commit(cart, next);
     return priced;
@@ -114,7 +127,7 @@ export class CartService {
     }
 
     const next = cart.lines.filter((line) => line.lineId !== lineId);
-    const priced = priceCart(cart.id, next, this.menu, cart.tableNumber);
+    const priced = priceCart(cart.id, next, this.menu, cart.tableNumber, cart.rewards);
 
     await this.commit(cart, next);
     return priced;
@@ -123,14 +136,159 @@ export class CartService {
   async clear(cartId: string): Promise<PricedCart> {
     const cart = await this.get(cartId);
     await this.commit(cart, []);
-    return priceCart(cart.id, [], this.menu, cart.tableNumber);
+    return priceCart(cart.id, [], this.menu, cart.tableNumber, cart.rewards);
   }
 
   private async commit(cart: Cart, lines: CartLine[]): Promise<void> {
     cart.lines = lines;
     cart.updatedAt = new Date().toISOString();
+    // Checked on every mutation rather than only on add: a customer who crosses
+    // the threshold by bumping a quantity has crossed it just the same.
+    awardSpendChance(cart, priceCart(cart.id, lines, this.menu, cart.tableNumber, cart.rewards).subtotalSen);
     await this.carts.save(cart);
   }
+
+  // ------------------------------------------------------------- the chances
+
+  /**
+   * Hands over a contact in exchange for a cast.
+   *
+   * Once per session — a second call returns the same ledger untouched rather
+   * than erroring, because the customer did nothing wrong and the answer to
+   * "did I get my chance?" is yes either way.
+   */
+  async registerContact(cartId: string, contact: string): Promise<Cart> {
+    const cart = await this.get(cartId);
+    const trimmed = contact.trim();
+
+    if (trimmed.length === 0) {
+      throw new OrderValidationError("Enter a phone number or an email.", "invalid_contact", { cartId });
+    }
+
+    cart.contact = trimmed;
+    claim(cart, "register");
+    await this.save(cart);
+    return cart;
+  }
+
+  /** A proof has been submitted: one chance moves into the pending column. */
+  async holdChanceForProof(cartId: string, trigger: ChanceTrigger): Promise<Cart> {
+    const cart = await this.get(cartId);
+
+    if (cart.claimed.includes(trigger)) {
+      throw new OrderValidationError(
+        `This order has already claimed its ${trigger} chance.`,
+        "chance_already_claimed",
+        { cartId, trigger },
+      );
+    }
+
+    // Claimed at submission, not at approval: the slot is spent either way, so a
+    // rejected screenshot cannot be resubmitted until the staff member says no.
+    cart.claimed.push(trigger);
+    cart.chancesPending += 1;
+    await this.save(cart);
+    return cart;
+  }
+
+  /** Staff said yes: pending becomes available on *this* session and no other. */
+  async approveChance(cartId: string): Promise<Cart> {
+    const cart = await this.get(cartId);
+    if (cart.chancesPending <= 0) return cart;
+
+    cart.chancesPending -= 1;
+    cart.chances += 1;
+    await this.save(cart);
+    return cart;
+  }
+
+  /**
+   * Staff said no. The pending chance goes away and none is granted — and the
+   * trigger is released, so a better screenshot can be sent.
+   */
+  async rejectChance(cartId: string, trigger: ChanceTrigger): Promise<Cart> {
+    const cart = await this.get(cartId);
+    if (cart.chancesPending > 0) cart.chancesPending -= 1;
+    cart.claimed = cart.claimed.filter((claimed) => claimed !== trigger);
+    await this.save(cart);
+    return cart;
+  }
+
+  /**
+   * One cast.
+   *
+   * The server rolls, the server applies, and the client is told what happened
+   * so it can animate it. Nothing the browser sends influences the outcome, and
+   * the reward is on the cart before this returns — so the total the customer
+   * sees next, and the amount Stripe is later asked for, already include it.
+   */
+  async play(cartId: string, random: () => number = Math.random): Promise<{ cart: PricedCart; reward: Reward }> {
+    const cart = await this.get(cartId);
+
+    if (cart.chances <= 0) {
+      throw new OrderValidationError(
+        "No chances left. Earn one by spending RM50, leaving a review, sharing, or leaving a contact.",
+        "no_chances",
+        { cartId, chances: cart.chances, chancesPending: cart.chancesPending },
+      );
+    }
+
+    const reward = toReward(rollTier(random), randomUUID(), new Date().toISOString());
+    cart.chances -= 1;
+    cart.chancesUsed += 1;
+    cart.rewards.push(reward);
+
+    // A free item is a real line, so it prints on the kitchen ticket and the
+    // customer can see what they won sitting in their order.
+    if (reward.kind === "free_item" && reward.itemId && this.menu.getItem(reward.itemId)?.available) {
+      cart.lines = [
+        ...cart.lines,
+        {
+          lineId: randomUUID(),
+          itemId: reward.itemId,
+          quantity: 1,
+          selections: [],
+          freeFromReward: reward.id,
+        },
+      ];
+    } else if (reward.kind === "free_item") {
+      // The item was deleted or is sold out. Losing an earned reward to a menu
+      // edit would be the wrong way round, so it becomes money off instead.
+      reward.kind = "discount_fixed";
+      reward.amountSen = this.menu.getItem(reward.itemId ?? "")?.priceSen ?? 490;
+      reward.label = `${formatSen(reward.amountSen)} off`;
+      delete reward.itemId;
+    }
+
+    cart.updatedAt = new Date().toISOString();
+    await this.carts.save(cart);
+
+    return { cart: priceCart(cart.id, cart.lines, this.menu, cart.tableNumber, cart.rewards), reward };
+  }
+
+  private async save(cart: Cart): Promise<void> {
+    cart.updatedAt = new Date().toISOString();
+    await this.carts.save(cart);
+  }
+}
+
+/**
+ * The spend trigger, checked wherever the subtotal might have moved.
+ *
+ * Idempotent by the claim list, so crossing RM50, dropping back under it and
+ * crossing again is still one chance — the reward is for the order, not for the
+ * number of times a quantity was tapped.
+ */
+function awardSpendChance(cart: Cart, subtotalSen: number): void {
+  if (subtotalSen >= SPEND_CHANCE_THRESHOLD_SEN) claim(cart, "spend");
+}
+
+/** Grants a chance for a one-time trigger, or does nothing if it is already spent. */
+function claim(cart: Cart, trigger: ChanceTrigger): boolean {
+  if (cart.claimed.includes(trigger)) return false;
+  cart.claimed.push(trigger);
+  cart.chances += 1;
+  return true;
 }
 
 export interface ConfirmOrderInput {
@@ -233,7 +391,7 @@ export class OrderService {
       throw new OrderValidationError("The cart is empty.", "empty_cart", { cartId: input.cartId });
     }
 
-    const priced = priceCart(cart.id, cart.lines, this.menu, cart.tableNumber);
+    const priced = priceCart(cart.id, cart.lines, this.menu, cart.tableNumber, cart.rewards);
     const now = new Date().toISOString();
 
     const order: Order = {
@@ -245,6 +403,11 @@ export class OrderService {
       // number the customer was shown, and there is only one place that number
       // is worked out.
       subtotalSen: priced.subtotalSen,
+      // The rewards ride along onto the order, so the receipt and the amount
+      // the provider is asked for both already have them in.
+      discountSen: priced.discountSen,
+      discount: priced.discount,
+      rewards: priced.rewards,
       taxSen: priced.taxSen,
       totalSen: priced.totalSen,
       taxRate: priced.taxRate,

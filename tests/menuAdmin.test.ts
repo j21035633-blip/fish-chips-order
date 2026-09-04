@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { Services } from "../src/app/container.js";
+import { InMemoryProofRepository } from "../src/game/proofs.js";
 import { config } from "../src/config/env.js";
 import { createServer } from "../src/http/app.js";
 import { MenuService } from "../src/menu/service.js";
@@ -39,6 +40,7 @@ function buildServices(): Services {
     menu,
     menuStore,
     payments: createPaymentService(orders),
+    proofs: new InMemoryProofRepository(),
     storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} } as const,
   };
 }

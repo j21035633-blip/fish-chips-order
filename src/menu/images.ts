@@ -9,7 +9,11 @@ import { config } from "../config/env.js";
 import { MenuValidationError } from "./types.js";
 
 /**
- * Menu-item photos, on the local filesystem.
+ * Uploaded images, on the local filesystem.
+ *
+ * Two callers share this: menu-item photos, and the screenshots customers
+ * submit as proof of a review or a share. Same limits, same naming, same
+ * volume — they differ only by the subdirectory they land in.
  *
  * Files are written under `config.uploadsDir` (default: `uploads` beside the
  * working directory) and served read-only at `/uploads/...`. `image_url` on the
@@ -33,11 +37,11 @@ import { MenuValidationError } from "./types.js";
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-/** Where the images live, under the uploads root. */
-const IMAGE_SUBDIR = "menu-items";
+/** The subdirectories under the uploads root, one per kind of upload. */
+export const MENU_IMAGES = "menu-items";
+export const PROOF_IMAGES = "proofs";
 
-/** The `/uploads` prefix these are served at. Baked into every stored `imageUrl`. */
-const SERVED_PREFIX = `/uploads/${IMAGE_SUBDIR}`;
+export type ImageKind = typeof MENU_IMAGES | typeof PROOF_IMAGES;
 
 /** 5 MB. A phone photo of a plate of fish clears this comfortably. */
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -56,15 +60,15 @@ const ALLOWED = new Map([
   ["image/avif", ".avif"],
 ]);
 
-export function imageDir(): string {
-  return join(config.uploadsDir, IMAGE_SUBDIR);
+export function imageDir(kind: ImageKind = MENU_IMAGES): string {
+  return join(config.uploadsDir, kind);
 }
 
 /** Multer, configured for one optional image field named `image`. */
-export function menuImageUpload(): multer.Multer {
+export function imageUpload(kind: ImageKind = MENU_IMAGES): multer.Multer {
   const storage = multer.diskStorage({
     destination(_req, _file, done) {
-      const dir = imageDir();
+      const dir = imageDir(kind);
       // Created on demand rather than at boot: the volume may be mounted after
       // the process starts, and an upload is the first time we actually need it.
       try {
@@ -100,9 +104,9 @@ export function menuImageUpload(): multer.Multer {
   });
 }
 
-/** The path to store on the item, for a file multer has just written. */
-export function servedImageUrl(file: { filename: string }): string {
-  return `${SERVED_PREFIX}/${file.filename}`;
+/** The path to store on the record, for a file multer has just written. */
+export function servedImageUrl(file: { filename: string }, kind: ImageKind = MENU_IMAGES): string {
+  return `/uploads/${kind}/${file.filename}`;
 }
 
 /**
@@ -114,11 +118,11 @@ export function servedImageUrl(file: { filename: string }): string {
  * touches names inside the image directory, so a doctored `imageUrl` in the
  * database cannot point the unlink somewhere else.
  */
-export async function deleteImage(imageUrl: string | undefined): Promise<void> {
-  if (!imageUrl?.startsWith(`${SERVED_PREFIX}/`)) return;
+export async function deleteImage(imageUrl: string | undefined, kind: ImageKind = MENU_IMAGES): Promise<void> {
+  if (!imageUrl?.startsWith(`/uploads/${kind}/`)) return;
 
   const name = basename(imageUrl);
   if (name.length === 0 || name === "." || name === "..") return;
 
-  await unlink(join(imageDir(), name)).catch(() => {});
+  await unlink(join(imageDir(kind), name)).catch(() => {});
 }

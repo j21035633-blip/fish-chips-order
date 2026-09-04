@@ -174,6 +174,9 @@ describe("MongoStorage", () => {
       lines: [],
       itemCount: 0,
       subtotalSen: 0,
+      discountSen: 0,
+      discount: "RM0.00",
+      rewards: [],
       taxSen: 0,
       totalSen: 0,
       taxRate: 0.1,
@@ -217,6 +220,9 @@ describe("MongoStorage", () => {
         lines: [],
         itemCount: 0,
         subtotalSen: 0,
+        discountSen: 0,
+        discount: "RM0.00",
+        rewards: [],
         taxSen: 0,
         totalSen: 0,
         taxRate: 0.1,
@@ -272,7 +278,17 @@ describe("MongoStorage", () => {
     const repository = storage.carts();
 
     const now = new Date().toISOString();
-    await repository.save({ id: "c1", lines: [], createdAt: now, updatedAt: now });
+    await repository.save({
+      id: "c1",
+      lines: [],
+      createdAt: now,
+      updatedAt: now,
+      chances: 0,
+      chancesPending: 0,
+      chancesUsed: 0,
+      claimed: [],
+      rewards: [],
+    });
     expect(await repository.get("c1")).toBeDefined();
 
     await repository.delete("c1");

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Approvals — Anchor &amp; Batter</title>
+    <link rel="stylesheet" href="{{STAFF_BASE}}/assets/staff.css" />
+  </head>
+  <body data-staff-base="{{STAFF_BASE}}" data-staff-view="approvals">
+    <p id="error" class="error" hidden></p>
+
+    <main>
+      <p class="empty" id="intro">
+        Screenshots customers have sent as proof of a review or a share. Approving one gives that
+        customer a fishing chance; rejecting one gives nothing and lets them try again.
+      </p>
+      <div id="queue" class="proof-queue"></div>
+      <p id="empty" class="empty" hidden>Nothing waiting.</p>
+    </main>
+
+    <script type="module">
+      import { api, el, errorBanner, orderFeed } from "{{STAFF_BASE}}/assets/common.js";
+      import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
+
+      const { slot } = mountStaffChrome({ title: "Approvals" });
+      const feedState = el("span", { id: "feed-state", class: "feed-state", text: "connecting…" });
+      const count = el("span", { class: "card-count", text: "—" });
+      slot.append(feedState, count);
+
+      const queueEl = document.getElementById("queue");
+      const emptyEl = document.getElementById("empty");
+      const showError = errorBanner();
+      const busy = new Set();
+
+      const TYPE_LABEL = { review: "Google review", share: "Social share" };
+
+      /** "3 minutes ago" — the only thing anyone needs to know about the time. */
+      function ago(iso) {
+        const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+        if (seconds < 60) return "just now";
+        const minutes = Math.round(seconds / 60);
+        if (minutes < 60) return `${minutes} min ago`;
+        return `${Math.round(minutes / 60)} h ago`;
+      }
+
+      function card(proof) {
+        const working = busy.has(proof.id);
+
+        return el("article", { class: "proof" }, [
+          // A link as well as an image: a phone screenshot is often taller than
+          // the tile, and the judgement sometimes needs the full thing.
+          el("a", { href: proof.imageUrl, target: "_blank", rel: "noopener" }, [
+            el("img", { class: "proof-shot", src: proof.imageUrl, alt: `${TYPE_LABEL[proof.type]} screenshot`, loading: "lazy" }),
+          ]),
+          el("div", { class: "proof-meta" }, [
+            el("span", { class: "tag pending", text: TYPE_LABEL[proof.type] ?? proof.type }),
+            proof.tableNumber
+              ? el("span", { class: "table takeaway", text: `Table ${proof.tableNumber}` })
+              : el("span", { class: "table takeaway", text: "Counter / takeaway" }),
+            el("span", { class: "reference", text: ago(proof.submittedAt) }),
+          ]),
+          el("div", { class: "proof-actions" }, [
+            el("button", {
+              class: "advance",
+              type: "button",
+              text: "Approve",
+              disabled: working,
+              onClick: () => decide(proof.id, "approve"),
+            }),
+            el("button", {
+              class: "undo",
+              type: "button",
+              text: "Reject",
+              disabled: working,
+              onClick: () => decide(proof.id, "reject"),
+            }),
+          ]),
+        ]);
+      }
+
+      async function decide(id, verdict) {
+        busy.add(id);
+        try {
+          await api(`/api/staff/proofs/${id}/${verdict}`, { method: "PATCH" });
+          // Redraw from the server: another tablet may have judged this one a
+          // second ago, and the queue is the truth.
+          await feed.refresh();
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          busy.delete(id);
+        }
+      }
+
+      function draw({ proofs }) {
+        showError();
+        count.textContent = `${proofs.length} waiting`;
+        queueEl.replaceChildren(...proofs.map(card));
+        emptyEl.hidden = proofs.length > 0;
+      }
+
+      /**
+       * The same polling the boards use — there is no WebSocket in this project.
+       * `orderFeed` is pointed at the proofs queue instead of the order feed, so
+       * a submission appears here within a couple of seconds of being sent, and
+       * a tablet that has been asleep catches up the moment it wakes.
+       */
+      const feed = orderFeed({
+        path: "/api/staff/proofs?status=pending",
+        onData: draw,
+        onError: (error) => showError(error.message),
+        onState: (state) => {
+          feedState.textContent = state === "stale" ? "not updating" : "live";
+          feedState.className = state === "stale" ? "feed-state stale" : "feed-state";
+        },
+      });
+    </script>
+  </body>
+</html>

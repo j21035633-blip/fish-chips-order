@@ -1,3 +1,4 @@
+import { discountFor, type Reward } from "../game/rewards.js";
 import { formatSen } from "../menu/money.js";
 import type { MenuItemView, MenuService, OptionGroupView } from "../menu/service.js";
 import type { Allergen } from "../menu/types.js";
@@ -18,10 +19,12 @@ export const TAX_RATE = 0.1;
 
 export interface OrderTotals {
   subtotalSen: number;
+  discountSen: number;
   taxSen: number;
   totalSen: number;
   taxRate: number;
   subtotal: string;
+  discount: string;
   tax: string;
   total: string;
 }
@@ -40,16 +43,23 @@ export interface OrderTotals {
  * way through — `Math.round` on a single multiplication is the only place a
  * fraction exists, and it never survives the statement.
  */
-export function orderTotals(subtotalSen: number): OrderTotals {
-  const taxSen = Math.round(subtotalSen * TAX_RATE);
-  const totalSen = subtotalSen + taxSen;
+export function orderTotals(subtotalSen: number, discountSen = 0): OrderTotals {
+  // Tax follows the money, so it is charged on what is actually being paid for.
+  // Taxing the pre-discount subtotal would have the customer pay tax on food
+  // they were given, and clamping here means two rewards cannot take an order
+  // below zero.
+  const discounted = Math.max(0, subtotalSen - Math.min(discountSen, subtotalSen));
+  const taxSen = Math.round(discounted * TAX_RATE);
+  const totalSen = discounted + taxSen;
 
   return {
     subtotalSen,
+    discountSen: subtotalSen - discounted,
     taxSen,
     totalSen,
     taxRate: TAX_RATE,
     subtotal: formatSen(subtotalSen),
+    discount: formatSen(subtotalSen - discounted),
     tax: formatSen(taxSen),
     total: formatSen(totalSen),
   };
@@ -87,7 +97,11 @@ export function priceLine(line: CartLine, menu: MenuService): PricedLine {
     options.push(...resolveGroup(item, group, line.selections));
   }
 
-  const unitPriceSen = options.reduce((total, option) => total + option.priceDeltaSen, item.priceSen);
+  // A line the game gave away costs nothing, options included: a free drink is
+  // free however it is garnished.
+  const unitPriceSen = line.freeFromReward
+    ? 0
+    : options.reduce((total, option) => total + option.priceDeltaSen, item.priceSen);
   if (unitPriceSen < 0) {
     throw new OrderValidationError("That combination prices below zero.", "invalid_price", { itemId: item.id });
   }
@@ -123,14 +137,17 @@ export function priceCart(
   lines: CartLine[],
   menu: MenuService,
   tableNumber?: string,
+  rewards: readonly Reward[] = [],
 ): PricedCart {
   const priced = lines.map((line) => priceLine(line, menu));
-  const totals = orderTotals(priced.reduce((total, line) => total + line.lineTotalSen, 0));
+  const subtotalSen = priced.reduce((total, line) => total + line.lineTotalSen, 0);
+  const totals = orderTotals(subtotalSen, discountFor(rewards, subtotalSen));
 
   const cart: PricedCart = {
     cartId,
     lines: priced,
     itemCount: priced.reduce((count, line) => count + line.quantity, 0),
+    rewards: [...rewards],
     ...totals,
   };
   if (tableNumber !== undefined) cart.tableNumber = tableNumber;

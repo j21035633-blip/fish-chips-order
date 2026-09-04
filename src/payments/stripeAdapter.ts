@@ -98,6 +98,26 @@ export class StripeAdapter implements PaymentAdapter {
     params.set("metadata[order_reference]", request.order.reference);
     params.set("payment_method_types[0]", "card");
 
+    // A discounted order goes as one line.
+    //
+    // A Checkout Session's total is the sum of its line items and nothing else,
+    // and Stripe has no negative line item — so an itemised list plus a reward
+    // would charge the pre-reward amount, which `PaymentService` then refuses as
+    // an amount mismatch on the customer's own payment. A coupon object would
+    // keep the itemisation, at the cost of a second API call and a coupon per
+    // order; one honest line is the smaller thing to get right. Undiscounted
+    // orders are itemised exactly as before.
+    if (request.order.discountSen > 0) {
+      params.set("line_items[0][price_data][currency]", "myr");
+      params.set(
+        "line_items[0][price_data][product_data][name]",
+        `Order ${request.order.reference} (${request.order.discount} off applied)`,
+      );
+      params.set("line_items[0][price_data][unit_amount]", String(request.order.totalSen));
+      params.set("line_items[0][quantity]", "1");
+      return params;
+    }
+
     request.order.lines.forEach((line, index) => {
       const options = line.options.map((option) => option.choiceName).join(", ");
       params.set(`line_items[${index}][price_data][currency]`, "myr");

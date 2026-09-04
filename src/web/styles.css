@@ -561,3 +561,158 @@ body.cart-open { overflow: hidden; }
 }
 .error { color: var(--danger); font-size: 14px; margin-top: 12px; }
 .muted { color: var(--ink-soft); font-size: 14px; }
+
+/* --------------------------------------------------------------- fishing */
+/*
+ * The chance indicator. Above the cart bar, out of the way of the menu, and
+ * only ever on screen when there is something to say.
+ */
+.chance-pill {
+  position: fixed;
+  z-index: 26;
+  left: 16px;
+  bottom: calc(var(--cart-bar-h) + 14px + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--batter);
+  color: #2a1c05;
+  font: inherit;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 4px 18px rgba(20, 33, 31, 0.22);
+}
+/* Nothing to play yet: still visible, because "we are looking at it" is the
+   information, but plainly not a button to press. */
+.chance-pill.waiting { background: var(--card); color: var(--ink-soft); font-weight: 650; }
+.chance-pill:disabled { cursor: default; }
+.chance-rod { font-size: 15px; }
+/* No cart bar to sit above on a page without one. */
+body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-bottom)); }
+
+/* Earning one, inside the cart sheet where the order is being looked over. */
+.earn { border-top: 1px solid var(--line); padding-top: 12px; margin-bottom: 12px; }
+.earn-head { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.earn-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.earn-button {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.earn-button:disabled { opacity: 0.55; cursor: default; }
+.earn-input {
+  flex: 2;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  min-width: 0;
+}
+.earn-note { font-size: 12px; color: var(--ink-soft); margin: 0; }
+
+/*
+ * The game itself: a bottom sheet, the same way the options sheet is one —
+ * `margin: auto auto 0` against the UA's `inset: 0` on a modal dialog. The
+ * max-height and the scroll are what keep a tall catch on screen rather than
+ * off the bottom of it.
+ *
+ * No `display` on the bare class, here or anywhere: it would outrank the UA
+ * rule that keeps a closed dialog closed.
+ */
+.fish-sheet {
+  border: 0;
+  border-radius: 16px 16px 0 0;
+  padding: 0;
+  width: min(480px, 100vw);
+  max-width: 100vw;
+  max-height: 90dvh;
+  overflow-y: auto;
+  margin: auto auto 0;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 -8px 40px rgba(20, 33, 31, 0.18);
+  animation: sheet-up 0.24s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.fish-sheet::backdrop { background: rgba(10, 20, 18, 0.55); }
+@media (min-width: 720px) {
+  .fish-sheet {
+    inset: 0;
+    margin: auto;
+    height: max-content;
+    border-radius: 16px;
+    width: min(420px, calc(100vw - 32px));
+    animation: none;
+  }
+}
+
+.fish-stage {
+  padding: 18px 20px 22px;
+  text-align: center;
+  /* The gesture is a vertical swipe, so the browser must not take it for a
+     scroll before the handler sees it. */
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+.sea {
+  position: relative;
+  height: 150px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #cfe6ef 0%, #7fb6cd 55%, #3d7f9c 100%);
+  overflow: hidden;
+}
+@media (prefers-color-scheme: dark) {
+  .sea { background: linear-gradient(180deg, #24414f 0%, #17313d 55%, #0e222c 100%); }
+}
+/* The line pays out on the cast and comes back in as the reel fills. */
+.line {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 2px;
+  height: 0;
+  background: rgba(255, 255, 255, 0.75);
+  transition: height 0.35s ease;
+}
+.float {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -50%);
+  font-size: 26px;
+  transition: top 0.35s ease, transform 0.2s ease;
+}
+.fish-stage.waiting .float { top: 70px; }
+.fish-stage.biting .float { top: 70px; animation: bob 0.35s ease-in-out infinite; }
+.fish-stage.caught .float { top: 42%; font-size: 52px; }
+@keyframes bob {
+  0%, 100% { transform: translate(-50%, -50%); }
+  50% { transform: translate(-50%, -12%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fish-stage.biting .float { animation: none; }
+  .line, .float { transition: none; }
+  .fish-sheet { animation: none; }
+}
+
+.fish-say { margin: 14px 0 0; font-weight: 650; }
+.tension { height: 8px; border-radius: 999px; background: var(--line); margin-top: 12px; overflow: hidden; }
+.tension-fill { height: 100%; width: 0; background: var(--sea); border-radius: 999px; }
+
+.fish-prize { padding: 0 20px 20px; text-align: center; }
+.prize-tier { font-size: 44px; line-height: 1; }
+.prize-label { font-size: 20px; font-weight: 700; margin: 6px 0 16px; }
