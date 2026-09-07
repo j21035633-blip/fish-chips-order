@@ -164,6 +164,10 @@ export function createServer(app: Services = services) {
         cartId: req.params.cartId,
         lineId: req.params.lineId,
         quantity: req.body?.quantity,
+        // Present only when the options sheet was reopened on this line. The
+        // stepper sends a quantity and nothing else, and takes the same path
+        // it always has.
+        selections: req.body?.selections,
       }),
     );
   });

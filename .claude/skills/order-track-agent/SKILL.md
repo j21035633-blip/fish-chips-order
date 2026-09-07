@@ -684,6 +684,25 @@ Rules worth keeping if you touch this:
   while the cart is empty.
 - **Emptying the cart from inside the sheet closes the sheet**, because there is nothing left to
   look at.
+- **Each line carries Edit and Remove beside its stepper.** Edit reopens the *same* options sheet the
+  item was added with, pre-filled — `openItem(item, line)` re-checks the line's own choices over the
+  defaults `optionGroup` sets, and restores the quantity.
+- **Saving an edit rewrites the line where it sits.** `PATCH /api/carts/:cartId/lines/:lineId` takes
+  `quantity`, `selections`, or both; with `selections` it goes to `CartService.editLine`, which
+  rebuilds the array with `map` so the line keeps its id **and its position**. Without them it is the
+  quantity stepper on the path it has always taken, including the "0 removes the line" shorthand that
+  `editLine` deliberately does not have. This was briefly done client-side as add-then-remove, which
+  produced the right cart and quietly sent the edited item to the bottom of the order.
+- **Neither button appears on a won reward line, and the server refuses one too.** It prices at zero
+  against a menu item that does not, which is the only signal on a priced line that it came from the
+  game. `editLine` rejects a *selections* change on a line with `freeFromReward` set
+  (`reward_line_not_editable`) — re-choosing its options would have to re-price it, at which point
+  the customer either loses the reward or gets to keep choosing new free drinks. A quantity-only
+  change still goes through, because that is the stepper and the stepper is unchanged. Removing one
+  is hidden on the page for the other half of the reason: "no confirmation needed — re-adding is
+  trivial" does not cover a line whose cast has been spent.
+- Edit is also omitted for an item with no option groups, because there is nothing to reopen the
+  sheet for. Remove and the stepper still apply.
 - The order and checkout views call `setCartVisible(false)`: those pages are about an order that is
   already placed, and a bar over the pay button is the worst place for one.
 - `.cart-foot` sits **outside** the scrolling `.cart-body`, so Checkout is on screen at any order

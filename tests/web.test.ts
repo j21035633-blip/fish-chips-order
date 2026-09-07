@@ -992,3 +992,196 @@ describe("the staff QR page offers both codes", () => {
     expect(css.slice(css.indexOf("@media print"))).toContain(".qr-kind");
   });
 });
+
+/**
+ * Editing and removing a line from the order.
+ *
+ * The quantity stepper already existed and is deliberately untouched; these are
+ * the two things it could not do — change what was chosen, and take a line out
+ * without tapping minus down to nothing.
+ */
+describe("editing a line in the order", () => {
+  const cartBody = () => document.getElementById("cart-body")!;
+  const lines = () => [...cartBody().querySelectorAll(".cart-line")];
+  const sheetOpen = () => document.getElementById("item-dialog")!.hasAttribute("open");
+
+  /** Adds one item from the menu, choosing whatever its first group offers. */
+  async function addItem(name: string, choiceIndex = 0) {
+    const item = [...document.getElementById("view")!.querySelectorAll("button.item")].find((button) =>
+      button.textContent?.includes(name),
+    ) as HTMLButtonElement;
+    item.click();
+    await settle();
+
+    const body = document.getElementById("item-dialog-body")!;
+    const radios = [...body.querySelectorAll('input[type="radio"]')] as HTMLInputElement[];
+    if (radios[choiceIndex]) radios[choiceIndex].click();
+
+    (document.getElementById("item-add") as HTMLButtonElement).click();
+    await settle();
+  }
+
+  it("offers Edit and Remove beside the stepper, without disturbing it", async () => {
+    await bootPage("/");
+    await addItem("Classic Battered Dory");
+    document.getElementById("cart-bar")!.click();
+    await settle();
+
+    const line = lines()[0]!;
+    // The stepper is still exactly where it was.
+    expect(line.querySelectorAll(".qty .icon-button")).toHaveLength(2);
+    expect(line.querySelector(".qty output")!.textContent).toBe("1");
+
+    const actions = [...line.querySelectorAll(".line-action")].map((button) => button.textContent);
+    expect(actions).toEqual(["Edit", "Remove"]);
+  });
+
+  it("removes the whole line on one tap, whatever the quantity", async () => {
+    await bootPage("/");
+    await addItem("Classic Battered Dory");
+    document.getElementById("cart-bar")!.click();
+    await settle();
+
+    // Two of them, so this is not the stepper reaching zero.
+    (lines()[0]!.querySelectorAll(".qty .icon-button")[1] as HTMLButtonElement).click();
+    await settle();
+    expect(lines()[0]!.querySelector(".qty output")!.textContent).toBe("2");
+
+    (lines()[0]!.querySelector(".line-action.remove") as HTMLButtonElement).click();
+    await settle();
+
+    expect(lines()).toHaveLength(0);
+    // And everything that hangs off the cart moved with it.
+    expect(document.getElementById("cart-count")!.textContent).toBe("0");
+    expect(document.getElementById("cart-total")!.textContent).toBe("RM0.00");
+    expect(document.body.classList.contains("has-cart")).toBe(false);
+  });
+
+  it("reopens the sheet on the line's own choices, not the defaults", async () => {
+    await bootPage("/");
+    // Pick the *second* choice, so a sheet showing defaults would be visibly wrong.
+    await addItem("Classic Battered Dory", 1);
+    document.getElementById("cart-bar")!.click();
+    await settle();
+
+    const chosen = lines()[0]!.querySelector(".cart-line-opts")!.textContent!;
+    (lines()[0]!.querySelector(".line-action") as HTMLButtonElement).click();
+    await settle();
+
+    expect(sheetOpen()).toBe(true);
+    const checked = [
+      ...document.getElementById("item-dialog-body")!.querySelectorAll("input:checked"),
+    ] as HTMLInputElement[];
+    const labels = checked.map((input) => input.closest("label")!.querySelector(".choice-name")!.textContent);
+    for (const label of labels) expect(chosen).toContain(label);
+
+    // The quantity comes back too, and the button says what it will do.
+    expect(document.getElementById("item-qty")!.textContent).toBe("1");
+    expect(document.getElementById("item-add")!.textContent).toContain("Save");
+  });
+
+  it("updates the line in place rather than adding a second one", async () => {
+    await bootPage("/");
+    await addItem("Classic Battered Dory", 0);
+    document.getElementById("cart-bar")!.click();
+    await settle();
+    const before = lines()[0]!.querySelector(".cart-line-opts")!.textContent;
+
+    (lines()[0]!.querySelector(".line-action") as HTMLButtonElement).click();
+    await settle();
+
+    const radios = [
+      ...document.getElementById("item-dialog-body")!.querySelectorAll('input[type="radio"]'),
+    ] as HTMLInputElement[];
+    radios[1]!.click();
+    (document.getElementById("item-add") as HTMLButtonElement).click();
+    await settle();
+
+    // One line, not two — this is the whole point of Edit.
+    expect(lines()).toHaveLength(1);
+    expect(document.getElementById("cart-count")!.textContent).toBe("1");
+    expect(lines()[0]!.querySelector(".cart-line-opts")!.textContent).not.toBe(before);
+  });
+
+  it("carries the quantity through an edit", async () => {
+    await bootPage("/");
+    await addItem("Classic Battered Dory");
+    document.getElementById("cart-bar")!.click();
+    await settle();
+    (lines()[0]!.querySelectorAll(".qty .icon-button")[1] as HTMLButtonElement).click();
+    await settle();
+
+    (lines()[0]!.querySelector(".line-action") as HTMLButtonElement).click();
+    await settle();
+    expect(document.getElementById("item-qty")!.textContent).toBe("2");
+
+    (document.getElementById("item-add") as HTMLButtonElement).click();
+    await settle();
+
+    expect(lines()).toHaveLength(1);
+    expect(lines()[0]!.querySelector(".qty output")!.textContent).toBe("2");
+  });
+
+  it("recalculates the total and the tax the moment a line goes", async () => {
+    await bootPage("/");
+    await addItem("Classic Battered Dory");
+    await addItem("Classic Battered Dory");
+    document.getElementById("cart-bar")!.click();
+    await settle();
+
+    const twoLines = document.getElementById("cart-total")!.textContent;
+    (lines()[0]!.querySelector(".line-action.remove") as HTMLButtonElement).click();
+    await settle();
+
+    expect(lines()).toHaveLength(1);
+    expect(document.getElementById("cart-total")!.textContent).not.toBe(twoLines);
+    // The three-line breakdown lives in the foot, outside the scrolling body,
+    // and is redrawn from the server's own numbers.
+    const panel = document.getElementById("cart-panel")!;
+    expect(panel.textContent).toContain("Subtotal");
+    expect(panel.textContent).toContain("Tax");
+  });
+
+  it("leaves the sheet's own dismissals alone", async () => {
+    // An abandoned edit must change nothing — the same rule an abandoned add
+    // already follows.
+    await bootPage("/");
+    await addItem("Classic Battered Dory", 0);
+    document.getElementById("cart-bar")!.click();
+    await settle();
+    const before = lines()[0]!.querySelector(".cart-line-opts")!.textContent;
+
+    (lines()[0]!.querySelector(".line-action") as HTMLButtonElement).click();
+    await settle();
+    const radios = [
+      ...document.getElementById("item-dialog-body")!.querySelectorAll('input[type="radio"]'),
+    ] as HTMLInputElement[];
+    radios[1]!.click();
+    (document.getElementById("item-close") as HTMLButtonElement).click();
+    await settle();
+
+    expect(sheetOpen()).toBe(false);
+    expect(lines()).toHaveLength(1);
+    expect(lines()[0]!.querySelector(".cart-line-opts")!.textContent).toBe(before);
+  });
+
+  it("offers no Edit on an item with nothing to choose", async () => {
+    await bootPage("/");
+    const plain = [...document.getElementById("view")!.querySelectorAll("button.item")].find((button) => {
+      const name = button.textContent ?? "";
+      return name.includes("Curry Sauce") || name.includes("Mushy Peas");
+    }) as HTMLButtonElement | undefined;
+    if (!plain) return; // No option-free item on the menu; nothing to assert.
+
+    plain.click();
+    await settle();
+    // An item with no groups goes straight in — no sheet to open.
+    document.getElementById("cart-bar")!.click();
+    await settle();
+
+    const line = lines().find((entry) => entry.textContent?.includes(plain.textContent!.split("RM")[0]!.trim()));
+    if (!line) return;
+    expect(line.querySelector(".line-action.remove")).not.toBeNull();
+    expect([...line.querySelectorAll(".line-action")].map((b) => b.textContent)).not.toContain("Edit");
+  });
+});

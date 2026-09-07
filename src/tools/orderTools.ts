@@ -40,6 +40,28 @@ export const updateQuantityInput = cartLineRefInput.extend({
   quantity: z.number().int().min(0).max(20).describe("0 removes the line."),
 });
 
+/**
+ * One route, two edits.
+ *
+ * `quantity` alone is the stepper. `selections` present means the options sheet
+ * was reopened on an existing line, and the line is rewritten where it sits —
+ * see `CartService.editLine`. A quantity of 0 only means "remove" on the
+ * stepper path; an edit has to be a real quantity.
+ */
+export const updateCartLineInput = z
+  .object({
+    cartId: z.string().min(1),
+    lineId: z.string().min(1),
+    quantity: z.number().int().min(0).max(99).optional(),
+    selections: z.array(optionSelectionSchema).optional(),
+  })
+  .refine((input) => input.quantity !== undefined || input.selections !== undefined, {
+    message: "Nothing to change: send a quantity, selections, or both.",
+  })
+  .refine((input) => input.selections === undefined || (input.quantity ?? 1) >= 1, {
+    message: "An edited line needs a quantity of at least one.",
+  });
+
 export const confirmOrderInput = z.object({
   cartId: z.string().min(1),
   customerName: z.string().min(1).max(60).optional().describe("Name to call out at pickup."),
@@ -92,8 +114,16 @@ export function createOrderTools(app: Services = services) {
     },
 
     async update_cart_line(rawInput: unknown) {
-      const { cartId, lineId, quantity } = updateQuantityInput.parse(rawInput);
-      const cart = await app.carts.updateQuantity(cartId, lineId, quantity);
+      const { cartId, lineId, quantity, selections } = updateCartLineInput.parse(rawInput);
+
+      // Two different edits down one route. Without `selections` this is the
+      // quantity stepper, unchanged — including its "0 removes the line"
+      // shorthand, which `editLine` deliberately does not have.
+      const cart =
+        selections === undefined
+          ? await app.carts.updateQuantity(cartId, lineId, quantity ?? 0)
+          : await app.carts.editLine(cartId, lineId, { quantity, selections });
+
       return { cart, text: renderCart(cart) };
     },
 

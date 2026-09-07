@@ -1,4 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import type { AddressInfo } from "node:net";
+import type { Server } from "node:http";
+
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import { createServices } from "../src/app/container.js";
+import { createServer } from "../src/http/app.js";
 
 import { menuService } from "../src/menu/service.js";
 import { orderTotals, priceLine, TAX_RATE } from "../src/orders/pricing.js";
@@ -484,5 +490,227 @@ describe("tax", () => {
     expect(priced.taxSen).toBe(0);
     expect(priced.totalSen).toBe(0);
     expect(priced.tax).toBe("RM0.00");
+  });
+});
+
+/**
+ * Editing a line where it sits.
+ *
+ * The thing worth testing is the *position*. The client used to do this by
+ * adding a new line and deleting the old one, which produced the right cart and
+ * quietly sent the edited item to the bottom of a customer's order — correct
+ * totals, wrong list. Almost everything below is some form of "it did not move".
+ */
+describe("editing a cart line in place", () => {
+  /** A cart with three different items, so the middle one has neighbours. */
+  async function threeLines() {
+    const cart = await carts.create();
+    await carts.addLine(cart.id, { itemId: "fish-dory-classic" });
+    await carts.addLine(cart.id, { itemId: "drink-teh-ais" });
+    await carts.addLine(cart.id, { itemId: "fish-dory-classic" });
+    return cart.id;
+  }
+
+  /** The option group and two different choices for an item that has them. */
+  async function twoChoices(itemId: string) {
+    const { categories } = menuService.getMenu();
+    const item = categories.flatMap((category) => category.items).find((entry) => entry.id === itemId)!;
+    const group = item.optionGroups.find((candidate) => candidate.choices.length > 1)!;
+    return { groupId: group.id, first: group.choices[0]!.id, second: group.choices[1]!.id };
+  }
+
+  it("keeps the line exactly where it was among the others", async () => {
+    const cartId = await threeLines();
+    const before = await carts.price(cartId);
+    const middle = before.lines[1]!;
+    const { groupId, second } = await twoChoices(middle.itemId);
+
+    const after = await carts.editLine(cartId, middle.lineId, {
+      selections: [{ groupId, choiceId: second }],
+    });
+
+    // Same slot, same line id, same neighbours in the same order.
+    expect(after.lines[1]!.lineId).toBe(middle.lineId);
+    expect(after.lines.map((line) => line.lineId)).toEqual(before.lines.map((line) => line.lineId));
+    expect(after.lines).toHaveLength(3);
+    // And it really did change. Only the group that was sent moves; an item
+    // with several groups keeps its defaults for the ones that were not.
+    const chosen = after.lines[1]!.options.find((option) => option.groupId === groupId);
+    expect(chosen!.choiceId).toBe(second);
+  });
+
+  it("changes quantity and selections together in one call", async () => {
+    const cartId = await threeLines();
+    const before = await carts.price(cartId);
+    const target = before.lines[0]!;
+    const { groupId, second } = await twoChoices(target.itemId);
+
+    const after = await carts.editLine(cartId, target.lineId, {
+      quantity: 3,
+      selections: [{ groupId, choiceId: second }],
+    });
+
+    expect(after.lines[0]!.lineId).toBe(target.lineId);
+    expect(after.lines[0]!.quantity).toBe(3);
+    expect(after.lines[0]!.options.find((option) => option.groupId === groupId)!.choiceId).toBe(second);
+  });
+
+  it("reprices the whole cart, tax and all", async () => {
+    const cartId = await threeLines();
+    const before = await carts.price(cartId);
+    const target = before.lines[0]!;
+
+    const after = await carts.editLine(cartId, target.lineId, { quantity: 4 });
+
+    expect(after.itemCount).toBe(before.itemCount + 3);
+    expect(after.subtotalSen).toBe(before.subtotalSen + target.unitPriceSen * 3);
+    // Tax is rounded once on the subtotal, so it is recomputed rather than scaled.
+    expect(after.taxSen).toBe(Math.round(after.subtotalSen * after.taxRate));
+    expect(after.totalSen).toBe(after.subtotalSen + after.taxSen);
+  });
+
+  it("prices an option that costs extra into the line and the total", async () => {
+    const cartId = await threeLines();
+    const before = await carts.price(cartId);
+    const target = before.lines[0]!;
+
+    const { categories } = menuService.getMenu();
+    const item = categories.flatMap((category) => category.items).find((entry) => entry.id === target.itemId)!;
+    const paid = item.optionGroups
+      .flatMap((group) => group.choices.map((choice) => ({ groupId: group.id, choice })))
+      .find((entry) => entry.choice.priceDeltaSen > 0);
+    if (!paid) return; // No paid option on this item; nothing to assert.
+
+    const after = await carts.editLine(cartId, target.lineId, {
+      selections: [{ groupId: paid.groupId, choiceId: paid.choice.id }],
+    });
+
+    expect(after.lines[0]!.unitPriceSen).toBe(target.unitBasePriceSen + paid.choice.priceDeltaSen);
+    expect(after.subtotalSen).toBeGreaterThan(before.subtotalSen);
+  });
+
+  it("refuses to re-choose a drink won from the fishing game", async () => {
+    // The protection the page already had, now where it cannot be skipped by
+    // calling the API directly: the line prices at zero because it was a prize,
+    // and re-choosing its options would have to re-price it.
+    const cartId = await threeLines();
+    await carts.registerContact(cartId, "player@example.com");
+    // 0.85 lands on `rare`, which is the free drink.
+    await carts.play(cartId, () => 0.85);
+
+    const priced = await carts.price(cartId);
+    const won = priced.lines.find((line) => line.unitPriceSen === 0)!;
+    expect(won, "expected the game to have added a free line").toBeDefined();
+    const { groupId, second } = await twoChoices(won.itemId);
+
+    await expect(
+      carts.editLine(cartId, won.lineId, { selections: [{ groupId, choiceId: second }] }),
+    ).rejects.toThrow(/won from the fishing game/i);
+
+    // Untouched, and still free.
+    const after = await carts.price(cartId);
+    expect(after.lines.find((line) => line.lineId === won.lineId)!.unitPriceSen).toBe(0);
+  });
+
+  it("still lets the stepper change a won line's quantity", async () => {
+    // Only *selections* are refused. The stepper is explicitly unchanged, and
+    // it goes through `updateQuantity`, not this.
+    const cartId = await threeLines();
+    await carts.registerContact(cartId, "player@example.com");
+    await carts.play(cartId, () => 0.85);
+    const won = (await carts.price(cartId)).lines.find((line) => line.unitPriceSen === 0)!;
+
+    const after = await carts.editLine(cartId, won.lineId, { quantity: 2 });
+    expect(after.lines.find((line) => line.lineId === won.lineId)!.quantity).toBe(2);
+  });
+
+  it("refuses a line that is not in this cart", async () => {
+    const cartId = await threeLines();
+    await expect(carts.editLine(cartId, "not-a-line", { quantity: 2 })).rejects.toThrow(/no line/i);
+  });
+
+  it("refuses an option that does not exist, without saving it", async () => {
+    const cartId = await threeLines();
+    const before = await carts.price(cartId);
+    const target = before.lines[0]!;
+    const { groupId } = await twoChoices(target.itemId);
+
+    await expect(
+      carts.editLine(cartId, target.lineId, { selections: [{ groupId, choiceId: "no-such-choice" }] }),
+    ).rejects.toThrow();
+
+    // Priced before it is committed, so nothing was written.
+    const after = await carts.price(cartId);
+    expect(after.lines[0]!.options).toEqual(target.options);
+  });
+});
+
+/** The same, over HTTP, which is what the page actually calls. */
+describe("editing a line over HTTP", () => {
+  let server: Server;
+  let base: string;
+
+  beforeAll(async () => {
+    const services = createServices();
+    server = createServer(services).listen(0);
+    await new Promise((resolve) => server.once("listening", resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const call = (method: string, path: string, body?: unknown) =>
+    fetch(`${base}${path}`, {
+      method,
+      headers: { "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  const json = (res: Response): Promise<any> => res.json() as Promise<any>;
+
+  it("rewrites the middle line and leaves the order alone", async () => {
+    const { cartId } = await json(await call("POST", "/api/carts", {}));
+    for (const itemId of ["fish-dory-classic", "drink-teh-ais", "fish-dory-classic"]) {
+      await call("POST", `/api/carts/${cartId}/lines`, { itemId });
+    }
+    const before = (await json(await call("GET", `/api/carts/${cartId}`))).cart;
+    const middle = before.lines[1];
+
+    const menu = await json(await call("GET", "/api/menu"));
+    const item = menu.categories.flatMap((c: any) => c.items).find((i: any) => i.id === middle.itemId);
+    const group = item.optionGroups.find((g: any) => g.choices.length > 1);
+
+    const response = await call("PATCH", `/api/carts/${cartId}/lines/${middle.lineId}`, {
+      quantity: 2,
+      selections: [{ groupId: group.id, choiceId: group.choices[1].id }],
+    });
+    expect(response.status).toBe(200);
+
+    const after = (await json(response)).cart;
+    expect(after.lines.map((line: any) => line.lineId)).toEqual(before.lines.map((line: any) => line.lineId));
+    expect(after.lines[1].quantity).toBe(2);
+    expect(after.lines[1].options[0].choiceId).toBe(group.choices[1].id);
+  });
+
+  it("still takes a bare quantity, exactly as the stepper sends it", async () => {
+    const { cartId } = await json(await call("POST", "/api/carts", {}));
+    await call("POST", `/api/carts/${cartId}/lines`, { itemId: "fish-dory-classic" });
+    const line = (await json(await call("GET", `/api/carts/${cartId}`))).cart.lines[0];
+
+    const body = await json(await call("PATCH", `/api/carts/${cartId}/lines/${line.lineId}`, { quantity: 3 }));
+    expect(body.cart.lines[0].quantity).toBe(3);
+
+    // Including the shorthand the stepper relies on at one: zero removes it.
+    const emptied = await json(await call("PATCH", `/api/carts/${cartId}/lines/${line.lineId}`, { quantity: 0 }));
+    expect(emptied.cart.lines).toHaveLength(0);
+  });
+
+  it("refuses an edit with nothing in it", async () => {
+    const { cartId } = await json(await call("POST", "/api/carts", {}));
+    await call("POST", `/api/carts/${cartId}/lines`, { itemId: "fish-dory-classic" });
+    const line = (await json(await call("GET", `/api/carts/${cartId}`))).cart.lines[0];
+
+    expect((await call("PATCH", `/api/carts/${cartId}/lines/${line.lineId}`, {})).status).toBe(400);
   });
 });

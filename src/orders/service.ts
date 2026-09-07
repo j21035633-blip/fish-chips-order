@@ -124,6 +124,59 @@ export class CartService {
     return priced;
   }
 
+  /**
+   * Changes what a line *is* — its choices, and optionally its quantity — where
+   * it already sits.
+   *
+   * Separate from `updateQuantity` because they answer different questions: the
+   * stepper says "two of these" and this says "actually, no ice". Rebuilt with
+   * `map`, so the line keeps its id and its **position** among the others; the
+   * client used to do this by adding a new line and deleting the old one, which
+   * worked and quietly sent the edited item to the bottom of the order.
+   *
+   * A line won from the fishing game is refused. It prices at zero because it
+   * was a prize, and re-choosing its options would have to re-price it — at
+   * which point the customer either loses the reward or gets to keep choosing
+   * new free drinks. The page already hides Edit on those; this is the same
+   * rule where it cannot be skipped by calling the API directly.
+   */
+  async editLine(
+    cartId: string,
+    lineId: string,
+    changes: { quantity?: number | undefined; selections?: OptionSelection[] | undefined },
+  ): Promise<PricedCart> {
+    const cart = await this.get(cartId);
+    const existing = cart.lines.find((line) => line.lineId === lineId);
+    if (!existing) {
+      throw new OrderValidationError(`No line "${lineId}" in this cart.`, "unknown_line", { cartId, lineId });
+    }
+
+    if (existing.freeFromReward !== undefined && changes.selections !== undefined) {
+      throw new OrderValidationError(
+        "That drink was won from the fishing game and cannot be changed.",
+        "reward_line_not_editable",
+        { cartId, lineId },
+      );
+    }
+
+    const next = cart.lines.map((line) =>
+      line.lineId === lineId
+        ? {
+            ...line,
+            ...(changes.quantity === undefined ? {} : { quantity: changes.quantity }),
+            ...(changes.selections === undefined ? {} : { selections: changes.selections }),
+          }
+        : line,
+    );
+
+    // Priced before it is committed, so an option id that does not exist is
+    // refused here rather than saved and discovered at checkout.
+    const priced = priceCart(cart.id, next, this.menu, cart.tableNumber, cart.rewards);
+
+    await this.commit(cart, next);
+    return priced;
+  }
+
   async removeLine(cartId: string, lineId: string): Promise<PricedCart> {
     const cart = await this.get(cartId);
     if (!cart.lines.some((line) => line.lineId === lineId)) {

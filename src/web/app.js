@@ -239,22 +239,45 @@ function renderCart() {
                     })
                   : null,
                 line.note ? el("div", { class: "cart-line-opts", text: `Note: ${line.note}` }) : null,
-                el("div", { class: "qty", style: "margin-top:8px" }, [
-                  el("button", {
-                    class: "icon-button",
-                    type: "button",
-                    "aria-label": "Fewer",
-                    text: "−",
-                    onClick: () => changeQuantity(line, line.quantity - 1),
-                  }),
-                  el("output", { text: String(line.quantity) }),
-                  el("button", {
-                    class: "icon-button",
-                    type: "button",
-                    "aria-label": "More",
-                    text: "+",
-                    onClick: () => changeQuantity(line, line.quantity + 1),
-                  }),
+                el("div", { class: "cart-line-actions" }, [
+                  el("div", { class: "qty" }, [
+                    el("button", {
+                      class: "icon-button",
+                      type: "button",
+                      "aria-label": "Fewer",
+                      text: "−",
+                      onClick: () => changeQuantity(line, line.quantity - 1),
+                    }),
+                    el("output", { text: String(line.quantity) }),
+                    el("button", {
+                      class: "icon-button",
+                      type: "button",
+                      "aria-label": "More",
+                      text: "+",
+                      onClick: () => changeQuantity(line, line.quantity + 1),
+                    }),
+                  ]),
+                  // Nothing to edit on an item with no choices, so no button
+                  // for it — and nothing safe to edit on a won reward, which
+                  // prices at zero and would come back at full price.
+                  editableItem(line)
+                    ? el("button", {
+                        class: "line-action",
+                        type: "button",
+                        text: "Edit",
+                        "aria-label": `Edit ${line.name}`,
+                        onClick: () => editLine(line),
+                      })
+                    : null,
+                  rewardLine(line)
+                    ? null
+                    : el("button", {
+                        class: "line-action remove",
+                        type: "button",
+                        text: "Remove",
+                        "aria-label": `Remove ${line.name}`,
+                        onClick: () => removeLine(line),
+                      }),
                 ]),
               ]),
               el("div", { class: "cart-line-total", text: line.lineTotal }),
@@ -262,6 +285,60 @@ function renderCart() {
           ),
         ),
   );
+}
+
+/** The menu item behind a cart line, if the menu has been loaded. */
+function itemFor(line) {
+  for (const category of state.menu ?? []) {
+    const found = (category.items ?? []).find((item) => item.id === line.itemId);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * A line that came from the fishing game rather than from a tap.
+ *
+ * It prices at zero against a menu item that does not, which is the only signal
+ * on a priced line that it was won. Neither Edit nor Remove is offered on one:
+ * editing goes through add-then-remove and would bring the drink back at full
+ * price, and removing it is exactly the irreversible thing the "no confirmation
+ * needed" reasoning does not cover — the cast that won it has been spent, and
+ * re-adding is not trivial.
+ */
+function rewardLine(line) {
+  const item = itemFor(line);
+  return line.unitPriceSen === 0 && (item?.priceSen ?? 0) > 0;
+}
+
+/** Whether this line has anything worth reopening the sheet for. */
+function editableItem(line) {
+  if (rewardLine(line)) return false;
+  return (itemFor(line)?.optionGroups?.length ?? 0) > 0;
+}
+
+/**
+ * Reopens the options sheet on an existing line.
+ *
+ * The same sheet the item was added with, so there is one place that knows how
+ * to render choices and one place that knows how to price them.
+ */
+function editLine(line) {
+  const item = itemFor(line);
+  if (!item) return;
+  openItem(item, line);
+}
+
+/** Takes the whole line out, whatever its quantity. */
+async function removeLine(line) {
+  try {
+    const { cart } = await api(`/api/carts/${state.cart.cartId}/lines/${line.lineId}`, { method: "DELETE" });
+    // Same call every quantity change makes, so the total, the tax breakdown,
+    // the bar and the spend-threshold chance all move exactly as they already do.
+    setCart(cart);
+  } catch (error) {
+    alert(error.message);
+  }
 }
 
 async function changeQuantity(line, quantity) {
@@ -566,9 +643,17 @@ async function renderMenuView() {
 }
 // ------------------------------------------------------------ item dialog
 
-function openItem(item) {
+/**
+ * The options sheet, for a new item or for one already in the order.
+ *
+ * `line` is the cart line being edited, when there is one. The sheet is the
+ * same either way — same choices, same pricing, same quantity stepper — and
+ * only the button and what happens on it differ.
+ */
+function openItem(item, line) {
   state.dialogItem = item;
-  state.dialogQty = 1;
+  state.dialogQty = line?.quantity ?? 1;
+  state.editingLine = line ?? null;
 
   // The name lives in the sheet's head, beside the close button, so it stays on
   // screen while a long list of options scrolls under it.
@@ -579,7 +664,19 @@ function openItem(item) {
     ...item.optionGroups.map((group) => optionGroup(group, updateDialogPrice)),
   );
 
-  itemQtyEl.textContent = "1";
+  // Put the line's own choices back on top of the defaults `optionGroup` set.
+  // Done here rather than by teaching `optionGroup` about pre-selection: it is
+  // shared with the staff takeaway panel, and this is the only caller that has
+  // a line to restore.
+  if (line) {
+    const chosen = new Set(line.options.map((option) => `${option.groupId}:${option.choiceId}`));
+    for (const input of itemDialogBody.querySelectorAll("input[name][value]")) {
+      input.checked = chosen.has(`${input.name}:${input.value}`);
+    }
+  }
+
+  itemAddButton.firstChild.textContent = line ? "Save — " : "Add — ";
+  itemQtyEl.textContent = String(state.dialogQty);
   updateDialogPrice();
   itemDialog.showModal();
 }
@@ -598,6 +695,7 @@ function dismissItem() {
   if (itemDialog.hasAttribute("open")) itemDialog.close();
   state.dialogItem = null;
   state.dialogQty = 1;
+  state.editingLine = null;
 }
 
 function updateDialogPrice() {
@@ -646,11 +744,23 @@ itemDialog.addEventListener("click", (event) => {
 
 itemAddButton.addEventListener("click", async () => {
   const selections = choicesIn(itemDialogBody).map(({ groupId, choiceId }) => ({ groupId, choiceId }));
+  const editing = state.editingLine;
+
   try {
-    const { cart } = await api(`/api/carts/${state.cart.cartId}/lines`, {
-      method: "POST",
-      body: JSON.stringify({ itemId: state.dialogItem.id, quantity: state.dialogQty, selections }),
-    });
+    // One call either way. An edit rewrites the line where it already sits —
+    // it used to be an add followed by a delete, which worked and quietly sent
+    // the edited item to the bottom of the order.
+    const { cart } = editing
+      ? await api(`/api/carts/${state.cart.cartId}/lines/${editing.lineId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ quantity: state.dialogQty, selections }),
+        })
+      : await api(`/api/carts/${state.cart.cartId}/lines`, {
+          method: "POST",
+          body: JSON.stringify({ itemId: state.dialogItem.id, quantity: state.dialogQty, selections }),
+        });
+
+    state.editingLine = null;
     itemDialog.close();
     // Deliberately does *not* open the sheet. Adding an item used to throw the
     // full panel over the menu, which put a wall in front of someone who was

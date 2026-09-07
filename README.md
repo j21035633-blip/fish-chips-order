@@ -86,6 +86,13 @@ table and has to load on a bad connection.
   bottom sheet with quantity controls when tapped. Empty cart, no bar — nothing floats over the menu
   until there is something to float. The sheet closes on the X, the dimmed background, Escape, or a
   swipe down on its handle.
+- Each line in the sheet carries **Edit** and **Remove** beside its stepper. Edit reopens the same
+  options sheet the item was added with, pre-filled with that line's choices and quantity; saving
+  rewrites the line **where it sits**, keeping its position in the order. Remove takes the whole line
+  out on one tap whatever its quantity. Neither appears on a drink won from the fishing game —
+  editing would bring it back at full price, and removing it is not the trivially undoable thing the
+  rest of this is — and the server refuses a selections change on one as well, so it cannot be done
+  by calling the API directly. Edit is also omitted for an item with nothing to choose.
 - Checkout with the **payment method picker** — Card (Stripe) or E-wallet/QR (Revenue Monster)
 - Order page polling payment status, since payment settles on a webhook
 
@@ -211,7 +218,7 @@ GET    /api/menu/suggestions?limit=3
 POST   /api/carts
 GET    /api/carts/:cartId
 POST   /api/carts/:cartId/lines
-PATCH  /api/carts/:cartId/lines/:lineId      { quantity }   # 0 removes
+PATCH  /api/carts/:cartId/lines/:lineId      { quantity?, selections? }   # 0 removes; selections edit in place
 DELETE /api/carts/:cartId/lines/:lineId
 
 POST   /api/orders                           { cartId, customerName? }
