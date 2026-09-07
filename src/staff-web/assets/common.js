@@ -261,6 +261,44 @@ export function cancelActions(order, decide, busy = false) {
   ]);
 }
 
+/**
+ * The staff's own Cancel button, and the "are you sure" it turns into.
+ *
+ * Two taps, never one. This is irreversible and usually moves money, and it
+ * sits on a tablet on a busy pass right next to the button somebody is reaching
+ * for every thirty seconds — a stray thumb must not be able to cancel a
+ * customer's order and refund it.
+ *
+ * The armed state is held by the **caller**, in a set that outlives a redraw,
+ * because the boards repaint from the feed every two seconds and anything kept
+ * in here would be wiped mid-question.
+ */
+export function staffCancel({ armed, busy, onArm, onDismiss, onConfirm }) {
+  if (!armed) {
+    return el("button", {
+      class: "staff-cancel",
+      type: "button",
+      text: "Cancel",
+      disabled: busy,
+      onclick: onArm,
+    });
+  }
+
+  return el("div", { class: "cancel-confirm" }, [
+    el("span", { class: "cancel-ask", text: "Cancel this order?" }),
+    // Backing out comes first, and is the plain one. The destructive answer is
+    // the one that has to be aimed at.
+    el("button", { class: "cancel-no", type: "button", text: "No", disabled: busy, onclick: onDismiss }),
+    el("button", {
+      class: "cancel-yes",
+      type: "button",
+      text: "Yes, cancel",
+      disabled: busy,
+      onclick: onConfirm,
+    }),
+  ]);
+}
+
 /** The badge a flagged ticket wears. Loud, because the kitchen has to see it. */
 export function cancelFlag() {
   return el("span", { class: "cancel-flag", text: "Cancellation requested" });

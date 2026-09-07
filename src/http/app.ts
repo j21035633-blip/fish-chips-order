@@ -446,6 +446,21 @@ export function createServer(app: Services = services) {
   });
 
   /**
+   * Staff cancel an order themselves, without waiting to be asked.
+   *
+   * Same endpoint shape as the two decisions above and the same money behind
+   * it — see `PaymentService.cancelByStaff`. Reaches a `ready` order, which the
+   * customer's own request window does not, because "they never came back for
+   * it" is exactly when the counter needs this.
+   */
+  server.patch("/api/staff/orders/:orderId/cancel", (req, res) => {
+    void runAsync(res, async () => {
+      const { order, refund } = await app.payments.cancelByStaff(req.params.orderId);
+      return { order, refund };
+    });
+  });
+
+  /**
    * No: the food is already happening.
    *
    * The order carries on untouched — same status, same place in the queue. Only

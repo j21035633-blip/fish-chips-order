@@ -315,3 +315,134 @@ describe("the staff boards flag it", () => {
     expect(css).toContain(".card.wants-cancel");
   });
 });
+
+/**
+ * The staff's own Cancel button.
+ *
+ * Two taps, never one. It sits on a tablet on a busy pass right beside the
+ * button somebody reaches for every thirty seconds, and it is irreversible and
+ * usually moves money — so most of what is asserted here is that a single
+ * stray thumb cannot do anything at all.
+ */
+describe("the staff Cancel control", () => {
+  const staffDir = resolve(process.cwd(), "src/staff-web");
+  const common = async () => import(pathToFileURL(resolve(staffDir, "assets/common.js")).href) as Promise<any>;
+
+  it("starts as one plain button that does not cancel anything", async () => {
+    const { staffCancel } = await common();
+    const fired: string[] = [];
+    const control = staffCancel({
+      armed: false,
+      busy: false,
+      onArm: () => fired.push("arm"),
+      onDismiss: () => fired.push("dismiss"),
+      onConfirm: () => fired.push("confirm"),
+    });
+
+    expect(control.tagName).toBe("BUTTON");
+    expect(control.textContent).toBe("Cancel");
+    control.click();
+
+    // The first tap only asks the question. Nothing is cancelled by it.
+    expect(fired).toEqual(["arm"]);
+    expect(fired).not.toContain("confirm");
+  });
+
+  it("asks before it does it, and lets the answer be no", async () => {
+    const { staffCancel } = await common();
+    const fired: string[] = [];
+    const armed = staffCancel({
+      armed: true,
+      busy: false,
+      onArm: () => fired.push("arm"),
+      onDismiss: () => fired.push("dismiss"),
+      onConfirm: () => fired.push("confirm"),
+    });
+
+    expect(armed.querySelector(".cancel-ask")!.textContent).toBe("Cancel this order?");
+
+    const buttons = [...armed.querySelectorAll("button")] as HTMLButtonElement[];
+    expect(buttons.map((button) => button.textContent)).toEqual(["No", "Yes, cancel"]);
+
+    // Backing out comes first, so the destructive answer is the one that has to
+    // be aimed at rather than the one nearest the thumb.
+    buttons[0]!.click();
+    expect(fired).toEqual(["dismiss"]);
+
+    buttons[1]!.click();
+    expect(fired).toEqual(["dismiss", "confirm"]);
+  });
+
+  it("goes dead while a cancellation is already in flight", async () => {
+    const { staffCancel } = await common();
+    const idle = staffCancel({ armed: false, busy: true, onArm() {}, onDismiss() {}, onConfirm() {} });
+    expect((idle as HTMLButtonElement).disabled).toBe(true);
+
+    const armed = staffCancel({ armed: true, busy: true, onArm() {}, onDismiss() {}, onConfirm() {} });
+    for (const button of armed.querySelectorAll("button")) {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+
+  it("is on both boards, beside the button that moves an order along", () => {
+    for (const page of ["staff.html", "kitchen.html"]) {
+      const html = readFileSync(resolve(staffDir, page), "utf8");
+      expect(html, page).toContain("staffCancel");
+      expect(html, page).toContain("cancelControl(order)");
+      expect(html, page).toContain("/cancel`, { method: \"PATCH\" }");
+    }
+  });
+
+  it("keeps the question up when the board repaints underneath it", () => {
+    // The boards redraw from the feed every two seconds. A confirm held inside
+    // the card would be wiped mid-question and the second tap would land on a
+    // fresh Cancel button — so the armed set lives outside the render, beside
+    // `busy`, and both pages repaint locally rather than waiting for a poll.
+    for (const page of ["staff.html", "kitchen.html"]) {
+      const html = readFileSync(resolve(staffDir, page), "utf8");
+      expect(html, page).toContain("const arming = new Set();");
+      expect(html, page).toContain("let latest = null;");
+      expect(html, page).toContain("latest = {");
+      expect(html, page).toContain("redraw()");
+    }
+  });
+
+  it("does not look like the button that advances an order", () => {
+    // The progress buttons are solid and green. Across a kitchen, the
+    // destructive one has to read as a different kind of thing entirely.
+    const css = readFileSync(resolve(staffDir, "assets/staff.css"), "utf8");
+    const rule = css.slice(css.indexOf(".staff-cancel {"), css.indexOf("}", css.indexOf(".staff-cancel {")));
+
+    expect(rule).toContain("var(--danger)");
+    expect(rule).toContain("background: transparent");
+    // And it is still a real target on a tablet.
+    expect(rule).toMatch(/min-height:\s*44px/);
+  });
+
+  it("leaves the customer-request badge and its Approve / Deny alone", async () => {
+    // This is an extra path, not a replacement. Both boards still draw the
+    // flag, and the shared helper still offers the two-sided decision.
+    const { cancelFlag, cancelActions } = await common();
+    expect(cancelFlag().textContent).toBe("Cancellation requested");
+
+    const actions = cancelActions({ paymentStatus: "paid" }, () => {});
+    expect([...actions.querySelectorAll("button")].map((b) => (b as HTMLElement).textContent)).toEqual([
+      "Keep cooking",
+      "Cancel & refund",
+    ]);
+
+    for (const page of ["staff.html", "kitchen.html"]) {
+      const html = readFileSync(resolve(staffDir, page), "utf8");
+      expect(html, page).toContain("cancelFlag");
+      expect(html, page).toContain("cancelActions");
+      // The two decisions still route through their own handler, separate from
+      // the staff-initiated one.
+      expect(html, page).toContain("decide(order.id");
+    }
+
+    // Those endpoint names live once, in the shared helper.
+    const source = readFileSync(resolve(staffDir, "assets/common.js"), "utf8");
+    expect(source).toContain("approve-cancel");
+    expect(source).toContain("deny-cancel");
+  });
+});

@@ -110,6 +110,7 @@ const PROTECTED: [string, string, unknown?][] = [
   ["GET", "/api/staff/sales-report"],
   ["GET", "/api/staff/menu-items"],
   ["PATCH", "/api/staff/orders/anything/status", { status: "cooking" }],
+  ["PATCH", "/api/staff/orders/anything/cancel"],
   ["PATCH", "/api/staff/orders/anything/approve-cancel"],
   ["PATCH", "/api/staff/orders/anything/deny-cancel"],
   ["POST", "/api/staff/orders/anything/status", { status: "cooking" }],

@@ -79,6 +79,16 @@ export function nextKitchenStatus(status: KitchenStatus): PassStatus | undefined
  */
 export const CANCELLABLE_STATUSES = ["received", "cooking"] as const;
 
+/**
+ * How far along staff may still call an order off themselves.
+ *
+ * Wider than the customer's window on purpose: the food being ready is exactly
+ * when a counter cancellation is most likely — the customer never came back for
+ * it. `collected` is the end, because by then the food has been handed over and
+ * cancelling would be a story about something that already happened.
+ */
+export const STAFF_CANCELLABLE_STATUSES = ["received", "cooking", "ready"] as const;
+
 export function isCancellable(order: Order): boolean {
   return (CANCELLABLE_STATUSES as readonly string[]).includes(order.kitchenStatus);
 }

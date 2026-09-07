@@ -549,6 +549,128 @@ describe("nothing puts a refunded order back in the takings", () => {
 });
 
 /**
+ * Staff cancelling an order themselves, with nobody having asked.
+ *
+ * The faster path for the counter. What matters is that it is *only* a faster
+ * path: the money goes through the very same code as an approved customer
+ * request, so a refund cannot behave one way when the customer asked and
+ * another when the counter did.
+ */
+describe("staff cancel an order on their own", () => {
+  const takings = async () => (await orders.dailySales()).totalSen;
+
+  it("refunds a paid order and takes it out of the day's takings", async () => {
+    const order = await payByCard(await placeOrder());
+    expect(await takings()).toBe(order.totalSen);
+
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ id: "re_staff", amount: order.totalSen, status: "succeeded" }));
+    const { order: cancelled, refund } = await paymentsWith(fetchImpl).cancelByStaff(order.id);
+
+    // The same Stripe call the approval path makes, against the intent.
+    const body = new URLSearchParams((fetchImpl.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.get("payment_intent")).toBe("pi_test_1");
+    expect(body.get("amount")).toBe(String(order.totalSen));
+
+    expect(refund.outcome).toBe("refunded");
+    expect(cancelled.kitchenStatus).toBe("cancelled");
+    expect(cancelled.paymentStatus).toBe("refunded");
+    expect(await takings()).toBe(0);
+  });
+
+  it("cancels an unpaid order without going near a provider", async () => {
+    const order = await placeOrder();
+    const fetchImpl = vi.fn();
+
+    const { order: cancelled, refund } = await paymentsWith(fetchImpl).cancelByStaff(order.id);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(refund.outcome).toBe("none");
+    expect(cancelled.kitchenStatus).toBe("cancelled");
+    expect(await takings()).toBe(0);
+  });
+
+  it("needs no customer request, and does not invent one", async () => {
+    const order = await placeOrder();
+    expect(order.cancellationRequested ?? false).toBe(false);
+
+    const { order: cancelled } = await paymentsWith(vi.fn()).cancelByStaff(order.id);
+
+    expect(cancelled.kitchenStatus).toBe("cancelled");
+    expect(cancelled.cancellationRequested).toBe(false);
+    expect(cancelled.cancellationRequestedAt).toBeUndefined();
+  });
+
+  it("also works on an order the customer *did* ask about, clearing the badge", async () => {
+    // Both doors lead to the same room: a staff member who cancels a flagged
+    // order outright must not leave the flag up on everybody else's tablet.
+    const order = await placeOrder();
+    await orders.requestCancellation(order.id);
+
+    const { order: cancelled } = await paymentsWith(vi.fn()).cancelByStaff(order.id);
+
+    expect(cancelled.cancellationRequested).toBe(false);
+    expect(cancelled.kitchenStatus).toBe("cancelled");
+  });
+
+  it("reaches a ready order, which the customer's own window does not", async () => {
+    // The case this exists for: the food is up and nobody came back for it.
+    const order = await placeOrder();
+    await orders.setKitchenStatus(order.id, "ready");
+    await expect(orders.requestCancellation(order.id)).rejects.toThrow(/cancel/i);
+
+    const { order: cancelled } = await paymentsWith(vi.fn()).cancelByStaff(order.id);
+    expect(cancelled.kitchenStatus).toBe("cancelled");
+  });
+
+  it("refuses an order that has already been handed over", async () => {
+    const order = await placeOrder();
+    await orders.setKitchenStatus(order.id, "collected");
+
+    await expect(paymentsWith(vi.fn()).cancelByStaff(order.id)).rejects.toThrow(/collected/i);
+    expect((await orders.get(order.id)).kitchenStatus).toBe("collected");
+  });
+
+  it("refuses a second cancellation, so nothing is refunded twice", async () => {
+    const order = await payByCard(await placeOrder());
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ id: "re_once", amount: order.totalSen, status: "succeeded" }));
+    const payments = paymentsWith(fetchImpl);
+
+    await payments.cancelByStaff(order.id);
+    await expect(payments.cancelByStaff(order.id)).rejects.toThrow(/already been cancelled/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a queued refund in the takings, exactly as the approval path does", async () => {
+    // The confirmation rule is shared, not reimplemented: accepted is not
+    // settled, and the shop still holds this money.
+    const order = await payByCard(await placeOrder());
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ id: "re_pend", amount: order.totalSen, status: "pending" }));
+
+    const { refund } = await paymentsWith(fetchImpl).cancelByStaff(order.id);
+
+    expect(refund.outcome).toBe("pending");
+    expect((await orders.get(order.id)).paymentStatus).toBe("paid");
+    expect(await takings()).toBe(order.totalSen);
+  });
+
+  it("leaves the customer's own request flow alone", async () => {
+    // Nothing about the two-step path changed: still needs a request, still
+    // refuses without one.
+    const order = await placeOrder();
+    await expect(paymentsWith(vi.fn()).approveCancellation(order.id)).rejects.toThrow(
+      /no cancellation request/i,
+    );
+    await expect(orders.denyCancellation(order.id)).rejects.toThrow(/no cancellation request/i);
+  });
+});
+
+/**
  * The same flow over HTTP, which is the only way the customer's page and the
  * staff tablets ever touch it.
  */
@@ -659,6 +781,45 @@ describe("over HTTP", () => {
     expect(after.order.cancellationDeniedAt).toBeTruthy();
     // Still cooking, still going.
     expect(after.order.kitchenStatus).toBe("cooking");
+  });
+
+  it("cancels straight from the counter, with nobody having asked", async () => {
+    const order = await placedOverHttp();
+
+    const response = await call("PATCH", `/api/staff/orders/${order.id}/cancel`);
+    expect(response.status).toBe(200);
+
+    const body = await json(response);
+    expect(body.order.kitchenStatus).toBe("cancelled");
+    expect(body.refund.outcome).toBe("none");
+    expect(body.refund.reason).toBeTruthy();
+
+    // And the customer's page sees it on its next poll, same as an approval.
+    const seen = await json(await call("GET", `/api/orders/${order.id}`));
+    expect(seen.order.kitchenStatus).toBe("cancelled");
+  });
+
+  it("cancels a ready order from the counter, which the customer cannot", async () => {
+    const order = await placedOverHttp();
+    await call("PATCH", `/api/staff/orders/${order.id}/status`, { status: "ready" });
+
+    // The customer is refused...
+    const asked = await call("POST", `/api/order/${order.id}/request-cancel`);
+    expect(asked.status).toBe(400);
+
+    // ...and the counter is not.
+    const staff = await call("PATCH", `/api/staff/orders/${order.id}/cancel`);
+    expect(staff.status).toBe(200);
+    await expect(json(staff)).resolves.toMatchObject({ order: { kitchenStatus: "cancelled" } });
+  });
+
+  it("refuses to cancel an order that has been collected", async () => {
+    const order = await placedOverHttp();
+    await call("PATCH", `/api/staff/orders/${order.id}/status`, { status: "collected" });
+
+    const response = await call("PATCH", `/api/staff/orders/${order.id}/cancel`);
+    expect(response.status).toBe(400);
+    await expect(json(response)).resolves.toMatchObject({ error: "cancellation_after_collection" });
   });
 
   it("will not let the ordinary status endpoint cancel an order", async () => {

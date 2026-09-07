@@ -96,6 +96,7 @@
         cancelActions,
         cancelFlag,
         el,
+        staffCancel,
         errorBanner,
         orderFeed,
         orderLabel,
@@ -127,6 +128,60 @@
       const emptyEl = document.getElementById("empty");
       const showError = errorBanner();
       const busy = new Set();
+
+      /**
+       * Which tickets are currently asking "are you sure".
+       *
+       * Held out here, beside `busy`, because the board repaints from the feed
+       * every two seconds — a confirm kept inside the card would be wiped
+       * mid-question, and the second tap would land on a fresh Cancel button.
+       */
+      const arming = new Set();
+      /** The last feed payload, so arming can repaint without a round trip. */
+      let latest = null;
+      const redraw = () => {
+        if (latest) draw(latest);
+      };
+
+      /**
+       * Cancel an order from the counter, refund included.
+       *
+       * The same server-side path the customer's own request goes through when
+       * it is approved, so the money is handled identically — and what it says
+       * about the money is surfaced, because for cash and e-wallet orders the
+       * honest answer is "somebody has to do this by hand".
+       */
+      async function cancelOrder(orderId) {
+        busy.add(orderId);
+        try {
+          const { refund } = await api(`/api/staff/orders/${orderId}/cancel`, { method: "PATCH" });
+          arming.delete(orderId);
+          if (refund?.reason) showError(refund.reason);
+          await feed.refresh();
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          busy.delete(orderId);
+        }
+      }
+
+      /** The Cancel control for one ticket, wired to the set above. */
+      function cancelControl(order) {
+        return staffCancel({
+          armed: arming.has(order.id),
+          busy: busy.has(order.id),
+          onArm: () => {
+            arming.add(order.id);
+            redraw();
+          },
+          onDismiss: () => {
+            arming.delete(order.id);
+            redraw();
+          },
+          onConfirm: () => cancelOrder(order.id),
+        });
+      }
+
 
       function card(order) {
         const action = ACTION[order.kitchenStatus];
@@ -166,13 +221,17 @@
             el("span", { class: "total", text: order.total }),
             el("span", { class: `tag ${order.paymentStatus}`, text: paid ? "Paid" : order.paymentStatus }),
           ]),
-          el("button", {
-            class: "advance",
-            type: "button",
-            text: action.label,
-            disabled: busy.has(order.id),
-            onClick: () => move(order.id, action.next),
-          }),
+          el("div", { class: "card-actions" }, [
+            el("button", {
+              class: "advance",
+              type: "button",
+              text: action.label,
+              disabled: busy.has(order.id),
+              onClick: () => move(order.id, action.next),
+            }),
+            arming.has(order.id) ? null : cancelControl(order),
+          ]),
+          arming.has(order.id) ? cancelControl(order) : null,
           // Below the one action the status calls for, so a decision about
           // cancelling cannot be mistaken for it during service.
           wantsCancel ? cancelActions(order, (choice) => decide(order.id, choice), busy.has(order.id)) : null,
@@ -218,6 +277,7 @@
       }
 
       function draw({ orders }) {
+        latest = { orders };
         showError();
         const active = orders
           .filter((order) => ACTIVE.includes(order.kitchenStatus))

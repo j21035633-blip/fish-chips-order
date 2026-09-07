@@ -96,7 +96,18 @@ customer's button raises a flag and waits.
 POST  /api/order/{id}/request-cancel            # customer, no auth, idempotent
 PATCH /api/staff/orders/{id}/approve-cancel     # cancels + refunds
 PATCH /api/staff/orders/{id}/deny-cancel        # clears the flag, order untouched
+PATCH /api/staff/orders/{id}/cancel             # staff-initiated; no request needed
 ```
+
+**Two doors, one room.** `approve-cancel` answers a customer who asked;
+`cancel` is the counter doing it themselves — an order rung up twice, or one
+nobody came back for. They differ only in *eligibility*: `cancelByStaff` needs
+no request and reaches a `ready` order (`STAFF_CANCELLABLE_STATUSES`), which the
+customer's own window (`CANCELLABLE_STATUSES`) has already closed on. Both then
+run through the same private `cancelAndRefund`, deliberately — a second refund
+implementation would be a second place for the confirmation rule to be got
+wrong, and getting it wrong means keeping a customer's money or writing off
+takings the shop still holds. Neither can touch a `collected` order.
 
 - **Allowed only at `received` or `cooking`** (`CANCELLABLE_STATUSES`). From `ready` on it is a 400
   `cancellation_too_late` and the button is not drawn. Asking twice is the same as asking once.
@@ -110,6 +121,12 @@ PATCH /api/staff/orders/{id}/deny-cancel        # clears the flag, order untouch
 - **Broadcast is the existing poll.** The flag rides on the order, so it reaches every staff tablet
   on the next `/api/staff/overview` tick — the same way a new order does. There is still no
   WebSocket anywhere in this project.
+- **The staff Cancel button is two taps.** It is irreversible and usually moves money, and it sits
+  beside the button somebody hits every thirty seconds. The armed "Cancel this order?" state is held
+  in an `arming` Set **outside** the render, next to `busy`, because the boards repaint from the
+  feed every two seconds — a confirm kept inside the card would be wiped mid-question and the second
+  tap would land on a fresh button. Each page keeps its last payload in `latest` so arming repaints
+  locally instead of waiting for a poll.
 
 **The refund** (`PaymentService.approveCancellation`) records one of four outcomes on `order.refund`,
 and the customer is shown its `reason` verbatim:

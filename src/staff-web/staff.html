@@ -33,6 +33,7 @@
         cancelActions,
         cancelFlag,
         el,
+        staffCancel,
         errorBanner,
         orderFeed,
         orderLabel,
@@ -54,6 +55,60 @@
 
       const showError = errorBanner();
       const busy = new Set();
+
+      /**
+       * Which tickets are currently asking "are you sure".
+       *
+       * Held out here, beside `busy`, because the board repaints from the feed
+       * every two seconds — a confirm kept inside the card would be wiped
+       * mid-question, and the second tap would land on a fresh Cancel button.
+       */
+      const arming = new Set();
+      /** The last feed payload, so arming can repaint without a round trip. */
+      let latest = null;
+      const redraw = () => {
+        if (latest) draw(latest);
+      };
+
+      /**
+       * Cancel an order from the counter, refund included.
+       *
+       * The same server-side path the customer's own request goes through when
+       * it is approved, so the money is handled identically — and what it says
+       * about the money is surfaced, because for cash and e-wallet orders the
+       * honest answer is "somebody has to do this by hand".
+       */
+      async function cancelOrder(orderId) {
+        busy.add(orderId);
+        try {
+          const { refund } = await api(`/api/staff/orders/${orderId}/cancel`, { method: "PATCH" });
+          arming.delete(orderId);
+          if (refund?.reason) showError(refund.reason);
+          await feed.refresh();
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          busy.delete(orderId);
+        }
+      }
+
+      /** The Cancel control for one ticket, wired to the set above. */
+      function cancelControl(order) {
+        return staffCancel({
+          armed: arming.has(order.id),
+          busy: busy.has(order.id),
+          onArm: () => {
+            arming.add(order.id);
+            redraw();
+          },
+          onDismiss: () => {
+            arming.delete(order.id);
+            redraw();
+          },
+          onConfirm: () => cancelOrder(order.id),
+        });
+      }
+
 
       function ticket(order) {
         const paid = order.paymentStatus === "paid";
@@ -112,7 +167,11 @@
                   onClick: () => move(order.id, next),
                 })
               : null,
+            // Beside the button that moves the order along, and outlined red so
+            // it cannot be taken for another of them.
+            arming.has(order.id) ? null : cancelControl(order),
           ]),
+          arming.has(order.id) ? cancelControl(order) : null,
           // Under the foot, so the decision is separated from the ordinary
           // "move it along" buttons it must never be mistaken for.
           wantsCancel ? cancelActions(order, (action) => decide(order.id, action), busy.has(order.id)) : null,
@@ -156,6 +215,7 @@
       }
 
       function draw({ orders, sales }) {
+        latest = { orders, sales };
         showError();
         salesTotal.textContent = sales.total;
         salesLabel.textContent =

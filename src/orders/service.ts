@@ -29,6 +29,7 @@ import {
   isCancellable,
   cancellationPending,
   type OrderRefund,
+  STAFF_CANCELLABLE_STATUSES,
 } from "./types.js";
 
 export const MAX_CART_LINES = 40;
@@ -680,6 +681,33 @@ export class OrderService {
         "There is no cancellation request on this order.",
         "no_cancellation_request",
         { orderId },
+      );
+    }
+    return order;
+  }
+
+  /**
+   * The order a staff member is about to cancel off their own bat.
+   *
+   * The counterpart to `cancellationTarget`, and deliberately a separate method
+   * rather than a flag on it: this one does **not** require the customer to have
+   * asked. What it still refuses is an order that has already gone — cancelled
+   * twice, or handed over — because both would be a lie about something that
+   * already happened, and the first would try to refund twice.
+   */
+  async staffCancellationTarget(orderId: string): Promise<Order> {
+    const order = await this.get(orderId);
+
+    if (order.kitchenStatus === "cancelled") {
+      throw new OrderValidationError("This order has already been cancelled.", "already_cancelled", {
+        orderId,
+      });
+    }
+    if (!(STAFF_CANCELLABLE_STATUSES as readonly string[]).includes(order.kitchenStatus)) {
+      throw new OrderValidationError(
+        "This order has already been collected and cannot be cancelled.",
+        "cancellation_after_collection",
+        { orderId, kitchenStatus: order.kitchenStatus },
       );
     }
     return order;

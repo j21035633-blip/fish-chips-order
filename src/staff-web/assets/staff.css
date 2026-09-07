@@ -651,3 +651,53 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 .deny-cancel { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; font: inherit; cursor: pointer; }
 .cancel-actions button:disabled { opacity: 0.55; cursor: default; }
 .cancel-note { margin-top: 8px; font-size: 13px; color: var(--ink-soft); }
+
+/*
+ * The staff's own Cancel, next to the button that moves an order along.
+ *
+ * Outlined rather than filled, and the only red thing on an unflagged ticket:
+ * the progress buttons are solid and green, so the destructive one must not
+ * read as another of them at a glance across a kitchen.
+ */
+.staff-cancel {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 2px solid var(--danger);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--danger);
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+.staff-cancel:disabled { opacity: 0.5; cursor: default; }
+
+/* The armed state. Wide, so the question is unmissable once it is asked. */
+.cancel-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 10px;
+  border: 2px solid var(--danger);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.cancel-ask { flex: 1; font-weight: 750; font-size: 14px; min-width: 120px; }
+.cancel-no,
+.cancel-yes {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+.cancel-no { border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.cancel-yes { border: 0; background: var(--danger); color: #fff; }
+.cancel-no:disabled, .cancel-yes:disabled { opacity: 0.5; cursor: default; }
+
+/* The kitchen card's action row: the one advance button, plus Cancel. */
+.card-actions { display: flex; gap: 8px; align-items: stretch; }
+.card-actions .advance { flex: 1; }

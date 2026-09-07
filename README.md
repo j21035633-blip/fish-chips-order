@@ -568,7 +568,13 @@ gone, and the endpoint refuses with `cancellation_too_late`.
 POST  /api/order/{id}/request-cancel          # customer
 PATCH /api/staff/orders/{id}/approve-cancel   # cancel + refund
 PATCH /api/staff/orders/{id}/deny-cancel      # order carries on untouched
+PATCH /api/staff/orders/{id}/cancel           # staff, no request needed
 ```
+
+Staff also get a **Cancel** button on every card, outlined red so it cannot be taken for the solid
+green button beside it, and it takes **two taps** — the first only asks "Cancel this order?". It
+reaches a **ready** order, which the customer's own request window does not, because "they never
+came back for it" is exactly when the counter needs it. Same refund path as an approved request.
 
 Both boards show a red **Cancellation requested** badge and an outlined ticket, with **Keep cooking**
 and **Cancel & refund** underneath the ordinary action. Approving refunds a Stripe-paid order in

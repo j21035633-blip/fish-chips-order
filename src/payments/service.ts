@@ -236,9 +236,38 @@ export class PaymentService {
    * with "the refund failed, do it by hand" written on it in plain sight.
    */
   async approveCancellation(orderId: string): Promise<{ order: Order; refund: OrderRefund }> {
-    const target = await this.orders.cancellationTarget(orderId);
+    return this.cancelAndRefund(await this.orders.cancellationTarget(orderId));
+  }
+
+  /**
+   * A staff member cancels an order themselves, without being asked.
+   *
+   * The faster path for the counter — a customer who never came back for a
+   * ready order, an order rung up twice — and it runs through **exactly** the
+   * same money as the approval above. That sharing is the point: a second
+   * refund implementation is a second place for the confirmation rule to be got
+   * wrong, and getting it wrong means either keeping a customer's money or
+   * writing off takings the shop still holds.
+   *
+   * The only difference is which orders are eligible. This one needs no
+   * customer request, and reaches a `ready` order that the customer's own
+   * window has already closed on — which is exactly when the counter needs it.
+   */
+  async cancelByStaff(orderId: string): Promise<{ order: Order; refund: OrderRefund }> {
+    return this.cancelAndRefund(await this.orders.staffCancellationTarget(orderId));
+  }
+
+  /**
+   * Refund, then write the cancellation and the receipt together.
+   *
+   * Shared so the order of operations cannot drift between the two entry
+   * points: eligibility has already been checked by the caller — **before** any
+   * money moves, so a double-tap cannot refund twice — and the order is only
+   * marked cancelled once the provider has answered.
+   */
+  private async cancelAndRefund(target: Order): Promise<{ order: Order; refund: OrderRefund }> {
     const refund = await this.refundFor(target);
-    const order = await this.orders.completeCancellation(orderId, refund);
+    const order = await this.orders.completeCancellation(target.id, refund);
     return { order, refund };
   }
 
