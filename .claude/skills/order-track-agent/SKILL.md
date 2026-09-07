@@ -257,10 +257,37 @@ was already promised.
 
 **The play, as the customer sees it** (`src/web/fishing.js`): cast, wait, bite, reel, land. The reel
 is the skill — a safe zone that the fish drags up and down the tension bar, which has to be tracked
-by holding and letting go. There is **no fail state**: a hopeless reel scores near zero, lands on a
-12-second timeout, and still pays out. The physics live in `createReel`, which is pure, frame-rate
-independent and DOM-free, so the scoring is unit-tested against a script of inputs rather than by
-driving an animation.
+by holding and letting go. There is **no fail state**: a hopeless reel scores near zero and still
+pays out. The physics live in `createReel`, which is pure, frame-rate independent and DOM-free, so
+the scoring is unit-tested against a script of inputs rather than by driving an animation.
+
+### It is a children's game, and that is a constraint, not a mood
+
+Two siblings on two phones at one table is the normal case, so the whole surface is pitched at a
+six-year-old and everything below is load-bearing. There are tests for each of them, because these
+are the details that rot one small edit at a time.
+
+- **The reel is forgiving on purpose.** Wide band, slow wander, gentle tension. Anybody who tracks
+  it at all scores 100 even with a 400ms reaction time; aiming at the middle of the bar and ignoring
+  the band still scores about 70. **Progress only ever moves forward** — outside the band the fish
+  still creeps in, just slowly. It used to slip backwards, which meant a child who could not track
+  it watched the fish they had hooked swim away again for twelve seconds.
+- **Every tier's message is uniformly positive** (`TIER_SAY`), and the smallest is not graded
+  against the biggest. It used to say "A little one!", which is the wrong thing to say to a child
+  whose sibling just landed a marlin.
+- **No casino cues.** Nothing blinks, strobes or repeats faster than once every half-second; there
+  is no countdown, no timer on screen, and no run of notes before a reveal. The catch chime is the
+  same volume for a jackpot as for a small fry — a jackpot gets one extra note, never more loudness.
+- **Sized for small hands.** A full-width 66px action button under the water (the water itself still
+  works), 44px header buttons, and nothing written below 17px.
+- **The fish are drawn, not emoji.** `<symbol>` sprites at the top of `index.html`, referenced by
+  `<use href="#sp-…">`. Emoji are whatever the phone decides they are — the shark arrived grey and
+  photographic on Windows. Every one has a face and a smile.
+
+> **Watch out:** three of the things the game shows and hides are `<svg>` elements — the float, the
+> caught fish and the shadow under the water. `el.hidden = true` is an **HTMLElement** property and
+> does nothing at all on an SVG; use the attribute (`setShown` in `fishing.js`). The caught fish
+> silently never appeared for exactly this reason.
 
 Two decorations worth knowing about before touching them:
 
@@ -269,13 +296,19 @@ Two decorations worth knowing about before touching them:
   an order. The server picks the tier; the client picks which fish of that tier is on screen.
 - **A golden bite** (12% of bites) widens the safe zone for that one reel. It changes the *game's*
   difficulty, not the odds directly — a wider band earns a better score, which then tilts the roll
-  the same way skill does. Worth about +12 points to a middling player and nothing to a good one.
-  There is nothing to track long-term.
+  the same way skill does. There is nothing to track long-term.
 
 **Sound is off by default**, behind a mute toggle in the sheet head, and only an explicit stored
 "on" turns it on. This plays on a customer's phone at a table: audio nobody chose is audio during
 somebody else's dinner. The noises are synthesised with WebAudio rather than fetched, so there is no
-asset to load on a QR scan and nothing to 404 after a redeploy.
+asset to load on a QR scan and nothing to 404 after a redeploy. Everything is a sine or a triangle
+under `MAX_GAIN` — no square waves, because a buzz beside a prize reads as an alarm.
+
+> **The forgiving reel costs money, and the number is worth knowing.** Scores went up, and the score
+> tilts the roll, so the shop gives away more per play: roughly **RM3.49 → RM4.09** on a RM16.90
+> order, with jackpots at about 14% rather than 10%. Nothing about the odds or `skillBias` changed
+> to do this — the players just got better. The lever, if it needs pulling back, is `skillBias` in
+> `src/game/rewards.ts`, not the reel.
 
 **How a reward reaches the bill.** Discounts come off the subtotal *before* tax — taxing food that
 was given away would be wrong — and are clamped so two rewards can never take an order below zero. A

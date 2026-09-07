@@ -580,9 +580,16 @@ customer's session and no other**; a rejection grants nothing and frees the slot
 ### The play: cast, wait, bite, reel
 
 The reel is the skill. A safe zone slides up and down the tension bar — the fish dragging it — and
-holding or releasing is the only input; keep the bar in the green and it comes in. There is **no
-fail state**. A hopeless reel scores near zero, lands on a twelve-second timeout and still pays out,
-because the chance was earned by leaving a review and taking it away would be the wrong trade.
+holding or releasing is the only input; keep the bar on the green patch and it comes in. There is
+**no fail state**, and progress only ever moves forward: reel badly and the fish still arrives, just
+more slowly. The chance was earned by leaving a review, and taking it away would be the wrong trade.
+
+**It is built for children.** Two siblings on two phones at one table is the normal case, so the
+band is wide and slow (anybody who tracks it scores full marks, even with a 400ms reaction time),
+the action button is 66px tall, nothing is written below 17px, every tier's catch message is
+uniformly positive, and there is no countdown, no strobe and no fanfare that swells with the prize.
+The fish are drawn as SVG sprites with faces rather than set in emoji, which are whatever the
+phone decides they are.
 
 Two decorations: **species** (two or three a tier — "Anchovy" through "Golden Marlin"), which are
 cosmetic and client-side so a display name is never frozen onto an order; and a **golden bite**, 12%

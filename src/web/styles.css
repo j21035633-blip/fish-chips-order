@@ -660,7 +660,7 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
 }
 
 .fish-stage {
-  padding: 18px 20px 22px;
+  padding: 16px 18px 20px;
   text-align: center;
   /* The gesture is a vertical swipe, so the browser must not take it for a
      scroll before the handler sees it. */
@@ -668,71 +668,125 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
   user-select: none;
   cursor: grab;
 }
+
+/*
+ * The scene: sky over water over sand.
+ *
+ * Warm and sunny rather than deep and moody — this is played by children at a
+ * table, and the old palette was a cold blue-grey that read as the open sea at
+ * dusk. Taller than it was, too, because the whole panel is a touch target.
+ */
 .sea {
   position: relative;
-  height: 150px;
-  border-radius: 12px;
-  background: linear-gradient(180deg, #cfe6ef 0%, #7fb6cd 55%, #3d7f9c 100%);
+  height: 190px;
+  border-radius: 18px;
   overflow: hidden;
+  background: linear-gradient(180deg, #6ecbe8 0%, #45b3d8 55%, #2f97c4 100%);
 }
-@media (prefers-color-scheme: dark) {
-  .sea { background: linear-gradient(180deg, #24414f 0%, #17313d 55%, #0e222c 100%); }
+.sky {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 38%;
+  background: linear-gradient(180deg, #ffe9b8 0%, #ffd9a3 40%, #bfe8f5 100%);
+}
+.sun {
+  position: absolute;
+  top: 12px;
+  right: 22px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #ffd45e;
+  box-shadow: 0 0 0 8px rgba(255, 212, 94, 0.28);
+}
+/* Two rounded lumps each, which is all a cartoon cloud needs to be. */
+.cloud {
+  position: absolute;
+  height: 14px;
+  border-radius: 999px;
+  background: #fff;
+  opacity: 0.9;
+}
+.cloud::after {
+  content: "";
+  position: absolute;
+  left: 22%;
+  top: -8px;
+  width: 56%;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+}
+.cloud-a { top: 24px; left: 26px; width: 52px; animation: float-by 26s linear infinite; }
+.cloud-b { top: 46px; left: 120px; width: 38px; opacity: 0.75; animation: float-by 34s linear infinite reverse; }
+@keyframes float-by {
+  from { transform: translateX(-12px); }
+  to { transform: translateX(12px); }
+}
+
+/* The sea floor, so the water has a bottom rather than fading into nothing. */
+.sand {
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  bottom: -14px;
+  height: 40px;
+  border-radius: 50%;
+  background: #ffe2ad;
 }
 
 /*
- * The water, in two bands.
- *
- * Each is a wide ellipse drifting sideways at its own speed; the offset periods
- * are what stop the pair reading as one repeating loop. Drawn rather than
- * loaded, because this page opens from a QR scan on a restaurant's wifi and an
- * animated background is not worth a request.
+ * Two wave bands drifting at different speeds. The offset periods are what stop
+ * the pair reading as one repeating loop.
  */
 .wave {
   position: absolute;
   left: -50%;
   width: 200%;
-  height: 46px;
+  height: 44px;
   border-radius: 50%;
   will-change: transform;
 }
 .wave-back {
-  top: 44px;
-  background: rgba(255, 255, 255, 0.16);
+  top: 34%;
+  background: rgba(255, 255, 255, 0.22);
   animation: drift 7s linear infinite;
 }
 .wave-front {
-  top: 62px;
-  background: rgba(255, 255, 255, 0.22);
+  top: 46%;
+  background: rgba(255, 255, 255, 0.3);
   animation: drift 4.5s linear infinite reverse;
 }
 @keyframes drift {
   from { transform: translateX(-14%); }
   to { transform: translateX(14%); }
 }
-@media (prefers-color-scheme: dark) {
-  .wave-back { background: rgba(255, 255, 255, 0.05); }
-  .wave-front { background: rgba(255, 255, 255, 0.07); }
-}
 
-/* The golden bite's glow. Off unless the scene is wearing .golden. */
+/*
+ * The golden bite's glow.
+ *
+ * A slow, shallow breath — 3s, and only between 55% and 80% opacity. It is
+ * deliberately nothing like a blink: a light that flashes over a prize is the
+ * language of a slot machine, and this is a children's game in a chip shop.
+ */
 .shimmer {
   position: absolute;
   inset: 0;
   opacity: 0;
-  background: radial-gradient(circle at 50% 55%, rgba(255, 214, 102, 0.55), transparent 62%);
-  transition: opacity 0.4s ease;
+  background: radial-gradient(circle at 50% 58%, rgba(255, 214, 102, 0.6), transparent 66%);
+  transition: opacity 0.5s ease;
   pointer-events: none;
 }
-.sea.golden .shimmer { opacity: 1; animation: shimmer 1.6s ease-in-out infinite; }
+.sea.golden .shimmer { opacity: 1; animation: shimmer 3s ease-in-out infinite; }
 @keyframes shimmer {
-  0%, 100% { opacity: 0.45; }
-  50% { opacity: 0.9; }
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.8; }
 }
 
 /*
  * The line, as an SVG path so it can *arc* to the splash point rather than hang
- * straight down from the middle. It is drawn on with stroke-dashoffset — the
- * one honest way to animate a stroke being paid out.
+ * straight down. Drawn on with stroke-dashoffset — the one honest way to
+ * animate a stroke being paid out.
  */
 .line-svg {
   position: absolute;
@@ -743,10 +797,10 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
 }
 .line {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.8);
-  stroke-width: 1.6;
-  stroke-dasharray: 200;
-  stroke-dashoffset: 200;
+  stroke: rgba(255, 255, 255, 0.9);
+  stroke-width: 1.8;
+  stroke-dasharray: 240;
+  stroke-dashoffset: 240;
   transition: stroke-dashoffset 0.45s ease-out;
 }
 .line.out { stroke-dashoffset: 0; }
@@ -755,80 +809,83 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
 .ripple {
   position: absolute;
   left: 50%;
-  top: 68px;
-  width: 18px;
-  height: 18px;
-  margin: -9px 0 0 -9px;
-  border: 2px solid rgba(255, 255, 255, 0.85);
+  top: 96px;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border: 3px solid rgba(255, 255, 255, 0.9);
   border-radius: 50%;
   opacity: 0;
   pointer-events: none;
 }
-.ripple.go { animation: ripple 0.75s ease-out; }
+.ripple.go { animation: ripple 0.8s ease-out; }
 @keyframes ripple {
-  from { transform: scale(0.4); opacity: 0.9; }
-  to { transform: scale(4.2); opacity: 0; }
+  from { transform: scale(0.4); opacity: 0.95; }
+  to { transform: scale(4.4); opacity: 0; }
 }
 
 /*
  * The fish under the surface, hauled closer as the reel goes well.
  *
- * `--near` is the reel's own progress, 0 to 1, written straight onto the
- * element every frame — so the thing the player is trying to do is the thing
- * they can watch happening, without a second progress bar to read.
+ * `--near` is the reel's own progress, 0 to 1, written onto the element every
+ * frame — so the thing the player is trying to do is the thing they can watch
+ * happening, with no second progress bar to read.
  */
 .fish-shadow {
   position: absolute;
   left: 50%;
-  bottom: 8px;
-  font-size: 22px;
-  opacity: calc(0.35 + var(--near, 0) * 0.6);
-  transform: translate(-50%, calc(var(--near, 0) * -34px)) scale(calc(0.7 + var(--near, 0) * 0.75));
-  filter: brightness(0.35) blur(0.4px);
+  bottom: 26px;
+  width: 54px;
+  height: 36px;
+  color: rgba(15, 60, 82, 0.42);
+  opacity: calc(0.5 + var(--near, 0) * 0.5);
+  transform: translate(-50%, calc(var(--near, 0) * -34px)) scale(calc(0.7 + var(--near, 0) * 0.7));
   transition: transform 0.12s linear, opacity 0.12s linear;
-  animation: struggle 0.5s ease-in-out infinite;
+  animation: struggle 0.9s ease-in-out infinite;
 }
 @keyframes struggle {
   0%, 100% { margin-left: -5px; }
   50% { margin-left: 5px; }
 }
 
-.float {
+/* The bobber, and the fish that replaces it on a catch. */
+.float,
+.catch-art {
   position: absolute;
   left: 50%;
-  /* Clear of the top edge: at 0 the bobber was sliced in half by the water. */
-  top: 16px;
+  top: 22px;
+  width: 34px;
+  height: 34px;
   transform: translate(-50%, -50%);
-  font-size: 26px;
   transition: top 0.35s ease, transform 0.2s ease;
   z-index: 2;
 }
-.fish-stage.waiting .float { top: 70px; }
+.catch-art { width: 104px; height: 70px; top: 44%; }
+.fish-stage.waiting .float,
+.fish-stage.reeling .float { top: 96px; }
 /* The bobber dips under and springs back — the bite, without a sound to hear. */
-.fish-stage.biting .float { top: 70px; animation: dip 0.5s ease-in-out infinite; }
-.fish-stage.reeling .float { top: 60px; }
-.fish-stage.caught .float { top: 42%; font-size: 52px; animation: leap 0.7s cubic-bezier(0.2, 0.9, 0.3, 1); }
+.fish-stage.biting .float { top: 96px; animation: dip 0.6s ease-in-out infinite; }
+.fish-stage.caught .catch-art { animation: leap 0.8s cubic-bezier(0.2, 0.9, 0.3, 1); }
 @keyframes dip {
   0%, 100% { transform: translate(-50%, -50%) scale(1); }
-  45% { transform: translate(-50%, 24%) scale(0.86); }
+  45% { transform: translate(-50%, 22%) scale(0.88); }
 }
-/* The catch: out of the water, turning over, and back down onto the surface. */
+/* The catch: up out of the water, turning over, and settling. */
 @keyframes leap {
-  0% { transform: translate(-50%, 130%) scale(0.5) rotate(-18deg); opacity: 0.4; }
-  55% { transform: translate(-50%, -95%) scale(1.16) rotate(12deg); opacity: 1; }
+  0% { transform: translate(-50%, 150%) scale(0.5) rotate(-16deg); opacity: 0.4; }
+  55% { transform: translate(-50%, -85%) scale(1.14) rotate(10deg); opacity: 1; }
   100% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 1; }
 }
 
 /*
- * The flourish over a catch: `<i>` elements thrown outward from the fish, each
- * on its own angle and distance. Scaled by tier — a small fry gets a splash, a
- * jackpot gets the lot — and built from divs so there is no library and no
- * asset behind any of it.
+ * The flourish over a catch: round confetti and soft stars thrown outward from
+ * the fish, once. They fly out and fade — nothing here repeats, blinks or
+ * strobes, which is the line between a celebration and a fruit machine.
  */
 .burst {
   position: absolute;
   left: 50%;
-  top: 42%;
+  top: 44%;
   width: 0;
   height: 0;
   pointer-events: none;
@@ -836,70 +893,74 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
 }
 .bit {
   position: absolute;
-  width: 7px;
-  height: 7px;
-  margin: -3px 0 0 -3px;
-  border-radius: 2px;
-  background: #fff;
+  width: 9px;
+  height: 9px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: hsl(var(--hue, 40) 90% 68%);
   opacity: 0;
-  animation: fling 0.9s ease-out forwards;
+  animation: fling 1s ease-out forwards;
   animation-delay: var(--delay, 0ms);
 }
-.fish-stage.rare .bit { background: #7fe0c8; }
-.fish-stage.jackpot .bit { background: var(--batter, #ffd166); width: 9px; height: 9px; }
+.bit.star {
+  border-radius: 2px;
+  width: 11px;
+  height: 11px;
+  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+}
 @keyframes fling {
   0% { opacity: 1; transform: rotate(var(--angle)) translateY(0) scale(1); }
-  100% { opacity: 0; transform: rotate(var(--angle)) translateY(calc(var(--dist) * -1)) scale(0.4); }
+  100% { opacity: 0; transform: rotate(var(--angle)) translateY(calc(var(--dist) * -1)) scale(0.5); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .fish-stage.biting .float,
   .fish-shadow,
   .wave,
-  .sea.golden .shimmer { animation: none; }
-  .fish-stage.caught .float { animation: none; }
+  .cloud,
+  .sea.golden .shimmer,
+  .fish-stage.caught .catch-art,
   .ripple.go { animation: none; }
   .bit { display: none; }
-  .line, .float, .fish-shadow { transition: none; }
+  .line, .float, .catch-art, .fish-shadow { transition: none; }
   .fish-sheet { animation: none; }
 }
 
-.fish-say { margin: 14px 0 0; font-weight: 650; }
+/* Big and plain. Nothing in this game is written small. */
+.fish-say {
+  margin: 14px 0 0;
+  font-weight: 750;
+  font-size: 19px;
+  line-height: 1.3;
+  min-height: 2.6em;
+}
 
 /*
  * The tension meter.
  *
- * The band is the safe zone, drawn *under* the fill so the player aims at
- * something rather than being told a rule. The fill's colour is the feedback
- * that matters at a glance: green while it is where it should be, amber-to-red
- * as it leaves. Class, not inline style — the JS decides which of three states
- * it is in and the stylesheet owns what each one looks like.
+ * The band is the safe zone, drawn *over* the fill so the target stays visible
+ * once the fill sweeps past it. The fill's colour is the feedback that matters
+ * at a glance: green while it is where it should be, warm amber either side.
+ * Amber rather than red on both — "not there yet" is not an error, and a red
+ * alarm bar is the wrong feeling for a six-year-old having a go.
  */
 .tension {
   position: relative;
-  height: 14px;
+  height: 22px;
   border-radius: 999px;
-  background: var(--line);
-  margin-top: 12px;
+  background: #e9e3d6;
+  margin-top: 14px;
   overflow: hidden;
 }
-/*
- * The band sits ABOVE the fill, which is the whole point of it.
- *
- * Underneath, it disappeared the moment the fill swept past — which is exactly
- * when a player most needs to see where they are supposed to be aiming. White
- * edges rather than green ones, because they have to read against the fill in
- * all three of its colours.
- */
 .tension-band {
   position: absolute;
   top: 0;
   bottom: 0;
   z-index: 2;
-  background: rgba(255, 255, 255, 0.25);
-  border-left: 2px solid rgba(255, 255, 255, 0.95);
-  border-right: 2px solid rgba(255, 255, 255, 0.95);
-  box-shadow: inset 0 0 0 1px rgba(20, 33, 31, 0.22);
+  background: rgba(255, 255, 255, 0.3);
+  border-left: 3px solid rgba(255, 255, 255, 0.95);
+  border-right: 3px solid rgba(255, 255, 255, 0.95);
+  box-shadow: inset 0 0 0 1px rgba(20, 33, 31, 0.18);
 }
 .tension-fill {
   position: relative;
@@ -907,20 +968,71 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
   height: 100%;
   width: 0;
   border-radius: 999px;
-  background: var(--sea);
-  /* Short, because a green-to-red crossfade spends its middle as brown. */
+  background: #58c9a0;
+  /* Short, because a green-to-amber crossfade spends its middle as mud. */
   transition: background-color 0.09s linear;
 }
-.tension.safe .tension-fill { background: #2eb67d; }
-.tension.low .tension-fill { background: #e8b13a; }
-.tension.high .tension-fill { background: #d94f43; }
-/* Reeling too hard is the one worth flinching at. */
-.tension.high { box-shadow: 0 0 0 2px rgba(217, 79, 67, 0.35); }
+.tension.safe .tension-fill { background: #38c48b; }
+.tension.low .tension-fill { background: #ffc861; }
+.tension.high .tension-fill { background: #ff9d5c; }
 
-.fish-prize { padding: 0 20px 20px; text-align: center; }
-.prize-tier { font-size: 44px; line-height: 1; }
-.prize-species { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-soft); }
-.prize-label { font-size: 20px; font-weight: 700; margin: 6px 0 16px; }
+/*
+ * The main control.
+ *
+ * Full width and 66px tall: a target a small thumb cannot miss, well past the
+ * 44px anyone recommends. The water above still works for anyone who would
+ * rather tap or swipe there.
+ */
+.fish-action {
+  display: block;
+  width: 100%;
+  min-height: 66px;
+  margin-top: 14px;
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--sea);
+  color: #fff;
+  font: inherit;
+  font-size: 21px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.12);
+  touch-action: none;
+}
+.fish-action:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(0, 0, 0, 0.12); }
+.fish-stage.reeling .fish-action { background: #38c48b; }
+
+.fish-prize { padding: 0 20px 22px; text-align: center; }
+.prize-art { width: 120px; height: 80px; }
+.prize-species {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+
 
 /* Sits with the close button, quieter than it. */
-.fish-sound { margin-left: auto; font-size: 17px; }
+.prize-label { font-size: 24px; font-weight: 800; margin: 4px 0 18px; }
+
+/*
+ * The sprite sheet itself is never seen — it only holds the <symbol>s that the
+ * <use> elements point at. Zero-sized rather than display:none, which some
+ * browsers have historically treated as a reason not to resolve a reference.
+ */
+.sprite-sheet {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* Sits with the close button. Sized as a real target, not a decoration. */
+.fish-sound {
+  margin-left: auto;
+  font-size: 20px;
+  min-width: 44px;
+  min-height: 44px;
+}
+.fish-sheet .sheet-head .icon-button { min-width: 44px; min-height: 44px; font-size: 20px; }

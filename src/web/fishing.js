@@ -3,7 +3,10 @@
  *
  * Cast, wait for the bite, reel, land it. Every one of those is a touch
  * gesture, because this page is opened by scanning a QR at a table and the only
- * input is a thumb.
+ * input is a thumb — often a small one. This is played in a restaurant, by
+ * children sitting next to their parents, so the whole thing is pitched to be
+ * cheerful and easy rather than tense: bright water, cartoon fish, a forgiving
+ * reel, and nothing anywhere that grades one catch against another.
  *
  * **Nothing here decides what is caught.** The tier comes back from
  * `/api/order/fish/play` and this animates it. What the reel *does* produce is
@@ -18,47 +21,64 @@
  * an animation and hoping.
  */
 
-/** How far a thumb must travel to count as a cast, in px. */
-const CAST_DISTANCE = 60;
+/** How far a thumb must travel to count as a cast, in px. Short, so a small flick counts. */
+const CAST_DISTANCE = 40;
 
 // ------------------------------------------------------------------ the reel
 /**
  * Half the width of the safe zone, as a fraction of the tension bar.
  *
  * Reel too gently and the fish does not come in; reel too hard and the line
- * screams. Neither *loses* the fish — see `step` — because the reward is
+ * goes tight. Neither *loses* the fish — see `step` — because the reward is
  * guaranteed and a fail state here would be a chance somebody earned and then
  * had taken away.
  *
  * **The zone moves**, dragged up and down the bar by the fish, and that is the
- * whole of the difficulty. A fixed band this wide is beaten by flapping at the
- * screen at random — measured, that scored 98 out of 100 — because the tension
- * rises and falls at similar rates and simply oscillates inside it. Against a
- * band that wanders, holding the right pressure means watching where it went.
+ * whole of the difficulty. A fixed band is beaten by flapping at the screen at
+ * random — measured, that scored 98 out of 100 — because the tension rises and
+ * falls at similar rates and simply oscillates inside it. Against a band that
+ * wanders, holding the right pressure means watching where it went.
+ *
+ * The band is wide and travels slowly, which is what makes this a game a small
+ * child can win: anybody who tracks it at all scores full marks, even with a
+ * 400ms reaction time. Nobody has to be quick.
  */
-export const SAFE_HALF_WIDTH = 0.11;
-/** A golden bite is kinder: the same band, opened out at both ends. */
-export const GOLDEN_SLACK = 0.06;
-/** How far up and down the bar the band travels, and how fast. */
-const ZONE_LOW = 0.22;
-const ZONE_HIGH = 0.78;
+export const SAFE_HALF_WIDTH = 0.19;
+/** A golden bite is kinder still: the same band, opened out at both ends. */
+export const GOLDEN_SLACK = 0.08;
+/** How far up and down the bar the band travels. Kept off the ends so it is always reachable. */
+const ZONE_LOW = 0.3;
+const ZONE_HIGH = 0.7;
+/** How fast it wanders. Slow enough to follow with a thumb rather than a reflex. */
+const WANDER_MIN = 0.45;
+const WANDER_VARY = 0.3;
 
-/** Tension per second, holding and not holding. */
-const RISE_PER_S = 0.95;
-const FALL_PER_S = 0.75;
+/** Tension per second, holding and not holding. Gentle, so the bar drifts rather than snaps. */
+const RISE_PER_S = 0.55;
+const FALL_PER_S = 0.45;
 /** Progress per second while the tension is where it should be. */
-const GAIN_PER_S = 0.42;
-/** And what it slips back at while it is not. Less than it gains: this is pressure, not punishment. */
-const SLIP_PER_S = 0.12;
+const GAIN_PER_S = 0.5;
+/**
+ * And what it makes while the tension is *not*.
+ *
+ * Forward, not backward. It used to slip back, which meant a child who could
+ * not yet track the band watched the fish they had hooked swim away again for
+ * twelve seconds — a negative feedback loop on the one screen in this app that
+ * is supposed to be a treat. Now the fish always comes closer; how well you
+ * reel decides how *quickly*. The score still counts only time spent in the
+ * band, so nothing about the skill signal is softened by this.
+ */
+const TRICKLE_PER_S = 0.13;
 
 /**
  * The longest a reel can run, in ms.
  *
- * The backstop on "always rewards something": somebody who never once finds the
- * safe zone would otherwise hold a fish that never lands. At the cap it lands
- * anyway, with whatever score they earned — which is allowed to be zero.
+ * With the trickle above, even a reel nobody touches lands in about eight
+ * seconds, so this is a backstop rather than a timer anybody waits out. It is
+ * deliberately never shown or counted down: a clock ticking towards a reveal is
+ * exactly the tension this game does not want.
  */
-export const REEL_TIMEOUT_MS = 12_000;
+export const REEL_TIMEOUT_MS = 9000;
 
 /**
  * One reel, as a state machine you push time into.
@@ -79,12 +99,12 @@ export function createReel({ golden = false, random = Math.random } = {}) {
   // ignorable. Their sum wanders without ever repeating over a reel this short.
   const phase = random() * Math.PI * 2;
   const phase2 = random() * Math.PI * 2;
-  const speed = 0.9 + random() * 0.5;
+  const speed = WANDER_MIN + random() * WANDER_VARY;
 
   /** Where the band sits at a given moment, as a fraction of the bar. */
   function zoneAt(ms) {
     const t = ms / 1000;
-    const wander = (Math.sin(phase + t * speed) * 0.7 + Math.sin(phase2 + t * speed * 1.7) * 0.3);
+    const wander = Math.sin(phase + t * speed) * 0.7 + Math.sin(phase2 + t * speed * 1.7) * 0.3;
     const centre = (ZONE_LOW + ZONE_HIGH) / 2 + wander * ((ZONE_HIGH - ZONE_LOW) / 2);
     return { low: centre - halfWidth, high: centre + halfWidth };
   }
@@ -101,12 +121,8 @@ export function createReel({ golden = false, random = Math.random } = {}) {
 
     const zone = zoneAt(elapsed);
     const inSafe = tension >= zone.low && tension <= zone.high;
-    if (inSafe) {
-      inSafeMs += Math.max(0, dtMs);
-      progress = Math.min(1, progress + GAIN_PER_S * dt);
-    } else {
-      progress = Math.max(0, progress - SLIP_PER_S * dt);
-    }
+    inSafeMs += inSafe ? Math.max(0, dtMs) : 0;
+    progress = Math.min(1, progress + (inSafe ? GAIN_PER_S : TRICKLE_PER_S) * dt);
 
     return {
       tension,
@@ -115,7 +131,7 @@ export function createReel({ golden = false, random = Math.random } = {}) {
       // Where the band is *now*, so the meter can draw the thing being aimed at
       // rather than a rule the player has to infer.
       zone,
-      // Landed, or out of patience. Either way the fish comes in.
+      // Landed, one way or the other. The fish always comes in.
       done: progress >= 1 || elapsed >= REEL_TIMEOUT_MS,
       timedOut: progress < 1 && elapsed >= REEL_TIMEOUT_MS,
     };
@@ -134,7 +150,7 @@ export function createReel({ golden = false, random = Math.random } = {}) {
   return { step, score, zoneAt, halfWidth, zone: zoneAt(0) };
 }
 
-/** Where on the green→red ramp a tension sits. Pure, so the colour can be asserted. */
+/** Which side of the band a tension is on. Pure, so the colour can be asserted. */
 export function tensionTone(tension, zone) {
   if (tension >= zone.low && tension <= zone.high) return "safe";
   return tension > zone.high ? "high" : "low";
@@ -148,36 +164,47 @@ export function tensionTone(tension, zone) {
  * which of its fish is on screen changes nothing about the reward. Keeping it
  * here is what stops a display name being frozen onto the cart and carried all
  * the way onto an order.
+ *
+ * `sprite` names a `<symbol>` in the sheet at the top of `index.html`. They are
+ * drawn rather than set in emoji because emoji are whatever the phone decides
+ * they are — the shark arrived grey and photographic on Windows, on a screen a
+ * child is looking at. These are round, smiling and bright, and they look the
+ * same on every device.
  */
 export const SPECIES = {
   small_fry: [
-    { name: "Anchovy", fish: "🐟" },
-    { name: "Sardine", fish: "🐟" },
-    { name: "Pufferfish", fish: "🐡" },
+    { name: "Anchovy", sprite: "sp-anchovy" },
+    { name: "Sardine", sprite: "sp-sardine" },
+    { name: "Pufferfish", sprite: "sp-puffer" },
   ],
   uncommon: [
-    { name: "Sea Bass", fish: "🐠" },
-    { name: "Red Snapper", fish: "🐠" },
+    { name: "Sea Bass", sprite: "sp-seabass" },
+    { name: "Red Snapper", sprite: "sp-snapper" },
   ],
   rare: [
-    { name: "Tiger Squid", fish: "🦑" },
-    { name: "Mantis Prawn", fish: "🦐" },
+    { name: "Tiger Squid", sprite: "sp-squid" },
+    { name: "Mantis Prawn", sprite: "sp-prawn" },
   ],
   jackpot: [
-    // There is no marlin in the emoji set, and the first attempt paired the
-    // name with a pufferfish — which read, on screen, as a jackpot that had
-    // caught something small and round. A shark is the closest thing to a big
-    // billfish available and reads as the biggest catch on the board.
-    { name: "Golden Marlin", fish: "🦈" },
-    { name: "Giant Octopus", fish: "🐙" },
+    { name: "Golden Marlin", sprite: "sp-marlin" },
+    { name: "Giant Octopus", sprite: "sp-octopus" },
   ],
 };
 
+/**
+ * What the game says when something is landed.
+ *
+ * **Every one of these is a good day.** They are deliberately not graded: the
+ * small fry no longer gets "a little one", because a child who catches an
+ * anchovy sitting next to a sibling who catches a marlin should not be told
+ * they did worse. Every tier is a real reward — the rule the whole feature is
+ * built on — and the words have to match it.
+ */
 export const TIER_SAY = {
-  small_fry: "A little one!",
-  uncommon: "Nice catch!",
-  rare: "Now that is rare!",
-  jackpot: "JACKPOT!",
+  small_fry: "Nice catch!",
+  uncommon: "Great job!",
+  rare: "Wonderful catch!",
+  jackpot: "Amazing catch!",
 };
 
 /** One species for a tier. Falls back rather than throwing on a tier it has never heard of. */
@@ -191,15 +218,22 @@ export const GOLDEN_CHANCE = 0.12;
 
 // --------------------------------------------------------------------- sound
 /**
- * Three noises, synthesised rather than fetched — no asset to load on a QR
+ * A few soft noises, synthesised rather than fetched — no asset to load on a QR
  * scan over a bad connection, and nothing to 404 after a redeploy.
  *
  * **Muted by default, and that is not a detail.** This runs on a customer's own
  * phone at a table in a restaurant; audio nobody asked for is the kind of thing
  * that goes off during somebody else's dinner. The toggle remembers an opt-*in*
  * only — a stored "off", or no answer at all, both stay silent.
+ *
+ * Everything here is a sine or a triangle at a low gain: round, quiet sounds.
+ * No square waves — they buzz, and a buzz beside a prize reads as an alarm —
+ * no rising run of notes before a reveal, and nothing that builds. A catch gets
+ * a short chime that is over before it could become a drumroll.
  */
 const SOUND_KEY = "fishchips.sound";
+/** Nothing is allowed to be louder than this. A game at a dinner table is background. */
+export const MAX_GAIN = 0.035;
 
 export function createSound() {
   let context = null;
@@ -223,8 +257,8 @@ export function createSound() {
     }
   }
 
-  /** One shaped blip. Everything below is a couple of these. */
-  function tone({ freq, to = freq, ms = 120, type = "sine", gain = 0.06, delay = 0 }) {
+  /** One soft blip. Everything below is a couple of these. */
+  function tone({ freq, to = freq, ms = 160, type = "sine", gain = 0.03, delay = 0 }) {
     const ctx = ready();
     if (!ctx) return;
 
@@ -234,9 +268,10 @@ export function createSound() {
     osc.type = type;
     osc.frequency.setValueAtTime(freq, at);
     if (to !== freq) osc.frequency.exponentialRampToValueAtTime(Math.max(1, to), at + ms / 1000);
-    // A ramp rather than a stop, or every note ends in a click.
+    // A gentle swell in and out. A ramp rather than a stop, or every note ends
+    // in a click — and a click would be the sharpest sound in the game.
     amp.gain.setValueAtTime(0.0001, at);
-    amp.gain.exponentialRampToValueAtTime(gain, at + 0.012);
+    amp.gain.exponentialRampToValueAtTime(Math.min(MAX_GAIN, gain), at + 0.03);
     amp.gain.exponentialRampToValueAtTime(0.0001, at + ms / 1000);
     osc.connect(amp).connect(ctx.destination);
     osc.start(at);
@@ -256,19 +291,31 @@ export function createSound() {
       }
       return on;
     },
+    /** A soft plip, like something small landing in water. */
     splash() {
-      tone({ freq: 620, to: 180, ms: 260, type: "triangle", gain: 0.05 });
+      tone({ freq: 520, to: 300, ms: 220, type: "sine", gain: 0.03 });
     },
-    /** The reel's click, pitched by where the tension is. Cheap, because it fires often. */
+    /** The reel's nudge as the bar crosses in or out of the band. Very quiet; it fires often. */
     tick(high) {
-      tone({ freq: high ? 880 : 440, ms: 45, type: "square", gain: 0.025 });
+      tone({ freq: high ? 660 : 495, ms: 60, type: "sine", gain: 0.014 });
     },
+    /** Two friendly notes. Short enough that it cannot read as suspense. */
     bite() {
-      tone({ freq: 300, to: 700, ms: 160, type: "sine", gain: 0.06 });
+      tone({ freq: 440, ms: 130, type: "sine", gain: 0.03 });
+      tone({ freq: 587, ms: 150, type: "sine", gain: 0.03, delay: 0.11 });
     },
-    fanfare(big) {
-      const notes = big ? [523, 659, 784, 1047] : [523, 784];
-      notes.forEach((freq, index) => tone({ freq, ms: 220, type: "triangle", gain: 0.05, delay: index * 0.1 }));
+    /**
+     * The catch: a short chime, the same shape for every tier.
+     *
+     * `big` adds one note rather than making it louder or longer. A flourish
+     * that grows into a fanfare is how a reward starts to feel like a jackpot
+     * machine, which is the thing this deliberately is not.
+     */
+    chime(big) {
+      const notes = big ? [659, 784, 988] : [659, 880];
+      notes.forEach((freq, index) =>
+        tone({ freq, ms: 260, type: "triangle", gain: 0.03, delay: index * 0.12 }),
+      );
     },
   };
 }
@@ -283,24 +330,26 @@ export function mountFishing({ dialog, onPlay, onFinished, random = Math.random 
   const stage = dialog.querySelector("#fish-stage");
   const scene = dialog.querySelector("#fish-scene");
   const float = dialog.querySelector("#fish-float");
-  // The line is an SVG path so it can arc rather than hang straight down.
+  const catchWrap = dialog.querySelector("#fish-catch");
+  const catchArt = dialog.querySelector("#fish-catch-use");
   const line = dialog.querySelector("#fish-line-path");
   const shadow = dialog.querySelector("#fish-shadow");
   const ripple = dialog.querySelector("#fish-ripple");
   const burst = dialog.querySelector("#fish-burst");
   const say = dialog.querySelector("#fish-say");
+  const action = dialog.querySelector("#fish-action");
   const tension = dialog.querySelector("#fish-tension");
   const tensionFill = dialog.querySelector("#fish-tension-fill");
   const tensionBand = dialog.querySelector("#fish-tension-band");
   const prize = dialog.querySelector("#fish-prize");
-  const prizeTier = dialog.querySelector("#fish-prize-tier");
+  const prizeArt = dialog.querySelector("#fish-prize-use");
   const prizeLabel = dialog.querySelector("#fish-prize-label");
   const prizeSpecies = dialog.querySelector("#fish-prize-species");
   const soundButton = dialog.querySelector("#fish-sound");
 
   const sound = createSound();
 
-  // idle → casting → waiting → biting → reeling → caught
+  // idle → waiting → biting → reeling → caught
   let phase = "idle";
   let startY = 0;
   let biteTimer = null;
@@ -313,10 +362,29 @@ export function mountFishing({ dialog, onPlay, onFinished, random = Math.random 
 
   const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
 
+  /**
+   * Show or hide an element by the `hidden` **attribute**.
+   *
+   * Not `el.hidden = …`, which is a property of HTMLElement and simply does not
+   * exist on an SVGElement: setting it there assigns a stray JS property and
+   * changes nothing on screen. Three of the things this file shows and hides —
+   * the float, the caught fish and the shadow under the water — are `<svg>`,
+   * and the caught fish silently never appeared because of it.
+   */
+  function setShown(element, shown) {
+    if (shown) element.removeAttribute("hidden");
+    else element.setAttribute("hidden", "");
+  }
+
   function paintSound() {
     soundButton.textContent = sound.enabled ? "🔊" : "🔇";
     soundButton.setAttribute("aria-pressed", String(sound.enabled));
-    soundButton.setAttribute("aria-label", sound.enabled ? "Mute sound" : "Unmute sound");
+    soundButton.setAttribute("aria-label", sound.enabled ? "Turn sound off" : "Turn sound on");
+  }
+
+  /** The big button's job changes with the phase, so its words have to as well. */
+  function setAction(text) {
+    action.textContent = text;
   }
 
   function reset() {
@@ -334,11 +402,13 @@ export function mountFishing({ dialog, onPlay, onFinished, random = Math.random 
     prize.hidden = true;
     burst.replaceChildren();
     burst.hidden = true;
-    float.textContent = "●";
-    say.textContent = "Swipe up to cast.";
+    setShown(float, true);
+    setShown(catchWrap, false);
+    say.textContent = "Tap to throw your line in!";
+    setAction("Cast!");
+    setShown(action, true);
     line.classList.remove("out");
-    scene.classList.remove("cast");
-    shadow.hidden = true;
+    setShown(shadow, false);
     shadow.style.setProperty("--near", "0");
     ripple.hidden = true;
     paintSound();
@@ -366,26 +436,26 @@ export function mountFishing({ dialog, onPlay, onFinished, random = Math.random 
     if (phase !== "idle") return;
     phase = "waiting";
     stage.className = "fish-stage waiting";
-    say.textContent = "Waiting for a bite…";
+    say.textContent = "Line's in! Watch the float…";
+    setAction("Waiting…");
     line.classList.add("out");
-    scene.classList.add("cast");
     splash();
 
     // A wait the player cannot predict, so the bite is something to watch for
-    // rather than a beat to count out.
+    // rather than a beat to count out. Short, and never shown as a countdown.
     biteTimer = setTimeout(
       () => {
         phase = "biting";
         golden = random() < GOLDEN_CHANCE;
         stage.className = "fish-stage biting";
         scene.classList.toggle("golden", golden);
-        float.textContent = "◉";
-        say.textContent = golden ? "A golden one! Hold to reel it in." : "Bite! Hold to reel it in.";
+        say.textContent = golden ? "A golden fish! Hold the button!" : "A fish! Hold the button!";
+        setAction("Hold to reel!");
         splash();
         sound.bite();
         // A bite nobody answers is not a loss — the fish waits.
       },
-      900 + random() * 1800,
+      700 + random() * 1200,
     );
   }
 
@@ -398,9 +468,10 @@ export function mountFishing({ dialog, onPlay, onFinished, random = Math.random 
     lastTone = "safe";
     stage.className = golden ? "fish-stage reeling golden" : "fish-stage reeling";
     tension.hidden = false;
-    shadow.hidden = false;
+    setShown(shadow, true);
     paintBand(reel.zone);
-    say.textContent = "Keep the bar in the green!";
+    say.textContent = "Keep the bar on the green patch!";
+    setAction("Hold to reel!");
 
     const step = (now) => {
       const dt = Math.min(64, now - lastFrame);
@@ -415,8 +486,8 @@ export function mountFishing({ dialog, onPlay, onFinished, random = Math.random 
       paintBand(state.zone);
       tensionFill.style.width = `${Math.round(state.tension * 100)}%`;
       tension.className = `tension ${tone}`;
-      // The fish, hauled closer as the reel goes well and drifting back when it
-      // does not — the progress bar nobody had to be told to read.
+      // The fish, hauled closer as the reel goes well — the progress bar nobody
+      // had to be told how to read.
       shadow.style.setProperty("--near", state.progress.toFixed(3));
 
       if (tone !== lastTone) {
@@ -425,7 +496,7 @@ export function mountFishing({ dialog, onPlay, onFinished, random = Math.random 
       }
 
       if (state.done) {
-        void land(reel.score(), state.timedOut);
+        void land(reel.score());
         return;
       }
       reelFrame = requestAnimationFrame(step);
@@ -434,39 +505,47 @@ export function mountFishing({ dialog, onPlay, onFinished, random = Math.random 
   }
 
   /**
-   * Letting go is no longer a way to lose it.
+   * Letting go is not a way to lose it.
    *
-   * It used to drop the whole reel back to the bite. Now the tension simply
-   * falls while the thumb is up, which is half the skill: the safe zone is
-   * held by letting go at the right moment, not by holding on hardest.
+   * The tension simply falls while the thumb is up, which is half the skill:
+   * the band is held by letting go at the right moment, not by holding on
+   * hardest.
    */
   function release() {
     holding = false;
   }
 
-  /** The tier-coloured flourish over the catch. Built from divs; no asset, no library. */
+  /**
+   * The flourish over a catch: round confetti thrown outward from the fish.
+   *
+   * Scaled a little by tier so a jackpot feels like more, but never into
+   * flashing — the pieces fly out once and fade, and nothing repeats, blinks or
+   * strobes. Built from elements, so there is no library and no asset.
+   */
   function celebrate(tier) {
     burst.replaceChildren();
     burst.hidden = false;
     if (reduced) return;
 
-    const count = tier === "jackpot" ? 26 : tier === "rare" ? 14 : 6;
+    const count = tier === "jackpot" ? 22 : tier === "rare" ? 16 : 10;
     for (let index = 0; index < count; index += 1) {
       const bit = document.createElement("i");
-      bit.className = "bit";
+      bit.className = index % 3 === 0 ? "bit star" : "bit";
       // Spread around the fish rather than raining from the top: this is a
       // splash the fish makes, not confetti dropped on it.
       bit.style.setProperty("--angle", `${(360 / count) * index + random() * 12}deg`);
-      bit.style.setProperty("--dist", `${40 + random() * (tier === "jackpot" ? 70 : 35)}px`);
-      bit.style.setProperty("--delay", `${random() * 120}ms`);
+      bit.style.setProperty("--dist", `${44 + random() * (tier === "jackpot" ? 60 : 34)}px`);
+      bit.style.setProperty("--delay", `${random() * 140}ms`);
+      bit.style.setProperty("--hue", `${Math.floor(random() * 360)}`);
       burst.append(bit);
     }
   }
 
-  async function land(performanceScore, timedOut) {
+  async function land(performanceScore) {
     phase = "caught";
     cancelAnimationFrame(reelFrame);
-    say.textContent = timedOut ? "It wriggled in anyway…" : "…";
+    say.textContent = "Here it comes!";
+    setAction("Reeling in…");
 
     try {
       // The only moment a chance is spent, and the first moment anybody knows
@@ -476,23 +555,31 @@ export function mountFishing({ dialog, onPlay, onFinished, random = Math.random 
       const species = speciesFor(reward.tier, random);
 
       stage.className = `fish-stage caught ${reward.tier}`;
-      float.textContent = species.fish;
+      setShown(float, false);
+      setShown(catchWrap, true);
+      catchArt.setAttribute("href", `#${species.sprite}`);
       say.textContent = TIER_SAY[reward.tier] ?? TIER_SAY.small_fry;
       tension.hidden = true;
-      shadow.hidden = true;
+      setShown(shadow, false);
       splash();
       celebrate(reward.tier);
-      sound.fanfare(reward.tier === "jackpot" || reward.tier === "rare");
+      sound.chime(reward.tier === "jackpot" || reward.tier === "rare");
 
-      prizeTier.textContent = species.fish;
+      prizeArt.setAttribute("href", `#${species.sprite}`);
       prizeSpecies.textContent = species.name;
       prizeLabel.textContent = reward.label;
       prize.hidden = false;
+      // The line comes back in with the fish, and the big button stands down:
+      // once there is a prize on screen the only thing left to do is take it,
+      // and a live "Cast!" under a catch invites a tap with no chance to spend.
+      line.classList.remove("out");
+      setShown(action, false);
     } catch (error) {
       stage.className = "fish-stage";
       tension.hidden = true;
-      shadow.hidden = true;
-      say.textContent = error.message ?? "That did not work. Try again.";
+      setShown(shadow, false);
+      say.textContent = error.message ?? "Let's try that again.";
+      setAction("Cast!");
       phase = "idle";
     }
   }
@@ -501,6 +588,10 @@ export function mountFishing({ dialog, onPlay, onFinished, random = Math.random 
   // Pointer events, so a mouse behaves the same as a thumb and there is one
   // code path. `touch-action: none` on the stage stops the browser claiming the
   // vertical swipe as a page scroll before any of this sees it.
+  //
+  // The big button under the water sits inside the stage, so its presses arrive
+  // here by bubbling and need no handlers of their own. It is a bigger target
+  // for the same game, which is the whole point of it.
   stage.addEventListener("pointerdown", (event) => {
     startY = event.clientY;
     try {
