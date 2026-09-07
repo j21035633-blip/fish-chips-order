@@ -219,7 +219,7 @@ GET    /api/orders/:orderId
 GET    /api/order/chances?cartId=            # the session own chance ledger
 POST   /api/order/chances/register           { cartId, contact }
 POST   /api/order/proof                      # multipart: cartId, type, image
-POST   /api/order/fish/play                  { cartId }
+POST   /api/order/fish/play                  { cartId, performance? }  # performance: reel score 0-100
 
 GET    /api/payments/methods
 POST   /api/orders/:orderId/payment          { method: "card" | "ewallet" }
@@ -577,14 +577,38 @@ volume at `/app/uploads`, a redeploy leaves staff judging broken images.
 Staff work them at **`/approvals`**. An approval moves one chance from pending to available **on that
 customer's session and no other**; a rejection grants nothing and frees the slot for a better photo.
 
+### The play: cast, wait, bite, reel
+
+The reel is the skill. A safe zone slides up and down the tension bar — the fish dragging it — and
+holding or releasing is the only input; keep the bar in the green and it comes in. There is **no
+fail state**. A hopeless reel scores near zero, lands on a twelve-second timeout and still pays out,
+because the chance was earned by leaving a review and taking it away would be the wrong trade.
+
+Two decorations: **species** (two or three a tier — "Anchovy" through "Golden Marlin"), which are
+cosmetic and client-side so a display name is never frozen onto an order; and a **golden bite**, 12%
+of the time, which widens the safe zone for that one reel. Sound is **off by default** behind a
+toggle — this plays on a customer's phone at a table, and audio nobody chose is audio during
+somebody else's dinner — and is synthesised rather than fetched, so there is no asset to load on a
+QR scan.
+
 **The server rolls, applies and returns; the client only animates.**
 
-| Tier | Weight | Reward |
-| --- | --- | --- |
-| small_fry | 55% | RM2 off |
-| uncommon | 25% | 10% off the subtotal |
-| rare | 15% | a free drink, as a real RM0 line |
-| jackpot | 5% | RM10 off |
+The one thing the browser is trusted to report is `performance`, the reel score 0–100. It **tilts
+the weighted roll and does nothing else**: it cannot name a tier, cannot reach the money, and cannot
+empty the table. A missing or hostile value is clamped to 0 rather than refused — a 400 here would
+cost somebody a chance they earned — and 0 rolls exactly the base weights, so an older cached page
+plays the odds the game has always had.
+
+| Tier | Weight at score 0 | Weight at score 100 | Reward |
+| --- | --- | --- | --- |
+| small_fry | 55% | 21% | RM2 off |
+| uncommon | 25% | 29% | 10% off the subtotal |
+| rare | 15% | 35% | a free drink, as a real RM0 line |
+| jackpot | 5% | 15% | RM10 off |
+
+Reeling well roughly triples the jackpot; a perfect reel still lands a small fry one time in five.
+Every adjusted weight stays positive, so the guarantee is arithmetic rather than aspirational —
+skill is a tilt, never a ladder.
 
 Every tier is a real reward — there is no miss. Discounts come off **before tax**, clamped so two
 rewards cannot take an order below zero; a free item is a real line that prices at zero and still

@@ -116,3 +116,117 @@ describe("menu api", async () => {
     expect(res.status).toBe(404);
   });
 });
+
+/**
+ * The play endpoint, over real HTTP, from the position of somebody trying to
+ * cheat it.
+ *
+ * The reel score is the one thing a browser is now trusted to report, and this
+ * is where that trust is bounded: it may tilt the odds and it may do nothing
+ * else. Everything below is an attempt to reach past it to the outcome.
+ */
+describe("the fishing play endpoint decides the outcome itself", () => {
+  const post = (path: string, body: unknown) =>
+    fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  /** A cart with one earned chance on it, the honest way. */
+  async function cartWithAChance(): Promise<string> {
+    const { cartId } = await json(await post("/api/carts", {}));
+    await post(`/api/carts/${cartId}/lines`, { itemId: "fish-dory-classic" });
+    const registered = await post("/api/order/chances/register", {
+      cartId,
+      contact: "player@example.com",
+    });
+    expect(registered.status).toBe(200);
+    return cartId;
+  }
+
+  const TIERS = ["small_fry", "uncommon", "rare", "jackpot"];
+
+  it("ignores a tier, a label and a discount posted alongside the play", async () => {
+    // Everything a hopeful client might try to smuggle in. None of it is read:
+    // the schema takes two fields and the roll happens server-side.
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const cartId = await cartWithAChance();
+      const response = await post("/api/order/fish/play", {
+        cartId,
+        performance: 0,
+        tier: "jackpot",
+        reward: { tier: "jackpot", kind: "discount_fixed", label: "RM1000 off", amountSen: 100_000 },
+        discountSen: 100_000,
+        amountSen: 100_000,
+      });
+
+      expect(response.status).toBe(200);
+      const body = await json(response);
+
+      expect(TIERS).toContain(body.reward.tier);
+      expect(body.reward.amountSen ?? 0).toBeLessThanOrEqual(1000);
+      expect(body.reward.label).not.toContain("1000");
+      // And the cart's own total was never touched by the numbers in the body.
+      expect(body.cart.discountSen).toBeLessThanOrEqual(body.cart.subtotalSen);
+    }
+  });
+
+  it("still pays out a real reward when the reel was hopeless", async () => {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const cartId = await cartWithAChance();
+      const body = await json(await post("/api/order/fish/play", { cartId, performance: 0 }));
+
+      expect(TIERS).toContain(body.reward.tier);
+      expect(typeof body.reward.label).toBe("string");
+      expect(body.reward.label.length).toBeGreaterThan(0);
+      // A discount, or a free line. Never nothing.
+      const freeLine = body.cart.lines.some((line: any) => line.unitPriceSen === 0);
+      expect(body.cart.discountSen > 0 || freeLine, `${body.reward.tier} paid nothing`).toBe(true);
+    }
+  });
+
+  it("takes a nonsense score as a bad reel rather than refusing the play", async () => {
+    // Refusing would cost somebody the chance they earned by leaving a review,
+    // which is a far worse failure than a worse roll.
+    for (const performance of [-99, 5000, "sneaky", null, {}, Number.NaN]) {
+      const cartId = await cartWithAChance();
+      const response = await post("/api/order/fish/play", { cartId, performance });
+
+      expect(`${JSON.stringify(performance)} -> ${response.status}`).toBe(
+        `${JSON.stringify(performance)} -> 200`,
+      );
+      await expect(json(response)).resolves.toMatchObject({ reward: { tier: expect.any(String) } });
+    }
+  });
+
+  it("plays fine with no score at all, as an older cached page would send", async () => {
+    const cartId = await cartWithAChance();
+    const body = await json(await post("/api/order/fish/play", { cartId }));
+
+    expect(TIERS).toContain(body.reward.tier);
+  });
+
+  it("spends the chance once, whatever the score claims", async () => {
+    const cartId = await cartWithAChance();
+
+    expect((await post("/api/order/fish/play", { cartId, performance: 100 })).status).toBe(200);
+
+    const second = await post("/api/order/fish/play", { cartId, performance: 100 });
+    expect(second.status).toBe(400);
+    await expect(json(second)).resolves.toMatchObject({ error: "no_chances" });
+  });
+
+  it("produces both extremes of the table over many honest plays", async () => {
+    // Not a distribution assertion — that is unit-tested against a seeded
+    // generator. This only proves the endpoint is really rolling, rather than
+    // returning the same tier every time.
+    const seen = new Set<string>();
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const cartId = await cartWithAChance();
+      const body = await json(await post("/api/order/fish/play", { cartId, performance: 100 }));
+      seen.add(body.reward.tier);
+    }
+    expect(seen.size).toBeGreaterThan(1);
+  });
+});

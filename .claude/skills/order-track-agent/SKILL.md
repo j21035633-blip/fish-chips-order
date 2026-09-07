@@ -226,22 +226,56 @@ The chance lands on `proof.cartId` and nowhere else — that scoping is what kee
 approval off everybody else's counter, and there is a test whose whole job is to prove it. A second
 tap on an already-decided proof is a no-op, because two tablets share one queue.
 
-**The play is server-authoritative.** `POST /api/order/fish/play { cartId }` spends one chance (400
-`no_chances` if there are none), rolls a tier, applies the reward to the cart, and returns the tier
-so the client can animate it. Nothing in the request influences the outcome; the client picks
-nothing and discounts nothing.
+**The play is server-authoritative.** `POST /api/order/fish/play { cartId, performance? }` spends one
+chance (400 `no_chances` if there are none), rolls a tier, applies the reward to the cart, and
+returns the tier so the client can animate it. **The client picks nothing and discounts nothing.**
 
-| Tier | Weight | Reward |
-| --- | --- | --- |
-| `small_fry` | 55% | RM2 off |
-| `uncommon` | 25% | 10% off the subtotal |
-| `rare` | 15% | A free drink, added as a real RM0 line |
-| `jackpot` | 5% | RM10 off |
+`performance` is the one thing the browser is trusted to report: the reel score, 0–100, which
+**tilts the weighted roll and can do nothing else**. It cannot name a tier, cannot reach the money,
+and cannot empty the table. A missing, hostile or nonsense value is clamped to 0 rather than
+refused — a 400 here would cost somebody the chance they earned by leaving a review — and 0 rolls
+exactly the base weights, so an old cached page plays the odds the game has always had.
+
+Each tier carries a `skillBias`, the multiple its weight reaches at a perfect reel, interpolated
+from 1 at zero. Every adjusted weight stays **positive**, which is what keeps the guarantee
+arithmetic rather than aspirational: no score empties the table at either end.
+
+| Tier | Weight (score 0) | `skillBias` | Weight (score 100) | Reward |
+| --- | --- | --- | --- | --- |
+| `small_fry` | 55% | ×0.4 | 21% | RM2 off |
+| `uncommon` | 25% | ×1.2 | 29% | 10% off the subtotal |
+| `rare` | 15% | ×2.4 | 35% | A free drink, added as a real RM0 line |
+| `jackpot` | 5% | ×3.0 | 15% | RM10 off |
+
+So reeling well roughly triples the jackpot and more than doubles the rare, and a perfect reel still
+lands a small fry one time in five. Skill is a tilt, never a ladder.
 
 **Every tier is a real reward — there is no miss.** Someone who earned a cast by leaving a review
 should not be told they caught an old boot. The table lives in `src/game/rewards.ts`; retuning it is
 one edit, and a won reward freezes its own terms so a retune cannot change what an unpaid customer
 was already promised.
+
+**The play, as the customer sees it** (`src/web/fishing.js`): cast, wait, bite, reel, land. The reel
+is the skill — a safe zone that the fish drags up and down the tension bar, which has to be tracked
+by holding and letting go. There is **no fail state**: a hopeless reel scores near zero, lands on a
+12-second timeout, and still pays out. The physics live in `createReel`, which is pure, frame-rate
+independent and DOM-free, so the scoring is unit-tested against a script of inputs rather than by
+driving an animation.
+
+Two decorations worth knowing about before touching them:
+
+- **Species are cosmetic and client-side.** Two or three per tier ("Anchovy", "Golden Marlin"). They
+  are deliberately *not* on `Reward`, so a display name is never frozen onto a cart and carried onto
+  an order. The server picks the tier; the client picks which fish of that tier is on screen.
+- **A golden bite** (12% of bites) widens the safe zone for that one reel. It changes the *game's*
+  difficulty, not the odds directly — a wider band earns a better score, which then tilts the roll
+  the same way skill does. Worth about +12 points to a middling player and nothing to a good one.
+  There is nothing to track long-term.
+
+**Sound is off by default**, behind a mute toggle in the sheet head, and only an explicit stored
+"on" turns it on. This plays on a customer's phone at a table: audio nobody chose is audio during
+somebody else's dinner. The noises are synthesised with WebAudio rather than fetched, so there is no
+asset to load on a QR scan and nothing to 404 after a redeploy.
 
 **How a reward reaches the bill.** Discounts come off the subtotal *before* tax — taxing food that
 was given away would be wrong — and are clamped so two rewards can never take an order below zero. A

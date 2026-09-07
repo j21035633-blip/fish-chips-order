@@ -5,6 +5,12 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["tests/web.test.ts", "tests/staffNav.test.ts", "src/web/**/*", "src/staff-web/**/*"],
+  "include": [
+    "tests/web.test.ts",
+    "tests/staffNav.test.ts",
+    "tests/fishingGame.test.ts",
+    "src/web/**/*",
+    "src/staff-web/**/*"
+  ],
   "exclude": []
 }

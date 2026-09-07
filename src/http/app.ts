@@ -247,14 +247,16 @@ export function createServer(app: Services = services) {
   /**
    * One cast. The server rolls and applies; the client animates what it is told.
    *
-   * Nothing in the request influences the outcome, and the reward is on the cart
-   * before this responds — so the total in the reply, and the amount Stripe is
-   * later asked for, already have it in.
+   * The request carries one number that matters — how well the player reeled —
+   * and it **tilts the odds without ever choosing from them**. The tier, the
+   * kind, the money: all decided here, none of it in the browser. The reward is
+   * on the cart before this responds, so the total in the reply, and the amount
+   * Stripe is later asked for, already have it in.
    */
   server.post("/api/order/fish/play", (req, res) => {
     void runAsync(res, async () => {
-      const { cartId } = playInput.parse(req.body ?? {});
-      const { cart, reward } = await app.carts.play(cartId);
+      const { cartId, performance } = playInput.parse(req.body ?? {});
+      const { cart, reward } = await app.carts.play(cartId, Math.random, performance);
       return { cart, reward, chances: await chancesView(app, cartId) };
     });
   });
@@ -774,7 +776,19 @@ const registerInput = z.object({
 });
 
 const proofInput = z.object({ cartId: z.string().min(1), type: z.enum(PROOF_TYPES) });
-const playInput = z.object({ cartId: z.string().min(1) });
+const playInput = z.object({
+  cartId: z.string().min(1),
+  /**
+   * The reel score, 0–100.
+   *
+   * Salvaged rather than rejected: a nonsense value is worth a worse roll, not
+   * a 400 that costs somebody the chance they earned by leaving a review.
+   * Absent — an old cached page, a request made by hand — is 0, which is the
+   * base table and exactly how the game played before the reel had a score.
+   * `rollTier` clamps again on the way in; neither end trusts the other.
+   */
+  performance: z.coerce.number().finite().catch(0).default(0),
+});
 const proofQuery = z.object({ status: z.enum(PROOF_STATUSES).default("pending") });
 
 /** One optional image on the field named `image`, into the proofs directory. */

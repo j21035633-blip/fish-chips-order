@@ -8,7 +8,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { InMemoryProofRepository, newProof, triggerFor } from "../src/game/proofs.js";
-import { discountFor, REWARD_TABLE, rollTier, toReward, TOTAL_WEIGHT } from "../src/game/rewards.js";
+import {
+  clampPerformance,
+  discountFor,
+  MAX_PERFORMANCE,
+  REWARD_TABLE,
+  rollTier,
+  toReward,
+  TOTAL_WEIGHT,
+  weightsFor,
+} from "../src/game/rewards.js";
 import { menuService } from "../src/menu/service.js";
 import { InMemoryCartRepository, InMemoryOrderRepository } from "../src/orders/repository.js";
 import { CartService, OrderService } from "../src/orders/service.js";
@@ -330,5 +339,157 @@ describe("what the customer is finally charged", () => {
     expect(free, "the free line is on the kitchen ticket").toBeTruthy();
     expect(order.subtotalSen).toBe(1690);
     expect(order.totalSen).toBe(1690 + Math.round(1690 * 0.1));
+  });
+});
+
+/**
+ * A deterministic uniform source, so a distribution test asserts a
+ * distribution rather than flaking on a bad afternoon.
+ */
+function seeded(seed: number): () => number {
+  let state = seed;
+  return () => {
+    // xorshift, the same generator the base-weights test above uses.
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return ((state >>> 0) % 1_000_000) / 1_000_000;
+  };
+}
+
+/** Rolls `trials` tiers at one performance score and returns each tier's share, in percent. */
+function distribution(score: number, trials = 40_000, seed = 987654321): Record<string, number> {
+  const random = seeded(seed);
+  const counts: Record<string, number> = { small_fry: 0, uncommon: 0, rare: 0, jackpot: 0 };
+  for (let index = 0; index < trials; index += 1) counts[rollTier(random, score).tier]! += 1;
+  for (const tier of Object.keys(counts)) counts[tier] = (counts[tier]! / trials) * 100;
+  return counts;
+}
+
+/**
+ * Skill moves the odds. It does not move the guarantee.
+ *
+ * The rule the whole feature hangs on: a reel score is allowed to make a good
+ * player's jackpot likelier and nothing else. It cannot name a tier, cannot
+ * reach the money, and cannot empty the table — at either end of the range.
+ */
+describe("performance tilts the roll", () => {
+  it("shifts the distribution toward the better tiers at a perfect reel", () => {
+    const lazy = distribution(0);
+    const perfect = distribution(MAX_PERFORMANCE);
+
+    // "Meaningfully" is the requirement, so the assertion is a multiple rather
+    // than a nudge: roughly three times the jackpots and over twice the rares.
+    expect(perfect.jackpot!).toBeGreaterThan(lazy.jackpot! * 2.4);
+    expect(perfect.rare!).toBeGreaterThan(lazy.rare! * 2);
+    // And correspondingly fewer of the smallest.
+    expect(perfect.small_fry!).toBeLessThan(lazy.small_fry! * 0.55);
+
+    // The base row is still the configured table, so nothing regressed for a
+    // client that sends no score at all.
+    expect(Math.abs(lazy.small_fry! - 55)).toBeLessThan(1.5);
+    expect(Math.abs(lazy.jackpot! - 5)).toBeLessThan(1.5);
+  });
+
+  it("moves monotonically, so reeling better is never worse", () => {
+    const shares = [0, 25, 50, 75, 100].map((score) => distribution(score, 20_000));
+
+    for (let index = 1; index < shares.length; index += 1) {
+      const previous = shares[index - 1]!;
+      const current = shares[index]!;
+      // Sampling noise at 20k trials is well under a point; half a point of
+      // slack keeps this from flaking while still catching a real inversion.
+      expect(current.jackpot!, `jackpot at step ${index}`).toBeGreaterThan(previous.jackpot! - 0.5);
+      expect(current.small_fry!, `small fry at step ${index}`).toBeLessThan(previous.small_fry! + 0.5);
+    }
+  });
+
+  it("never empties the table at either extreme", () => {
+    // The guarantee, stated as arithmetic: every adjusted weight stays above
+    // zero, so every tier stays reachable however the reel went.
+    for (const score of [0, 1, 50, 99, 100]) {
+      for (const [index, weight] of weightsFor(score).entries()) {
+        expect(weight, `${REWARD_TABLE[index]!.tier} at ${score}`).toBeGreaterThan(0);
+      }
+    }
+
+    // A perfect reel still lands a small fry sometimes, and a hopeless one
+    // still lands a jackpot sometimes. Skill is a tilt, not a ladder.
+    expect(distribution(100).small_fry!).toBeGreaterThan(5);
+    expect(distribution(0).jackpot!).toBeGreaterThan(1);
+  });
+
+  it("always returns a real, non-empty reward — at any score, at every roll boundary", () => {
+    for (const score of [-50, 0, 0.5, 37, 100, 100_000, Number.NaN, Number.POSITIVE_INFINITY]) {
+      for (const roll of [0, 0.0001, 0.25, 0.5, 0.75, 0.9999]) {
+        const spec = rollTier(() => roll, score as number);
+
+        expect(REWARD_TABLE, `score ${score} roll ${roll}`).toContain(spec);
+        // Non-empty means worth something, not merely defined.
+        const worth = spec.amountSen ?? spec.percent ?? (spec.itemId ? 1 : 0);
+        expect(worth, `${spec.tier} at score ${score}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("folds a hostile or nonsense score into the range instead of trusting it", () => {
+    expect(clampPerformance(150)).toBe(100);
+    expect(clampPerformance(-1)).toBe(0);
+    expect(clampPerformance(Number.NaN)).toBe(0);
+    // Infinity is nonsense rather than a very good reel, so it is worth the
+    // worst odds and not the best ones.
+    expect(clampPerformance(Number.POSITIVE_INFINITY)).toBe(0);
+    expect(clampPerformance(Number.NEGATIVE_INFINITY)).toBe(0);
+    expect(clampPerformance("100" as unknown)).toBe(0);
+    expect(clampPerformance(undefined)).toBe(0);
+    expect(clampPerformance(63.5)).toBe(63.5);
+
+    // A score past the top is worth exactly a perfect reel and no more — there
+    // is no value a client can send that beats playing well.
+    expect(weightsFor(10_000)).toEqual(weightsFor(100));
+  });
+
+  it("keeps the zero-score roll identical to the table it always had", () => {
+    // Belt and braces on the "nothing regressed" claim: at a score of zero the
+    // adjusted weights *are* the configured weights, not merely close to them.
+    expect(weightsFor(0)).toEqual(REWARD_TABLE.map((spec) => spec.weight));
+    expect(weightsFor(0).reduce((sum, weight) => sum + weight, 0)).toBe(TOTAL_WEIGHT);
+  });
+});
+
+/**
+ * The same rule, one level up: through the service, on a real cart, with real
+ * money moving.
+ */
+describe("a played chance always pays out", () => {
+  it("hands back a real reward on a hopeless reel, a hundred times over", async () => {
+    for (let index = 0; index < 100; index += 1) {
+      const cartId = await cartWithFish();
+      await carts.registerContact(cartId, "player@example.com");
+
+      const { cart, reward } = await carts.play(cartId, Math.random, 0);
+
+      expect(REWARD_TABLE.map((spec) => spec.tier)).toContain(reward.tier);
+      expect(reward.label.length).toBeGreaterThan(0);
+      // Worth something on the bill: money off, or a line that costs nothing.
+      const paid = cart.discountSen > 0 || cart.lines.some((line) => line.unitPriceSen === 0);
+      expect(paid, `${reward.tier} paid nothing`).toBe(true);
+      expect(cart.rewards).toHaveLength(1);
+
+      const ledger = await carts.get(cartId);
+      expect(ledger.chances).toBe(0);
+      expect(ledger.chancesUsed).toBe(1);
+    }
+  });
+
+  it("spends exactly one chance whatever the score", async () => {
+    for (const score of [0, 100]) {
+      const cartId = await cartWithFish();
+      await carts.registerContact(cartId, "player@example.com");
+
+      await carts.play(cartId, Math.random, score);
+      expect((await carts.get(cartId)).chancesUsed).toBe(1);
+      await expect(carts.play(cartId, Math.random, score)).rejects.toThrow(/No chances/);
+    }
   });
 });

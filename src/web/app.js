@@ -525,11 +525,16 @@ document.getElementById("earn-contact-form").addEventListener("submit", async (e
 
 const fishing = mountFishing({
   dialog: fishDialog,
-  /** The one call that spends a chance. The server rolls; this only asks. */
-  onPlay: async () => {
+  /**
+   * The one call that spends a chance. The server rolls; this only asks.
+   *
+   * `performance` is how well the reel went, 0-100. It tilts the odds and
+   * nothing more — the tier, and the money, are decided server-side.
+   */
+  onPlay: async (performance = 0) => {
     const result = await api("/api/order/fish/play", {
       method: "POST",
-      body: JSON.stringify({ cartId: state.cart.cartId }),
+      body: JSON.stringify({ cartId: state.cart.cartId, performance }),
     });
     // The cart comes back already carrying the reward, so the total on screen
     // is right the moment the animation finishes.

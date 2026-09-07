@@ -222,7 +222,19 @@ export class CartService {
    * the reward is on the cart before this returns — so the total the customer
    * sees next, and the amount Stripe is later asked for, already include it.
    */
-  async play(cartId: string, random: () => number = Math.random): Promise<{ cart: PricedCart; reward: Reward }> {
+  /**
+   * One cast.
+   *
+   * `performance` is how well the client says the player reeled, 0–100. It
+   * tilts the weighted roll and does nothing else — it cannot name a tier and
+   * cannot reach the money. See `rollTier`. A play that reports nothing rolls
+   * the base table, which is what every play did before the reel had a score.
+   */
+  async play(
+    cartId: string,
+    random: () => number = Math.random,
+    performance = 0,
+  ): Promise<{ cart: PricedCart; reward: Reward }> {
     const cart = await this.get(cartId);
 
     if (cart.chances <= 0) {
@@ -233,7 +245,7 @@ export class CartService {
       );
     }
 
-    const reward = toReward(rollTier(random), randomUUID(), new Date().toISOString());
+    const reward = toReward(rollTier(random, performance), randomUUID(), new Date().toISOString());
     cart.chances -= 1;
     cart.chancesUsed += 1;
     cart.rewards.push(reward);

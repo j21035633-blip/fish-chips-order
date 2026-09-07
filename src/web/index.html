@@ -106,21 +106,53 @@
     <dialog id="fish" class="fish-sheet" aria-label="Fishing">
       <div class="sheet-head">
         <h2 id="fish-title">Cast a line</h2>
+        <!--
+          Sound is off until somebody asks for it: this plays on a customer's
+          own phone at a table, and audio nobody chose is the kind that goes off
+          during someone else's dinner. The button is the only way it turns on.
+        -->
+        <button id="fish-sound" class="icon-button fish-sound" type="button" aria-pressed="false" aria-label="Unmute sound">🔇</button>
         <button id="fish-close" class="icon-button" type="button" aria-label="Close">&times;</button>
       </div>
 
       <div id="fish-stage" class="fish-stage">
-        <div class="sea" aria-hidden="true">
-          <div id="fish-line" class="line"></div>
+        <!--
+          The water. Two wave bands drifting at different speeds over a gradient
+          is enough to read as a moving sea, and it is three divs rather than an
+          asset to download on a QR scan.
+        -->
+        <div id="fish-scene" class="sea" aria-hidden="true">
+          <div class="wave wave-back"></div>
+          <div class="wave wave-front"></div>
+          <div class="shimmer"></div>
+
+          <!-- The line arcs from the rod tip to the splash point. -->
+          <svg class="line-svg" viewBox="0 0 300 150" preserveAspectRatio="none">
+            <path id="fish-line-path" class="line" d="M 12 8 Q 110 34 150 68" />
+          </svg>
+
+          <div id="fish-ripple" class="ripple" hidden></div>
+          <div id="fish-shadow" class="fish-shadow" hidden>🐟</div>
           <div id="fish-float" class="float">●</div>
+          <div id="fish-burst" class="burst" hidden></div>
         </div>
+
         <p id="fish-say" class="fish-say" role="status">Swipe up to cast.</p>
-        <!-- The reel's tension. Shown only while reeling. -->
-        <div id="fish-tension" class="tension" hidden><div id="fish-tension-fill" class="tension-fill"></div></div>
+
+        <!--
+          The reel's tension, shown only while reeling. The band is the safe
+          zone drawn on the meter, so there is something to aim at rather than a
+          rule to be told.
+        -->
+        <div id="fish-tension" class="tension" hidden>
+          <div id="fish-tension-band" class="tension-band"></div>
+          <div id="fish-tension-fill" class="tension-fill"></div>
+        </div>
       </div>
 
       <div id="fish-prize" class="fish-prize" hidden>
         <div id="fish-prize-tier" class="prize-tier"></div>
+        <div id="fish-prize-species" class="prize-species"></div>
         <div id="fish-prize-label" class="prize-label"></div>
         <button id="fish-done" class="primary wide" type="button">Add it to my order</button>
       </div>

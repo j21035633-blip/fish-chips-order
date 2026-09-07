@@ -19,8 +19,19 @@ export type RewardKind = "discount_fixed" | "discount_percent" | "free_item";
 
 export interface TierSpec {
   tier: RewardTier;
-  /** Relative weight. These are the configured odds; they sum to 100 here. */
+  /** Relative weight at zero performance. These are the base odds; they sum to 100 here. */
   weight: number;
+  /**
+   * What this tier's weight is multiplied by at a *perfect* reel, interpolated
+   * linearly from 1 at zero performance. Above 1 the tier gets likelier as the
+   * player gets better; below 1, rarer.
+   *
+   * Every one of them stays **positive**, which is the load-bearing part: no
+   * amount of skill, and no amount of failure, can take a tier off the table.
+   * A terrible reel still lands on a real reward and a perfect one can still
+   * land on a small fry.
+   */
+  skillBias: number;
   kind: RewardKind;
   /** What the customer is told they caught. */
   label: string;
@@ -41,13 +52,48 @@ export interface TierSpec {
  * the wrong way round.
  */
 export const REWARD_TABLE: readonly TierSpec[] = [
-  { tier: "small_fry", weight: 55, kind: "discount_fixed", label: "RM2 off", amountSen: 200 },
-  { tier: "uncommon", weight: 25, kind: "discount_percent", label: "10% off", percent: 10 },
-  { tier: "rare", weight: 15, kind: "free_item", label: "A free Teh Ais", itemId: "drink-teh-ais" },
-  { tier: "jackpot", weight: 5, kind: "discount_fixed", label: "RM10 off", amountSen: 1000 },
+  { tier: "small_fry", weight: 55, skillBias: 0.4, kind: "discount_fixed", label: "RM2 off", amountSen: 200 },
+  { tier: "uncommon", weight: 25, skillBias: 1.2, kind: "discount_percent", label: "10% off", percent: 10 },
+  { tier: "rare", weight: 15, skillBias: 2.4, kind: "free_item", label: "A free Teh Ais", itemId: "drink-teh-ais" },
+  { tier: "jackpot", weight: 5, skillBias: 3, kind: "discount_fixed", label: "RM10 off", amountSen: 1000 },
 ];
 
+/** The base odds' total, at zero performance. */
 export const TOTAL_WEIGHT = REWARD_TABLE.reduce((sum, spec) => sum + spec.weight, 0);
+
+/**
+ * How well the player reeled, 0–100.
+ *
+ * This is **reported by the client**, and that is worth being plain about: a
+ * browser can send 100 every time. It is allowed to, because of what the score
+ * is permitted to do — it *tilts* a weighted roll and nothing else. It cannot
+ * name a tier, cannot reach a discount, and cannot empty the table of the low
+ * tiers or fill it with jackpots. The worst a liar gets is the odds of somebody
+ * who is good at the game, on a chance they had already earned.
+ *
+ * The alternative — simulating the reel server-side, frame by frame, over a
+ * connection that drops in a chip shop — buys accuracy nobody can see in a game
+ * whose every outcome is a prize.
+ */
+export const MAX_PERFORMANCE = 100;
+
+/** Anything a client can put in the field, folded into 0–100. NaN and nonsense become 0. */
+export function clampPerformance(score: unknown): number {
+  const value = typeof score === "number" && Number.isFinite(score) ? score : 0;
+  return Math.min(MAX_PERFORMANCE, Math.max(0, value));
+}
+
+/**
+ * The weights this roll is actually against, after performance is folded in.
+ *
+ * At a score of 0 these are exactly `REWARD_TABLE`'s own numbers, so a client
+ * that sends no score at all — an old cached page, a request made by hand —
+ * plays the odds the game has always had. Nothing regresses by staying silent.
+ */
+export function weightsFor(score: number): number[] {
+  const skill = clampPerformance(score) / MAX_PERFORMANCE;
+  return REWARD_TABLE.map((spec) => spec.weight * (1 + (spec.skillBias - 1) * skill));
+}
 
 /**
  * A reward as it sits on a session, once won.
@@ -68,17 +114,24 @@ export interface Reward {
 }
 
 /**
- * Rolls one tier against the weights.
+ * Rolls one tier against the weights, tilted by how well the player reeled.
  *
  * `random` is injectable so the distribution can be tested against a known
  * sequence rather than by hoping — see `tests/fishing.test.ts`.
+ *
+ * The loop is the same weighted walk it always was; only the numbers it walks
+ * over change. Because every adjusted weight is positive and the target is
+ * drawn from their sum, **this always returns a spec** — there is no arithmetic
+ * here that can produce a miss, at any score.
  */
-export function rollTier(random: () => number = Math.random): TierSpec {
-  const target = random() * TOTAL_WEIGHT;
+export function rollTier(random: () => number = Math.random, performance = 0): TierSpec {
+  const weights = weightsFor(performance);
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const target = random() * total;
   let running = 0;
 
-  for (const spec of REWARD_TABLE) {
-    running += spec.weight;
+  for (const [index, spec] of REWARD_TABLE.entries()) {
+    running += weights[index]!;
     if (target < running) return spec;
   }
   // Only reachable if `random` returns exactly 1, which Math.random never does.

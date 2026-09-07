@@ -678,41 +678,249 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
 @media (prefers-color-scheme: dark) {
   .sea { background: linear-gradient(180deg, #24414f 0%, #17313d 55%, #0e222c 100%); }
 }
-/* The line pays out on the cast and comes back in as the reel fills. */
-.line {
+
+/*
+ * The water, in two bands.
+ *
+ * Each is a wide ellipse drifting sideways at its own speed; the offset periods
+ * are what stop the pair reading as one repeating loop. Drawn rather than
+ * loaded, because this page opens from a QR scan on a restaurant's wifi and an
+ * animated background is not worth a request.
+ */
+.wave {
   position: absolute;
-  top: 0;
-  left: 50%;
-  width: 2px;
-  height: 0;
-  background: rgba(255, 255, 255, 0.75);
-  transition: height 0.35s ease;
+  left: -50%;
+  width: 200%;
+  height: 46px;
+  border-radius: 50%;
+  will-change: transform;
 }
+.wave-back {
+  top: 44px;
+  background: rgba(255, 255, 255, 0.16);
+  animation: drift 7s linear infinite;
+}
+.wave-front {
+  top: 62px;
+  background: rgba(255, 255, 255, 0.22);
+  animation: drift 4.5s linear infinite reverse;
+}
+@keyframes drift {
+  from { transform: translateX(-14%); }
+  to { transform: translateX(14%); }
+}
+@media (prefers-color-scheme: dark) {
+  .wave-back { background: rgba(255, 255, 255, 0.05); }
+  .wave-front { background: rgba(255, 255, 255, 0.07); }
+}
+
+/* The golden bite's glow. Off unless the scene is wearing .golden. */
+.shimmer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(circle at 50% 55%, rgba(255, 214, 102, 0.55), transparent 62%);
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+.sea.golden .shimmer { opacity: 1; animation: shimmer 1.6s ease-in-out infinite; }
+@keyframes shimmer {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.9; }
+}
+
+/*
+ * The line, as an SVG path so it can *arc* to the splash point rather than hang
+ * straight down from the middle. It is drawn on with stroke-dashoffset — the
+ * one honest way to animate a stroke being paid out.
+ */
+.line-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.line {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.8);
+  stroke-width: 1.6;
+  stroke-dasharray: 200;
+  stroke-dashoffset: 200;
+  transition: stroke-dashoffset 0.45s ease-out;
+}
+.line.out { stroke-dashoffset: 0; }
+
+/* The splash where the line lands, and again where the fish breaks the surface. */
+.ripple {
+  position: absolute;
+  left: 50%;
+  top: 68px;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+}
+.ripple.go { animation: ripple 0.75s ease-out; }
+@keyframes ripple {
+  from { transform: scale(0.4); opacity: 0.9; }
+  to { transform: scale(4.2); opacity: 0; }
+}
+
+/*
+ * The fish under the surface, hauled closer as the reel goes well.
+ *
+ * `--near` is the reel's own progress, 0 to 1, written straight onto the
+ * element every frame — so the thing the player is trying to do is the thing
+ * they can watch happening, without a second progress bar to read.
+ */
+.fish-shadow {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  font-size: 22px;
+  opacity: calc(0.35 + var(--near, 0) * 0.6);
+  transform: translate(-50%, calc(var(--near, 0) * -34px)) scale(calc(0.7 + var(--near, 0) * 0.75));
+  filter: brightness(0.35) blur(0.4px);
+  transition: transform 0.12s linear, opacity 0.12s linear;
+  animation: struggle 0.5s ease-in-out infinite;
+}
+@keyframes struggle {
+  0%, 100% { margin-left: -5px; }
+  50% { margin-left: 5px; }
+}
+
 .float {
   position: absolute;
   left: 50%;
-  top: 0;
+  /* Clear of the top edge: at 0 the bobber was sliced in half by the water. */
+  top: 16px;
   transform: translate(-50%, -50%);
   font-size: 26px;
   transition: top 0.35s ease, transform 0.2s ease;
+  z-index: 2;
 }
 .fish-stage.waiting .float { top: 70px; }
-.fish-stage.biting .float { top: 70px; animation: bob 0.35s ease-in-out infinite; }
-.fish-stage.caught .float { top: 42%; font-size: 52px; }
-@keyframes bob {
-  0%, 100% { transform: translate(-50%, -50%); }
-  50% { transform: translate(-50%, -12%); }
+/* The bobber dips under and springs back — the bite, without a sound to hear. */
+.fish-stage.biting .float { top: 70px; animation: dip 0.5s ease-in-out infinite; }
+.fish-stage.reeling .float { top: 60px; }
+.fish-stage.caught .float { top: 42%; font-size: 52px; animation: leap 0.7s cubic-bezier(0.2, 0.9, 0.3, 1); }
+@keyframes dip {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  45% { transform: translate(-50%, 24%) scale(0.86); }
 }
+/* The catch: out of the water, turning over, and back down onto the surface. */
+@keyframes leap {
+  0% { transform: translate(-50%, 130%) scale(0.5) rotate(-18deg); opacity: 0.4; }
+  55% { transform: translate(-50%, -95%) scale(1.16) rotate(12deg); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 1; }
+}
+
+/*
+ * The flourish over a catch: `<i>` elements thrown outward from the fish, each
+ * on its own angle and distance. Scaled by tier — a small fry gets a splash, a
+ * jackpot gets the lot — and built from divs so there is no library and no
+ * asset behind any of it.
+ */
+.burst {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.bit {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  margin: -3px 0 0 -3px;
+  border-radius: 2px;
+  background: #fff;
+  opacity: 0;
+  animation: fling 0.9s ease-out forwards;
+  animation-delay: var(--delay, 0ms);
+}
+.fish-stage.rare .bit { background: #7fe0c8; }
+.fish-stage.jackpot .bit { background: var(--batter, #ffd166); width: 9px; height: 9px; }
+@keyframes fling {
+  0% { opacity: 1; transform: rotate(var(--angle)) translateY(0) scale(1); }
+  100% { opacity: 0; transform: rotate(var(--angle)) translateY(calc(var(--dist) * -1)) scale(0.4); }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .fish-stage.biting .float { animation: none; }
-  .line, .float { transition: none; }
+  .fish-stage.biting .float,
+  .fish-shadow,
+  .wave,
+  .sea.golden .shimmer { animation: none; }
+  .fish-stage.caught .float { animation: none; }
+  .ripple.go { animation: none; }
+  .bit { display: none; }
+  .line, .float, .fish-shadow { transition: none; }
   .fish-sheet { animation: none; }
 }
 
 .fish-say { margin: 14px 0 0; font-weight: 650; }
-.tension { height: 8px; border-radius: 999px; background: var(--line); margin-top: 12px; overflow: hidden; }
-.tension-fill { height: 100%; width: 0; background: var(--sea); border-radius: 999px; }
+
+/*
+ * The tension meter.
+ *
+ * The band is the safe zone, drawn *under* the fill so the player aims at
+ * something rather than being told a rule. The fill's colour is the feedback
+ * that matters at a glance: green while it is where it should be, amber-to-red
+ * as it leaves. Class, not inline style — the JS decides which of three states
+ * it is in and the stylesheet owns what each one looks like.
+ */
+.tension {
+  position: relative;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--line);
+  margin-top: 12px;
+  overflow: hidden;
+}
+/*
+ * The band sits ABOVE the fill, which is the whole point of it.
+ *
+ * Underneath, it disappeared the moment the fill swept past — which is exactly
+ * when a player most needs to see where they are supposed to be aiming. White
+ * edges rather than green ones, because they have to read against the fill in
+ * all three of its colours.
+ */
+.tension-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  background: rgba(255, 255, 255, 0.25);
+  border-left: 2px solid rgba(255, 255, 255, 0.95);
+  border-right: 2px solid rgba(255, 255, 255, 0.95);
+  box-shadow: inset 0 0 0 1px rgba(20, 33, 31, 0.22);
+}
+.tension-fill {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--sea);
+  /* Short, because a green-to-red crossfade spends its middle as brown. */
+  transition: background-color 0.09s linear;
+}
+.tension.safe .tension-fill { background: #2eb67d; }
+.tension.low .tension-fill { background: #e8b13a; }
+.tension.high .tension-fill { background: #d94f43; }
+/* Reeling too hard is the one worth flinching at. */
+.tension.high { box-shadow: 0 0 0 2px rgba(217, 79, 67, 0.35); }
 
 .fish-prize { padding: 0 20px 20px; text-align: center; }
 .prize-tier { font-size: 44px; line-height: 1; }
+.prize-species { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-soft); }
 .prize-label { font-size: 20px; font-weight: 700; margin: 6px 0 16px; }
+
+/* Sits with the close button, quieter than it. */
+.fish-sound { margin-left: auto; font-size: 17px; }

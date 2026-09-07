@@ -27,6 +27,7 @@
     "node_modules",
     "dist",
     "tests/web.test.ts",
-    "tests/staffNav.test.ts"
+    "tests/staffNav.test.ts",
+    "tests/fishingGame.test.ts"
   ]
 }
