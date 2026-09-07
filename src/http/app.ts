@@ -13,7 +13,7 @@ import { deleteImage, imageUpload, MENU_IMAGES, PROOF_IMAGES, servedImageUrl } f
 import { toItemView } from "../menu/service.js";
 import type { MenuItemInput } from "../menu/store.js";
 import { MenuValidationError } from "../menu/types.js";
-import { KITCHEN_STATUSES, OrderValidationError, PAYMENT_METHODS, PAYMENT_PROVIDERS } from "../orders/types.js";
+import { PASS_STATUSES, OrderValidationError, PAYMENT_METHODS, PAYMENT_PROVIDERS } from "../orders/types.js";
 import { PaymentProviderError } from "../payments/types.js";
 import { expandTables, MAX_TABLES, tableCodes } from "../qr/tables.js";
 import {
@@ -179,6 +179,28 @@ export function createServer(app: Services = services) {
 
   server.get("/api/orders/:orderId", (req, res) => {
     void runAsync(res, () => tools.get_order({ orderId: req.params.orderId }));
+  });
+
+  /**
+   * The customer asks for an order to be called off.
+   *
+   * Open, like the rest of `/api/order` — this is the customer's own side of
+   * the app and has no login. It is safe to leave open because it *asks*: the
+   * worst somebody with a stolen order id can do is put a badge on a ticket
+   * that a staff member then declines.
+   *
+   * Allowed only while the food has not been made yet. Past `cooking` the
+   * kitchen has already done the work, and the 409 that comes back is the whole
+   * point of the endpoint rather than an edge case.
+   */
+  server.post("/api/order/:orderId/request-cancel", (req, res) => {
+    void runAsync(res, async () => {
+      const order = await app.orders.requestCancellation(req.params.orderId);
+      // Nothing is pushed anywhere: the staff boards poll `/api/staff/overview`
+      // every two seconds and the flag is on the order, so the badge appears on
+      // every tablet within one tick. Same mechanism new orders arrive by.
+      return { order };
+    });
   });
 
   // -------------------------------------------------------- chances and game
@@ -407,6 +429,35 @@ export function createServer(app: Services = services) {
 
   server.patch("/api/staff/orders/:orderId/status", setStatus);
   server.post("/api/staff/orders/:orderId/status", setStatus);
+
+  /**
+   * Yes: call it off, and give the money back.
+   *
+   * The refund is not a separate step anybody has to remember — see
+   * `PaymentService.approveCancellation`. The refund record comes back in the
+   * response so the tablet can say what actually happened to the money, which
+   * for a cash or e-wallet order is "somebody has to do this by hand".
+   */
+  server.patch("/api/staff/orders/:orderId/approve-cancel", (req, res) => {
+    void runAsync(res, async () => {
+      const { order, refund } = await app.payments.approveCancellation(req.params.orderId);
+      return { order, refund };
+    });
+  });
+
+  /**
+   * No: the food is already happening.
+   *
+   * The order carries on untouched — same status, same place in the queue. Only
+   * the badge comes down, and the customer's page picks the outcome up on its
+   * next poll.
+   */
+  server.patch("/api/staff/orders/:orderId/deny-cancel", (req, res) => {
+    void runAsync(res, async () => {
+      const order = await app.orders.denyCancellation(req.params.orderId);
+      return { order };
+    });
+  });
 
   /**
    * Takings per day over a range, for the sales report page.
@@ -739,7 +790,13 @@ function renderStaffPage(file: string): string {
   return html;
 }
 
-const staffStatusInput = z.object({ status: z.enum(KITCHEN_STATUSES) });
+/**
+ * `PASS_STATUSES`, not `KITCHEN_STATUSES`: "cancelled" is deliberately not
+ * settable here. Cancelling has to go through `approve-cancel`, which is what
+ * refunds the money — reaching it by sending one word to the status endpoint
+ * would cancel the order and quietly keep the payment.
+ */
+const staffStatusInput = z.object({ status: z.enum(PASS_STATUSES) });
 
 /**
  * Length-capped so a megabyte of "password" cannot be hashed on demand, and

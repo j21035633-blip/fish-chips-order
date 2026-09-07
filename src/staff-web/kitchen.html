@@ -91,7 +91,16 @@
     </dialog>
 
     <script type="module">
-      import { api, el, errorBanner, orderFeed, orderLabel, takeawayTag } from "{{STAFF_BASE}}/assets/common.js";
+      import {
+        api,
+        cancelActions,
+        cancelFlag,
+        el,
+        errorBanner,
+        orderFeed,
+        orderLabel,
+        takeawayTag,
+      } from "{{STAFF_BASE}}/assets/common.js";
       import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
       // The customer app's own menu UI. Public because it is menu rendering, the
       // same code /app.js already serves — see the note at the top of that file.
@@ -121,11 +130,13 @@
 
       function card(order) {
         const action = ACTION[order.kitchenStatus];
+        const wantsCancel = order.cancellationRequested === true;
         const paid = order.paymentStatus === "paid";
 
         const label = orderLabel(order);
 
-        return el("article", { class: `card ${order.kitchenStatus}` }, [
+        return el("article", { class: `card ${order.kitchenStatus}${wantsCancel ? " wants-cancel" : ""}` }, [
+          wantsCancel ? el("div", { style: "margin-bottom:8px" }, [cancelFlag()]) : null,
           el("div", { class: "ticket-head" }, [
             el("span", {}, [
               el("span", { class: label.takeaway ? "table takeaway" : "table", text: label.text }),
@@ -162,7 +173,31 @@
             disabled: busy.has(order.id),
             onClick: () => move(order.id, action.next),
           }),
+          // Below the one action the status calls for, so a decision about
+          // cancelling cannot be mistaken for it during service.
+          wantsCancel ? cancelActions(order, (choice) => decide(order.id, choice), busy.has(order.id)) : null,
         ]);
+      }
+
+      /**
+       * Approve or deny, then redraw from the server.
+       *
+       * The refund happens server-side inside the approval, so nothing here
+       * has to remember it. What it reports about the money is surfaced rather
+       * than assumed: for a cash or e-wallet order the honest answer is
+       * "somebody has to do this by hand", and that has to reach the counter.
+       */
+      async function decide(orderId, choice) {
+        busy.add(orderId);
+        try {
+          const { refund } = await api(`/api/staff/orders/${orderId}/${choice}`, { method: 'PATCH' });
+          if (refund?.reason) showError(refund.reason);
+          await feed.refresh();
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          busy.delete(orderId);
+        }
       }
 
       async function move(orderId, status) {

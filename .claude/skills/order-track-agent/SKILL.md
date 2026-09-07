@@ -86,13 +86,89 @@ poller cannot otherwise see), and re-polls on `visibilitychange`, `focus` and `o
 one that matters during service, because a browser stops timers on a locked screen and a tablet
 picked up ten minutes later would otherwise sit on stale orders.
 
+### Cancellation: the customer asks, staff answer
+
+A customer can ask for an order to be called off; **only staff can actually cancel one.** The reason
+is the fryer — nobody but the person at the pass can see whether the food has been started — so the
+customer's button raises a flag and waits.
+
+```
+POST  /api/order/{id}/request-cancel            # customer, no auth, idempotent
+PATCH /api/staff/orders/{id}/approve-cancel     # cancels + refunds
+PATCH /api/staff/orders/{id}/deny-cancel        # clears the flag, order untouched
+```
+
+- **Allowed only at `received` or `cooking`** (`CANCELLABLE_STATUSES`). From `ready` on it is a 400
+  `cancellation_too_late` and the button is not drawn. Asking twice is the same as asking once.
+- **`cancelled` is a kitchen status but not a `PASS_STATUS`.** The two lists are separate so
+  "Mark collected" never offers "cancel" as the next tap, and — the load-bearing half — so the
+  ordinary status endpoint cannot cancel an order. If it could, one word would cancel it and
+  silently keep the customer's money, because the refund lives on `approve-cancel`.
+- **`cancellationRequested` comes down on *either* decision.** It means "waiting on a person", so it
+  must not survive the answer. `cancellationDeniedAt` is kept instead, and is the only thing that
+  tells the customer's page the difference between "never asked" and "asked, and was declined".
+- **Broadcast is the existing poll.** The flag rides on the order, so it reaches every staff tablet
+  on the next `/api/staff/overview` tick — the same way a new order does. There is still no
+  WebSocket anywhere in this project.
+
+**The refund** (`PaymentService.approveCancellation`) records one of four outcomes on `order.refund`,
+and the customer is shown its `reason` verbatim:
+
+| Outcome | When | Money | Counts as revenue? |
+| --- | --- | --- | --- |
+| `refunded` | Stripe says `status: "succeeded"` | Gone back | **No** — `paymentStatus` becomes `refunded` |
+| `pending` | Stripe accepted it but has not settled it | Still held | Yes |
+| `none` | Unpaid, or cash ("hand it back at the till") | Nothing, or in the till | Only if it was paid |
+| `manual` | Paid on a rail with no `refund()` (Revenue Monster) | Still held — **refund by hand** | Yes |
+| `failed` | The provider refused | Still held | Yes |
+
+Three things worth keeping if you touch it:
+
+- **Refunds are taken against the Stripe PaymentIntent, never the Checkout Session.**
+  `providerPaymentId` is a `cs_…` and the Refunds API will not accept it. The intent is captured
+  from the webhook into `payment.providerPaymentIntentId`; older orders fall back to retrieving the
+  session. Getting this wrong fails at the worst moment — after a staff member has said yes.
+- **The idempotency key is `refund_{orderId}`**, so a double-tap on Approve cannot send the money
+  twice. The order is also re-checked before any money moves.
+- **A failed refund does not abandon the cancellation.** The customer has already been told; an
+  order left half-cancelled because Stripe had a bad minute is worse than one recorded as cancelled
+  with "do this by hand" written on it.
+
+### Refunded money leaves the takings, and only when it has actually gone
+
+`refunded` is a **`PaymentStatus`**, not a kitchen one. Money and food move independently here, and
+a cancelled-and-refunded order carries both: the food is `cancelled`, the money is `refunded`. That
+placement is also what makes the revenue fix a one-word change — takings are
+`paymentStatus === "paid"` in `paidBetween`, in *both* the in-memory repository and the Mongo query,
+so a refunded order leaves the report by construction rather than by a filter somebody has to
+remember.
+
+**The condition is confirmation, not acceptance.** `completeCancellation` sets `paymentStatus` to
+`refunded` only when the refund's outcome is `refunded`, which requires Stripe to answer
+`status: "succeeded"`. There are two opposite ways to get this wrong and the rule has to be right in
+both directions:
+
+- leaving a settled refund in the report **over**-reports money the shop does not have;
+- dropping a *queued* refund out of it **under**-reports money the shop still does.
+
+So `pending`, `failed` and `manual` all leave the order at `paid` and in the takings, because in
+every one of those cases the shop still has the money.
+
+**Nothing may put a refunded order back.** `markPaid` and `markFailed` both refuse to touch one:
+Stripe redelivers webhooks for days, and a late `payment_succeeded` flipping `refunded` → `paid`
+would reopen the same leak from the other end. There are tests for exactly that.
+
+Cash is deliberately *not* automatic: the money goes back over the counter, so the order keeps
+counting until somebody adjusts the till. That is a decision, not an oversight, and it is asserted.
+
 ### Kitchen status: Received → Cooking → Ready → Collected
 
 `collected` means handed to the customer. It is a real status but **not a column**: the ticket drops
 off both boards, while staying in the day's trade so the sales report still counts it. The Kitchen &
 Counter view is where it is set ("Mark Collected"); the Dashboard's chain still ends at Ready.
 
-Any status is accepted rather than forward-only — a mis-tap on a busy pass has to be undoable, and
+`cancelled` is reachable only through `approve-cancel` — see above. Any *pass* status is accepted
+rather than forward-only — a mis-tap on a busy pass has to be undoable, and
 a shared password means there is no per-person audit trail to protect anyway. The change is
 idempotent, so a double-tap is not an error. Kitchen status never touches payment status: money and food move independently.
 

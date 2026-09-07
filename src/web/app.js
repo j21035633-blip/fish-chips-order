@@ -901,6 +901,8 @@ async function renderOrderView(orderId) {
           ])
         : null,
 
+      kitchenPanel(order, requestCancel),
+
       el("section", { class: "panel" }, [
         el("h2", { text: "Your order" }),
         ...order.lines.map((line) =>
@@ -918,6 +920,99 @@ async function renderOrderView(orderId) {
     );
   };
 
+  /**
+   * The kitchen's half of the page, and the only place cancelling happens.
+   *
+   * Four states, and they are deliberately different shapes rather than four
+   * colours of the same box: waiting on staff is not the same as cancelled, and
+   * "we could not cancel it" has to read as the order carrying on rather than
+   * as an error.
+   */
+  function kitchenPanel(order, onCancel) {
+    if (order.kitchenStatus === "cancelled") {
+      return el("section", { class: "panel cancelled-panel" }, [
+        el("h2", { text: "Order cancelled" }),
+        el("p", { class: "muted", text: "This order has been cancelled by the shop." }),
+        // The money, in the shop's own words — including "somebody has to do
+        // this by hand", which is the case the customer most needs to hear.
+        order.refund?.reason ? el("p", { class: "refund-note", text: order.refund.reason }) : null,
+      ]);
+    }
+
+    if (order.cancellationRequested) {
+      return el("section", { class: "panel pending-panel" }, [
+        el("h2", { text: "Cancellation requested" }),
+        el("p", { text: "Waiting for the shop to confirm — please don't leave just yet." }),
+        el("p", { class: "muted", text: "If they've already started cooking, your order will carry on." }),
+      ]);
+    }
+
+    const cancellable = order.kitchenStatus === "received" || order.kitchenStatus === "cooking";
+    // Its own class: the payment panel above already has an `.error`, and one
+    // selector finding the other's is the kind of bug that only shows up when
+    // somebody is looking at the wrong empty box.
+    const error = el("p", { class: "error cancel-error", hidden: true });
+
+    return el("section", { class: "panel" }, [
+      el("h2", { text: "In the kitchen" }),
+      el("div", { class: `kitchen-status ${order.kitchenStatus}`, text: KITCHEN_LABEL[order.kitchenStatus] ?? order.kitchenStatus }),
+      // Shown only after a refusal, and only until they ask again. It explains
+      // the button disappearing, which is otherwise the page losing a control
+      // for no visible reason.
+      // Worded from the status it is actually in. The stock line reads as a
+      // contradiction sitting directly under an "Order received" badge, which
+      // is exactly where it appeared when staff declined before starting.
+      order.cancellationDeniedAt
+        ? el("p", {
+            class: "denied-note",
+            text:
+              order.kitchenStatus === "cooking"
+                ? "Your order is already being prepared and could not be cancelled."
+                : "The shop wasn't able to cancel this one — it's still on its way.",
+          })
+        : null,
+      error,
+      cancellable
+        ? el("button", {
+            class: "secondary wide cancel-order",
+            type: "button",
+            text: "Cancel order",
+            onClick: async (event) => {
+              const button = event.target;
+              error.hidden = true;
+              button.disabled = true;
+              button.textContent = "Asking the shop…";
+              try {
+                await onCancel();
+              } catch (failure) {
+                error.textContent = failure.message;
+                error.hidden = false;
+                button.disabled = false;
+                button.textContent = "Cancel order";
+              }
+            },
+          })
+        : null,
+    ]);
+  }
+
+  /** What the page is currently showing, as one comparable string. */
+  let lastDrawn = "";
+
+  /**
+   * Asks the shop to call the order off.
+   *
+   * Redraws from the server's answer rather than from what was tapped: the
+   * customer is waiting on a person, and the page must never show a
+   * cancellation that has not been agreed to.
+   */
+  const requestCancel = async () => {
+    const { order } = await api(`/api/order/${orderId}/request-cancel`, { method: "POST" });
+    lastDrawn = renderSignature(order);
+    draw(order);
+    startPolling(order);
+  };
+
   const refresh = async () => {
     const { order } = await api(`/api/orders/${orderId}`);
     // Nothing else on this page needs the method list, so only pay for it when
@@ -926,19 +1021,43 @@ async function renderOrderView(orderId) {
     if (stuck && order.paymentStatus === "pending" && methods.length === 0) {
       ({ methods } = await api("/api/payments/methods"));
     }
-    draw(order);
-    if (order.paymentStatus === "paid" || order.paymentStatus === "failed") {
-      clearInterval(pollTimer);
+    // Only redraw when something the page shows has actually moved.
+    //
+    // This is what lets the poll run while the payment picker is on screen. It
+    // used to be switched off there, because redrawing every three seconds
+    // threw away the radio button the customer had just chosen — which meant an
+    // unpaid order never saw its cancellation answered. Comparing first keeps
+    // the selection *and* the live update, instead of trading one for the other.
+    const signature = renderSignature(order);
+    if (signature !== lastDrawn) {
+      lastDrawn = signature;
+      draw(order);
     }
+    if (!worthWatching(order)) clearInterval(pollTimer);
     return order;
   };
 
+  /**
+   * Whether anything on this page can still change on its own.
+   *
+   * Payment used to be the only answer, and polling stopped the moment it
+   * settled. The kitchen is the other one: a cancellation the customer has
+   * asked for is answered by a person at the pass, and the whole point is that
+   * the page finds out without being refreshed. It stops once the order is
+   * somewhere final — cancelled, collected, or paid with nothing outstanding.
+   */
+  function worthWatching(order) {
+    if (order.cancellationRequested) return true;
+    if (order.kitchenStatus === "cancelled" || order.kitchenStatus === "collected") return false;
+    if (order.paymentStatus === "pending" && (order.payment?.checkoutUrl || order.payment?.qrCodeUrl)) return true;
+    // Paid and in the kitchen: still worth watching, because it can still be
+    // cancelled from this page and the outcome arrives from somewhere else.
+    return order.paymentStatus === "paid";
+  }
+
   const startPolling = (order) => {
     clearInterval(pollTimer);
-    // Payment settles on a webhook, which lands whenever the provider sends it.
-    // Only poll once an attempt exists — redrawing underneath the method picker
-    // would throw away the customer's selection every three seconds.
-    if (order.paymentStatus === "pending" && (order.payment?.checkoutUrl || order.payment?.qrCodeUrl)) {
+    if (worthWatching(order)) {
       pollTimer = setInterval(() => refresh().catch(() => {}), 3000);
     }
   };
@@ -946,9 +1065,39 @@ async function renderOrderView(orderId) {
   try {
     startPolling(await refresh());
   } catch (error) {
+    lastDrawn = "";
     mount(view, el("p", { class: "empty", text: error.message }));
   }
 }
+
+/**
+ * Everything on this page that can change on its own, in one string.
+ *
+ * Deliberately not the whole order: it is compared every three seconds, and a
+ * field the page does not render changing is not a reason to throw away what
+ * the customer is halfway through doing.
+ */
+function renderSignature(order) {
+  return [
+    order.kitchenStatus,
+    order.paymentStatus,
+    order.cancellationRequested === true,
+    order.cancellationDeniedAt ?? "",
+    order.refund?.outcome ?? "",
+    order.payment?.checkoutUrl ?? "",
+    order.payment?.qrCodeUrl ?? "",
+    order.totalSen,
+  ].join("|");
+}
+
+/** Where the food is, in the customer's terms rather than the kitchen's. */
+const KITCHEN_LABEL = {
+  received: "Order received",
+  cooking: "Being cooked",
+  ready: "Ready to collect",
+  collected: "Collected",
+  cancelled: "Cancelled",
+};
 
 /** Why the order is stuck, in the customer's terms. */
 function stalledReason(order) {
@@ -958,7 +1107,13 @@ function stalledReason(order) {
 }
 
 function statusLabel(status) {
-  return { pending: "Awaiting payment", paid: "Paid", failed: "Payment failed", expired: "Payment expired" }[status] ?? status;
+  return {
+    pending: "Awaiting payment",
+    paid: "Paid",
+    failed: "Payment failed",
+    expired: "Payment expired",
+    refunded: "Refunded",
+  }[status] ?? status;
 }
 
 // ------------------------------------------------ simulated checkout page

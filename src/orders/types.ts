@@ -9,7 +9,21 @@ import type { Allergen } from "../menu/types.js";
  * here is its *payment* lifecycle.
  */
 
-export const PAYMENT_STATUSES = ["pending", "paid", "failed", "expired"] as const;
+/**
+ * The money's lifecycle.
+ *
+ * `refunded` is deliberately here and not on `KitchenStatus`: money and food
+ * move independently in this system, and what happened to the payment is a fact
+ * about the payment. A cancelled-and-refunded order carries both — the food is
+ * `cancelled`, the money is `refunded` — which is also what makes the revenue
+ * fix a one-word change rather than a new rule in the report.
+ *
+ * **Only `paid` counts as revenue.** `paidBetween` is the single gate, in both
+ * the in-memory repository and the Mongo one, so a status that is not `paid` is
+ * out of the day's takings by construction rather than by a filter somebody has
+ * to remember to add.
+ */
+export const PAYMENT_STATUSES = ["pending", "paid", "failed", "expired", "refunded"] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 
 /** Which rail the customer chose. `card` is Stripe; `ewallet` is Revenue Monster. */
@@ -26,7 +40,19 @@ export type PaymentProvider = (typeof PAYMENT_PROVIDERS)[number];
  * In order: an order is `received` when it is placed, and staff walk it along
  * the pass to `collected` — handed to the customer, and off the board.
  */
-export const KITCHEN_STATUSES = ["received", "cooking", "ready", "collected"] as const;
+export const PASS_STATUSES = ["received", "cooking", "ready", "collected"] as const;
+export type PassStatus = (typeof PASS_STATUSES)[number];
+
+/**
+ * Every state an order's food can be in.
+ *
+ * `cancelled` is deliberately **not** part of `PASS_STATUSES`: it is a place an
+ * order lands, never a step along the pass. Keeping the two lists apart is what
+ * stops "Mark collected" from offering "cancel" as the next tap, and what keeps
+ * the ordinary status endpoint from being a way to cancel an order — and skip
+ * the refund — by sending one word.
+ */
+export const KITCHEN_STATUSES = [...PASS_STATUSES, "cancelled"] as const;
 export type KitchenStatus = (typeof KITCHEN_STATUSES)[number];
 
 /**
@@ -38,8 +64,28 @@ export const ACTIVE_KITCHEN_STATUSES = ["received", "cooking", "ready"] as const
 export type ActiveKitchenStatus = (typeof ACTIVE_KITCHEN_STATUSES)[number];
 
 /** The status one step further along the pass, or undefined at the end of it. */
-export function nextKitchenStatus(status: KitchenStatus): KitchenStatus | undefined {
-  return KITCHEN_STATUSES[KITCHEN_STATUSES.indexOf(status) + 1];
+export function nextKitchenStatus(status: KitchenStatus): PassStatus | undefined {
+  const index = (PASS_STATUSES as readonly string[]).indexOf(status);
+  // A cancelled order is not on the pass, so there is no next step from it.
+  return index === -1 ? undefined : PASS_STATUSES[index + 1];
+}
+
+/**
+ * The kitchen statuses a customer may still call off.
+ *
+ * `ready` is the cut-off, and the reason is the fryer: once the food is up it
+ * has been cooked, plated and is sitting on the pass. Anything past that is a
+ * conversation with a staff member, not a button.
+ */
+export const CANCELLABLE_STATUSES = ["received", "cooking"] as const;
+
+export function isCancellable(order: Order): boolean {
+  return (CANCELLABLE_STATUSES as readonly string[]).includes(order.kitchenStatus);
+}
+
+/** Whether this order is waiting on a staff decision. Undefined reads as "no". */
+export function cancellationPending(order: Order): boolean {
+  return order.cancellationRequested === true;
 }
 
 /** A customer's choice within one option group, before pricing. */
@@ -195,6 +241,16 @@ export interface OrderPayment {
   provider: PaymentProvider;
   /** The provider's id for the payment (Stripe session id, RM transaction id). */
   providerPaymentId: string;
+  /**
+   * Stripe only, and only once the money has landed: the PaymentIntent behind
+   * the Checkout Session.
+   *
+   * Refunds are taken against the intent, never the session, so without this a
+   * refund has to go and fetch the session first. The webhook carries it, so it
+   * is cheaper to keep it than to ask again — but it is optional, and the
+   * adapter still knows how to look it up when an older order does not have it.
+   */
+  providerPaymentIntentId?: string;
   status: PaymentStatus;
   /** Where we sent the customer to pay. */
   checkoutUrl?: string;
@@ -205,6 +261,47 @@ export interface OrderPayment {
   createdAt: string;
   paidAt?: string;
   failureReason?: string;
+}
+
+/**
+ * How the money came back, or why it did not.
+ *
+ * Recorded on the order rather than worked out on demand, because it is a
+ * statement about something that happened once: a receipt for the refund, or a
+ * note explaining that there was nothing to refund. Staff read it off the
+ * ticket and the customer is shown a plain-language version of the same thing.
+ */
+export const REFUND_OUTCOMES = ["refunded", "pending", "none", "manual", "failed"] as const;
+export type RefundOutcome = (typeof REFUND_OUTCOMES)[number];
+
+export interface OrderRefund {
+  /**
+   * - `refunded` — **confirmed**: the provider says the money has gone back.
+   *                 This is the only outcome that takes the order out of the
+   *                 day's revenue.
+   * - `pending`  — the provider accepted the refund but has not settled it yet.
+   *                 The shop still holds the money, so the order still counts:
+   *                 dropping it here would under-report takings that are real.
+   * - `none`     — there was nothing to refund: unpaid, or paid in cash and
+   *                 handed back over the counter.
+   * - `manual`   — real money was taken on a rail this cannot refund itself.
+   *                 **Somebody has to do it by hand**, and this is the flag
+   *                 that says so rather than quietly keeping the money.
+   * - `failed`   — the refund was attempted and the provider refused it.
+   *
+   * The last three all leave the money where it is, which is exactly why they
+   * leave `paymentStatus` at `paid`.
+   */
+  outcome: RefundOutcome;
+  /** One sentence, written for a person: shown to staff and to the customer. */
+  reason: string;
+  amountSen?: number;
+  amount?: string;
+  provider?: PaymentProvider;
+  providerRefundId?: string;
+  /** True when no provider credentials were configured and this was simulated. */
+  simulated?: boolean;
+  at: string;
 }
 
 export interface Order {
@@ -261,6 +358,32 @@ export interface Order {
   holdForPayment?: boolean;
   /** Kitchen progress. Every order starts `received`; staff move it on. */
   kitchenStatus: KitchenStatus;
+
+  /**
+   * The customer has asked for this order to be called off, and nobody behind
+   * the counter has answered yet.
+   *
+   * A *request*, not a cancellation: the fryer may already be halfway through
+   * it, and only a person at the pass can see that. Staff approve or deny, and
+   * either way this goes back to false — it is the flag that raises the badge
+   * on the boards, so it must not survive the decision that answers it.
+   *
+   * Optional because orders written before this existed have no such field;
+   * everything reads it through `cancellationPending`, which treats a missing
+   * value as "no".
+   */
+  cancellationRequested?: boolean;
+  cancellationRequestedAt?: string;
+  /**
+   * When staff said no. Kept, where the request flag is not, because it is the
+   * only thing that tells the customer's page the difference between "never
+   * asked" and "asked, and the kitchen was already cooking it".
+   */
+  cancellationDeniedAt?: string;
+  cancelledAt?: string;
+  /** What happened to the money when it was cancelled. See `OrderRefund`. */
+  refund?: OrderRefund;
+
   createdAt: string;
   updatedAt: string;
 }

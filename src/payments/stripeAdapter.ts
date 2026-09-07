@@ -1,6 +1,6 @@
 import { isPlaceholder, type StripeConfig } from "../config/env.js";
 import { formatRate } from "../orders/render.js";
-import type { PaymentMethod } from "../orders/types.js";
+import type { Order, PaymentMethod } from "../orders/types.js";
 import { hmacHex, simulatedSession, timingSafeEqualHex } from "./simulation.js";
 import {
   PaymentProviderError,
@@ -9,6 +9,8 @@ import {
   type PaymentAdapter,
   type PaymentEvent,
   type PaymentSession,
+  type RefundRequest,
+  type RefundResult,
   type WebhookHeaders,
   type WebhookVerification,
 } from "./types.js";
@@ -85,6 +87,132 @@ export class StripeAdapter implements PaymentAdapter {
     // A JSON `null` is not a link. `!== undefined` would store one anyway.
     if (payload.url) session.checkoutUrl = payload.url;
     return session;
+  }
+
+  /**
+   * Refunds a Checkout payment in full.
+   *
+   * **Refunds are taken against the PaymentIntent, not the Checkout Session.**
+   * `providerPaymentId` is a session id (`cs_…`), which the Refunds API will
+   * not accept, so this uses the intent captured from the webhook and falls
+   * back to retrieving the session for orders paid before that was stored.
+   * Getting this wrong fails at the worst possible moment — a staff member has
+   * already told the customer their money is coming back.
+   *
+   * The amount is passed in rather than read off the order: one place decides
+   * how much, and it is the caller that showed the number to the staff member.
+   */
+  async refund(request: RefundRequest): Promise<RefundResult> {
+    const secretKey = this.config.secretKey;
+    if (!this.isConfigured() || secretKey === undefined) {
+      // No credentials, so nothing was really charged either — the payment was
+      // simulated too. Answering with a simulated refund keeps the whole
+      // cancellation flow runnable locally and in the tests.
+      return {
+        provider: this.provider,
+        providerRefundId: `re_simulated_${request.order.id}`,
+        amountSen: request.amountSen,
+        simulated: true,
+        // Nothing real was charged either, so a simulated refund is as settled
+        // as the simulated payment it reverses. Local development and the tests
+        // depend on this closing the loop.
+        confirmed: true,
+      };
+    }
+
+    const intent = await this.paymentIntentFor(request.order, secretKey);
+
+    const body = new URLSearchParams({
+      payment_intent: intent,
+      amount: String(request.amountSen),
+      // Stripe's own vocabulary. The customer asked; nobody is alleging fraud.
+      reason: "requested_by_customer",
+    });
+    body.set("metadata[order_id]", request.order.id);
+    body.set("metadata[order_reference]", request.order.reference);
+
+    const response = await this.fetchImpl(`${this.config.apiBase}/v1/refunds`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${secretKey}`,
+        "content-type": "application/x-www-form-urlencoded",
+        // The one that matters here: a staff member double-tapping Approve, or
+        // a retried request, must not send the money back twice.
+        "idempotency-key": request.idempotencyKey,
+      },
+      body: body.toString(),
+    });
+
+    const payload = (await response.json().catch(() => ({}))) as {
+      id?: string;
+      amount?: number;
+      status?: string;
+      error?: { message?: string };
+    };
+
+    if (!response.ok || !payload.id) {
+      throw new PaymentProviderError(
+        payload.error?.message ?? `Stripe refused the refund (${response.status}).`,
+        this.provider,
+        response.status,
+        payload,
+      );
+    }
+
+    return {
+      provider: this.provider,
+      providerRefundId: payload.id,
+      amountSen: payload.amount ?? request.amountSen,
+      simulated: false,
+      /**
+       * Stripe's own word for it, and nothing looser.
+       *
+       * A 200 here means the refund was *accepted*, not that it has settled:
+       * `status` comes back `pending` on some rails and can still end up
+       * `failed` or `canceled`. Only `succeeded` is money that has actually
+       * gone back, and only that may take the order out of the day's takings.
+       */
+      confirmed: payload.status === "succeeded",
+    };
+  }
+
+  /** The intent behind a session: from the order if the webhook carried it, else from Stripe. */
+  private async paymentIntentFor(order: Order, secretKey: string): Promise<string> {
+    const stored = order.payment?.providerPaymentIntentId;
+    if (stored) return stored;
+
+    const sessionId = order.payment?.providerPaymentId;
+    if (!sessionId) {
+      throw new PaymentProviderError(
+        "This order has no Stripe payment to refund.",
+        this.provider,
+        undefined,
+        { orderId: order.id },
+      );
+    }
+
+    const response = await this.fetchImpl(`${this.config.apiBase}/v1/checkout/sessions/${sessionId}`, {
+      headers: { authorization: `Bearer ${secretKey}` },
+    });
+    const payload = (await response.json().catch(() => ({}))) as {
+      payment_intent?: string | { id?: string };
+      error?: { message?: string };
+    };
+
+    // Stripe sends the intent as an id, or as an expanded object depending on
+    // the request. Accept either rather than depending on which.
+    const intent =
+      typeof payload.payment_intent === "string" ? payload.payment_intent : payload.payment_intent?.id;
+
+    if (!response.ok || !intent) {
+      throw new PaymentProviderError(
+        payload.error?.message ?? `Stripe could not tell us what to refund (${response.status}).`,
+        this.provider,
+        response.status,
+        payload,
+      );
+    }
+    return intent;
   }
 
   /** Form-encodes the order as Stripe line items. Prices come from our own totals. */
@@ -201,6 +329,7 @@ interface StripeEventShape {
       amount_total?: number;
       currency?: string;
       client_reference_id?: string;
+      payment_intent?: string | { id?: string };
       metadata?: Record<string, string>;
     };
   };
@@ -226,6 +355,12 @@ function parseStripeEvent(rawBody: string): PaymentEvent {
   if (orderId !== undefined) event.orderId = orderId;
   if (object.amount_total !== undefined) event.amountSen = object.amount_total;
   if (object.currency !== undefined) event.currency = object.currency.toUpperCase();
+
+  // Kept because a refund needs it and the session id will not do — see
+  // `StripeAdapter.refund`. Sent as an id or as an expanded object; take either.
+  const intent =
+    typeof object.payment_intent === "string" ? object.payment_intent : object.payment_intent?.id;
+  if (intent !== undefined) event.providerPaymentIntentId = intent;
 
   return event;
 }

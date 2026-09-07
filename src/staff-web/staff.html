@@ -28,7 +28,16 @@
     </main>
 
     <script type="module">
-      import { api, el, errorBanner, orderFeed, orderLabel, takeawayTag } from "{{STAFF_BASE}}/assets/common.js";
+      import {
+        api,
+        cancelActions,
+        cancelFlag,
+        el,
+        errorBanner,
+        orderFeed,
+        orderLabel,
+        takeawayTag,
+      } from "{{STAFF_BASE}}/assets/common.js";
       import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
 
       // The board's three columns. `collected` is a status but not a column —
@@ -53,7 +62,9 @@
 
         const label = orderLabel(order);
 
-        return el("article", { class: `ticket ${order.kitchenStatus}` }, [
+        const wantsCancel = order.cancellationRequested === true;
+
+        return el("article", { class: `ticket ${order.kitchenStatus}${wantsCancel ? " wants-cancel" : ""}` }, [
           el("div", { class: "ticket-head" }, [
             el("span", {}, [
               el("span", { class: label.takeaway ? "table takeaway" : "table", text: label.text }),
@@ -61,6 +72,7 @@
             ]),
             el("span", { class: "reference", text: order.reference }),
           ]),
+          wantsCancel ? el("div", { style: "margin:8px 0" }, [cancelFlag()]) : null,
           order.customerName ? el("div", { class: "opts", text: order.customerName }) : null,
           el(
             "ul",
@@ -101,7 +113,31 @@
                 })
               : null,
           ]),
+          // Under the foot, so the decision is separated from the ordinary
+          // "move it along" buttons it must never be mistaken for.
+          wantsCancel ? cancelActions(order, (action) => decide(order.id, action), busy.has(order.id)) : null,
         ]);
+      }
+
+      /**
+       * Approve or deny, then redraw from the server.
+       *
+       * The refund happens server-side inside the approval — see
+       * `PaymentService.approveCancellation` — and what it says about the money
+       * is shown rather than assumed, because for a cash or e-wallet order the
+       * answer is "somebody has to do this by hand".
+       */
+      async function decide(orderId, action) {
+        busy.add(orderId);
+        try {
+          const { refund } = await api(`/api/staff/orders/${orderId}/${action}`, { method: "PATCH" });
+          if (refund?.reason) showError(refund.reason);
+          await feed.refresh();
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          busy.delete(orderId);
+        }
       }
 
       async function move(orderId, status) {

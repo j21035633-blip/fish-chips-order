@@ -32,6 +32,37 @@ export interface PaymentSession {
   simulated: boolean;
 }
 
+/**
+ * A request to give the money back.
+ *
+ * `amountSen` is passed explicitly rather than read off the order, so the one
+ * place that decides "how much" is the caller and an adapter cannot quietly
+ * refund a different number from the one the staff member was shown.
+ */
+export interface RefundRequest {
+  order: Order;
+  amountSen: number;
+  /** Stable per order, so a retried approval cannot refund twice. */
+  idempotencyKey: string;
+}
+
+export interface RefundResult {
+  provider: PaymentProvider;
+  /** The provider's own id for the refund. */
+  providerRefundId: string;
+  amountSen: number;
+  /** True when no credentials were configured and this was faked locally. */
+  simulated: boolean;
+  /**
+   * Whether the money has actually gone back, as opposed to being queued.
+   *
+   * Accepting a refund is not the same as settling one — Stripe answers
+   * `pending` on some rails — and the difference decides whether the order
+   * leaves the day's takings. Only `true` may.
+   */
+  confirmed: boolean;
+}
+
 export type PaymentEventType = "payment_succeeded" | "payment_failed" | "payment_expired" | "ignored";
 
 export interface PaymentEvent {
@@ -44,6 +75,8 @@ export interface PaymentEvent {
   orderId?: string;
   amountSen?: number;
   currency?: string;
+  /** Stripe: the PaymentIntent a later refund has to be taken against. */
+  providerPaymentIntentId?: string;
   occurredAt: string;
 }
 
@@ -83,6 +116,17 @@ export interface PaymentAdapter {
    * order and whitespace, which breaks every signature scheme there is.
    */
   verifyAndParseWebhook(rawBody: string, headers: WebhookHeaders): WebhookVerification;
+
+  /**
+   * Gives the money back, where the rail supports it.
+   *
+   * **Optional on purpose.** An adapter that cannot refund says so by not
+   * implementing this, and the caller records the order as needing a refund by
+   * hand rather than pretending one happened. A silently missing refund is the
+   * worst outcome available here: the customer is told their order is cancelled
+   * while the shop keeps the money.
+   */
+  refund?(request: RefundRequest): Promise<RefundResult>;
 }
 
 export type WebhookHeaders = Record<string, string | string[] | undefined>;

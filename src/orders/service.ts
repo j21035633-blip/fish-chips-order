@@ -26,6 +26,9 @@ import {
   type Order,
   type OrderPayment,
   type PricedCart,
+  isCancellable,
+  cancellationPending,
+  type OrderRefund,
 } from "./types.js";
 
 export const MAX_CART_LINES = 40;
@@ -485,9 +488,20 @@ export class OrderService {
    * Idempotent. Providers retry webhooks, and a redelivery must not look like a
    * second payment — `changed: false` says we had already seen it.
    */
-  async markPaid(orderId: string, paidAt = new Date().toISOString()): Promise<MarkPaidResult> {
+  async markPaid(
+    orderId: string,
+    paidAt = new Date().toISOString(),
+    providerPaymentIntentId?: string,
+  ): Promise<MarkPaidResult> {
     const order = await this.get(orderId);
     if (order.paymentStatus === "paid") {
+      return { order, changed: false };
+    }
+    // A webhook that lands after the money has already gone back must not put
+    // it into the takings again. Stripe redelivers for days, and a refunded
+    // order quietly flipping to `paid` is the exact leak this status exists to
+    // close, reopened from the other end.
+    if (order.paymentStatus === "refunded") {
       return { order, changed: false };
     }
 
@@ -496,6 +510,13 @@ export class OrderService {
     if (order.payment) {
       order.payment.status = "paid";
       order.payment.paidAt = paidAt;
+      // Kept now because it is only ever offered now: a refund needs the
+      // PaymentIntent, and the webhook that says "paid" is the one thing that
+      // carries it. Asking Stripe again later works, but costs a round trip at
+      // the moment a staff member is standing there waiting.
+      if (providerPaymentIntentId !== undefined) {
+        order.payment.providerPaymentIntentId = providerPaymentIntentId;
+      }
     }
     await this.orders.save(order);
     return { order, changed: true };
@@ -528,8 +549,10 @@ export class OrderService {
 
   async markFailed(orderId: string, reason: string): Promise<MarkPaidResult> {
     const order = await this.get(orderId);
-    // A late failure for an order already paid is noise; never downgrade a paid order.
-    if (order.paymentStatus === "paid") {
+    // A late failure for an order already paid is noise; never downgrade a paid
+    // order — nor a refunded one, whose record of where the money went is worth
+    // more than a stale failure notice.
+    if (order.paymentStatus === "paid" || order.paymentStatus === "refunded") {
       return { order, changed: false };
     }
 
@@ -566,6 +589,130 @@ export class OrderService {
     order.updatedAt = new Date().toISOString();
     await this.orders.save(order);
     return { order, changed: true };
+  }
+
+  /**
+   * The customer asks for the order to be called off.
+   *
+   * A *request*. Nothing about the order changes except that a badge appears on
+   * the boards: only somebody at the pass can see whether the fryer is already
+   * halfway through it, so only they can answer. The customer is told plainly
+   * that they are waiting.
+   *
+   * Idempotent — asking twice is the same as asking once, because a customer
+   * tapping again because nothing has happened yet is not an error worth
+   * showing them.
+   */
+  async requestCancellation(orderId: string): Promise<Order> {
+    const order = await this.get(orderId);
+
+    if (order.kitchenStatus === "cancelled") {
+      throw new OrderValidationError("This order has already been cancelled.", "already_cancelled", {
+        orderId,
+        kitchenStatus: order.kitchenStatus,
+      });
+    }
+    if (!isCancellable(order)) {
+      // Past `cooking` the food exists. This is the refusal the whole endpoint
+      // is built around, and it names the status so the page can explain why.
+      throw new OrderValidationError(
+        order.kitchenStatus === "collected"
+          ? "This order has already been collected."
+          : "Your order is already being prepared and can no longer be cancelled here. Please speak to a member of staff.",
+        "cancellation_too_late",
+        { orderId, kitchenStatus: order.kitchenStatus },
+      );
+    }
+
+    if (cancellationPending(order)) return order;
+
+    order.cancellationRequested = true;
+    order.cancellationRequestedAt = new Date().toISOString();
+    // A fresh request clears the last refusal, or the page would go on showing
+    // "could not be cancelled" over a request nobody has looked at yet.
+    delete order.cancellationDeniedAt;
+    order.updatedAt = order.cancellationRequestedAt;
+    await this.orders.save(order);
+    return order;
+  }
+
+  /**
+   * Staff say no: the food is already happening.
+   *
+   * The order carries on exactly as it was — same status, same place in the
+   * queue, nothing rewound. Only the flag comes down, and a timestamp goes on
+   * so the customer's page can say what happened rather than silently losing
+   * the request it made.
+   */
+  async denyCancellation(orderId: string): Promise<Order> {
+    const order = await this.get(orderId);
+    if (!cancellationPending(order)) {
+      throw new OrderValidationError(
+        "There is no cancellation request on this order.",
+        "no_cancellation_request",
+        { orderId },
+      );
+    }
+
+    order.cancellationRequested = false;
+    order.cancellationDeniedAt = new Date().toISOString();
+    order.updatedAt = order.cancellationDeniedAt;
+    await this.orders.save(order);
+    return order;
+  }
+
+  /**
+   * The order a staff member is about to cancel, checked before any money moves.
+   *
+   * Split from `completeCancellation` because a refund sits between the two: the
+   * provider call must not be made against an order that is already cancelled,
+   * and the order must not be marked cancelled before the provider has answered.
+   */
+  async cancellationTarget(orderId: string): Promise<Order> {
+    const order = await this.get(orderId);
+    if (order.kitchenStatus === "cancelled") {
+      throw new OrderValidationError("This order has already been cancelled.", "already_cancelled", {
+        orderId,
+      });
+    }
+    if (!cancellationPending(order)) {
+      throw new OrderValidationError(
+        "There is no cancellation request on this order.",
+        "no_cancellation_request",
+        { orderId },
+      );
+    }
+    return order;
+  }
+
+  /**
+   * Writes the cancellation, and the receipt for whatever happened to the money.
+   *
+   * The food and the money are set together but decided separately: the order
+   * is always `cancelled`, and its payment becomes `refunded` **only** when the
+   * refund is confirmed. That one condition is the whole revenue fix — takings
+   * are `paymentStatus === "paid"` and nothing else, in both repositories, so a
+   * confirmed refund leaves the report by construction while a pending, failed
+   * or manual one stays in it, because the shop still has the money.
+   */
+  async completeCancellation(orderId: string, refund: OrderRefund): Promise<Order> {
+    const order = await this.get(orderId);
+
+    order.kitchenStatus = "cancelled";
+    // Down, not left true: the badge on the boards means "waiting on a
+    // decision", and this *is* the decision.
+    order.cancellationRequested = false;
+    order.cancelledAt = new Date().toISOString();
+    order.refund = refund;
+
+    if (refund.outcome === "refunded" && order.paymentStatus === "paid") {
+      order.paymentStatus = "refunded";
+      if (order.payment) order.payment.status = "refunded";
+    }
+
+    order.updatedAt = order.cancelledAt;
+    await this.orders.save(order);
+    return order;
   }
 
   /** Today's orders, newest first — what the staff board shows. */

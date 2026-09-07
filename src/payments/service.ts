@@ -6,6 +6,7 @@ import {
   OrderValidationError,
   type Order,
   type OrderPayment,
+  type OrderRefund,
   type PaymentMethod,
   type PaymentProvider,
 } from "../orders/types.js";
@@ -171,7 +172,13 @@ export class PaymentService {
     this.seenEvents.add(event.eventId);
 
     if (event.type === "payment_succeeded") {
-      const result = await this.orders.markPaid(order.id, event.occurredAt);
+      // The intent rides along because this is the only message that carries
+      // it, and a refund later cannot be taken without it.
+      const result = await this.orders.markPaid(
+        order.id,
+        event.occurredAt,
+        event.providerPaymentIntentId,
+      );
       return { handled: true, event, order: result.order, changed: result.changed };
     }
 
@@ -208,6 +215,119 @@ export class PaymentService {
     }
 
     return (await this.orders.markPaid(order.id)).order;
+  }
+
+  /**
+   * Staff approve a cancellation: the order is called off and the money goes
+   * back.
+   *
+   * It lives here rather than on `OrderService` because it is the one
+   * cancellation step that has to talk to a provider, and this class is already
+   * the only thing in the app that does. The order of operations is the point:
+   *
+   *   1. check the order is really waiting to be cancelled — **before** any
+   *      money moves, so a double-tap cannot refund twice;
+   *   2. refund, and find out what happened;
+   *   3. write the cancellation *and* the receipt for the money together.
+   *
+   * A refund that fails does **not** abandon the cancellation. The staff member
+   * has already told the customer it is off, and an order left half-cancelled
+   * because Stripe had a bad minute is worse than one recorded as cancelled
+   * with "the refund failed, do it by hand" written on it in plain sight.
+   */
+  async approveCancellation(orderId: string): Promise<{ order: Order; refund: OrderRefund }> {
+    const target = await this.orders.cancellationTarget(orderId);
+    const refund = await this.refundFor(target);
+    const order = await this.orders.completeCancellation(orderId, refund);
+    return { order, refund };
+  }
+
+  /**
+   * What giving the money back means for this particular order.
+   *
+   * Four honest answers, and the one that matters most is `manual`: money was
+   * really taken, on a rail this cannot refund itself, and somebody has to do
+   * it by hand. Recording that loudly is the whole reason this returns a record
+   * rather than a boolean — the failure mode to design against is a customer
+   * told their order is cancelled while the shop quietly keeps the money.
+   */
+  private async refundFor(order: Order): Promise<OrderRefund> {
+    const at = new Date().toISOString();
+
+    if (order.paymentStatus !== "paid") {
+      return { outcome: "none", reason: "This order was never paid, so there is nothing to refund.", at };
+    }
+
+    if (order.paidInCash) {
+      return {
+        outcome: "none",
+        reason: "Paid in cash — hand the money back at the till.",
+        amountSen: order.totalSen,
+        amount: order.total,
+        at,
+      };
+    }
+
+    const provider = order.payment?.provider;
+    const adapter = provider ? this.byProvider.get(provider) : undefined;
+
+    if (!adapter?.refund) {
+      return {
+        outcome: "manual",
+        reason: provider
+          ? `Paid by ${adapter?.displayName ?? provider}, which has to be refunded by hand in the provider's dashboard.`
+          : "Marked paid with no payment record — refund this one by hand.",
+        amountSen: order.totalSen,
+        amount: order.total,
+        ...(provider ? { provider } : {}),
+        at,
+      };
+    }
+
+    try {
+      const result = await adapter.refund({
+        order,
+        // The full amount, always: this is a cancellation, not a partial credit.
+        amountSen: order.totalSen,
+        // Stable per order, so a second Approve cannot send the money twice.
+        idempotencyKey: `refund_${order.id}`,
+      });
+
+      // Accepted is not settled. A refund the provider has queued but not put
+      // through is money the shop still holds, so it stays `paid` and stays in
+      // the day's takings until it is confirmed — under-reporting real revenue
+      // is its own kind of wrong.
+      const outcome = result.confirmed ? "refunded" : "pending";
+
+      return {
+        outcome,
+        reason: !result.confirmed
+          ? `Refund of ${order.total} accepted by the provider but not settled yet — check it has gone through.`
+          : result.simulated
+            ? `Simulated refund of ${order.total} — no provider credentials are configured.`
+            : `${order.total} refunded to the card it was paid with.`,
+        amountSen: result.amountSen,
+        amount: order.total,
+        provider: result.provider,
+        providerRefundId: result.providerRefundId,
+        simulated: result.simulated,
+        at,
+      };
+    } catch (error) {
+      // Deliberately swallowed into a record rather than thrown: see the note
+      // on `approveCancellation`. The order still gets cancelled, and this is
+      // what tells somebody the money did not follow it.
+      return {
+        outcome: "failed",
+        reason: `The refund failed and has to be done by hand: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        amountSen: order.totalSen,
+        amount: order.total,
+        ...(provider ? { provider } : {}),
+        at,
+      };
+    }
   }
 
   private async findOrder(event: PaymentEvent): Promise<Order | undefined> {

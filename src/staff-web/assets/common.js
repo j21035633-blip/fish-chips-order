@@ -230,6 +230,42 @@ export function orderLabel(order) {
   return { text: "Counter / takeaway", takeaway: true };
 }
 
+/**
+ * The Approve / Deny pair that appears on a ticket the customer wants cancelled.
+ *
+ * Shared by both boards rather than written twice: the two views show the same
+ * orders to the same people, and a decision that exists on one screen and not
+ * the other is how an order sits flagged all through service because whoever
+ * was looking happened to be on the wrong page.
+ *
+ * `decide(action)` does the call and the refresh; this only draws.
+ */
+export function cancelActions(order, decide, busy = false) {
+  return el("div", { class: "cancel-actions" }, [
+    el("button", {
+      class: "deny-cancel",
+      type: "button",
+      text: "Keep cooking",
+      disabled: busy,
+      onclick: () => decide("deny-cancel"),
+    }),
+    el("button", {
+      class: "approve-cancel",
+      type: "button",
+      // Named for what it does to the money, not for the word "approve": the
+      // person tapping it during service needs to know a refund follows.
+      text: order.paymentStatus === "paid" ? "Cancel & refund" : "Cancel order",
+      disabled: busy,
+      onclick: () => decide("approve-cancel"),
+    }),
+  ]);
+}
+
+/** The badge a flagged ticket wears. Loud, because the kitchen has to see it. */
+export function cancelFlag() {
+  return el("span", { class: "cancel-flag", text: "Cancellation requested" });
+}
+
 /** The badge that marks a ticket as not going to a table. */
 export function takeawayTag() {
   return el("span", { class: "tag takeaway-tag", text: "Takeaway" });

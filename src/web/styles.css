@@ -548,6 +548,7 @@ body.cart-open { overflow: hidden; }
 .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .status.pending { background: color-mix(in srgb, var(--batter) 16%, transparent); color: color-mix(in srgb, var(--batter) 75%, var(--ink)); }
 .status.paid { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.status.refunded { background: #efe7f7; color: #5b3d86; }
 .status.failed, .status.expired { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
 
 .reference { font-size: 30px; font-weight: 700; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
@@ -1036,3 +1037,53 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
   min-height: 44px;
 }
 .fish-sheet .sheet-head .icon-button { min-width: 44px; min-height: 44px; font-size: 20px; }
+
+/* ------------------------------------------------------------ cancelling */
+/*
+ * The kitchen panel on the order page, and the three states a cancellation can
+ * leave it in. They are deliberately different shapes, not three shades of the
+ * same box: "waiting on staff" is not "cancelled", and "we could not cancel it"
+ * has to read as the order carrying on rather than as something going wrong.
+ */
+.kitchen-status {
+  display: inline-block;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+.kitchen-status.cooking { background: #ffe6b8; color: #5c3d05; }
+.kitchen-status.ready { background: #cdeedd; color: #12492f; }
+.kitchen-status.cancelled { background: #f6d7d3; color: #7a241b; }
+
+.cancel-order { margin-top: 14px; }
+
+/* Waiting on a person. Warm rather than alarming — nothing has gone wrong. */
+.pending-panel { border-left: 4px solid var(--batter); }
+.pending-panel h2 { margin-bottom: 4px; }
+
+.cancelled-panel { border-left: 4px solid var(--danger); }
+.refund-note { margin: 8px 0 0; font-weight: 650; }
+
+/*
+ * The refusal. A note, not an error: the order is fine and still coming, and
+ * styling this red would tell the customer something has broken when the only
+ * thing that happened is that the fryer got there first.
+ */
+.denied-note {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff4e0;
+  color: #5c3d05;
+  font-size: 15px;
+}
+@media (prefers-color-scheme: dark) {
+  .kitchen-status.cooking { background: #4a3a12; color: #ffd98a; }
+  .kitchen-status.ready { background: #16412f; color: #a8e6c6; }
+  .kitchen-status.cancelled { background: #4a221d; color: #ffb3a7; }
+  .denied-note { background: #3a2f16; color: #ffd98a; }
+}

@@ -126,6 +126,8 @@ main { padding: 18px 20px 60px; }
 .tag { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }
 .tag.paid { background: var(--sea-wash); color: var(--sea); }
 .tag.pending { background: #fdf1dd; color: var(--amber); }
+/* Money that has gone back. Distinct from paid, and from an unpaid order. */
+.tag.refunded { background: #efe7f7; color: #5b3d86; }
 .tag.failed, .tag.expired { background: #fbe6e4; color: var(--danger); }
 
 button { font: inherit; border-radius: 8px; cursor: pointer; }
@@ -610,3 +612,42 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 .proof-actions { display: flex; gap: 8px; padding: 12px 14px 14px; }
 .proof-actions .advance { flex: 1; padding: 11px 14px; }
 .proof-actions .undo { padding: 11px 14px; }
+
+/* --------------------------------------------------------- cancellations */
+/*
+ * The badge that says a customer wants out.
+ *
+ * Loud on purpose, and on the ticket rather than in a list somewhere: the
+ * kitchen has to see it before they start frying, and the boards are the only
+ * thing anybody is looking at during service.
+ */
+.cancel-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+.ticket.wants-cancel,
+.card.wants-cancel {
+  outline: 2px solid var(--danger);
+  outline-offset: -2px;
+}
+.cancel-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+.cancel-actions button { flex: 1; min-height: 44px; font-weight: 750; }
+/* Approve is the one that moves money, so it is the one that looks serious. */
+.approve-cancel { background: var(--danger); color: #fff; border: 0; border-radius: 10px; font: inherit; cursor: pointer; }
+.deny-cancel { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; font: inherit; cursor: pointer; }
+.cancel-actions button:disabled { opacity: 0.55; cursor: default; }
+.cancel-note { margin-top: 8px; font-size: 13px; color: var(--ink-soft); }

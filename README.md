@@ -555,6 +555,37 @@ not. That was the existing choice for table orders and is deliberately unchanged
 Both boards badge anything not going to a table, and the sales report splits its takings into
 dine-in and takeaway.
 
+## Cancelling an order
+
+The customer asks; staff decide. Only the person at the pass can see whether the fish is already in
+the fryer, so **"Cancel order" raises a flag rather than cancelling anything** — the page says
+"Cancellation requested — waiting for the shop", and the outcome arrives on its own poll.
+
+The button is only drawn while the order is **received** or **cooking**. From **ready** onward it is
+gone, and the endpoint refuses with `cancellation_too_late`.
+
+```
+POST  /api/order/{id}/request-cancel          # customer
+PATCH /api/staff/orders/{id}/approve-cancel   # cancel + refund
+PATCH /api/staff/orders/{id}/deny-cancel      # order carries on untouched
+```
+
+Both boards show a red **Cancellation requested** badge and an outlined ticket, with **Keep cooking**
+and **Cancel & refund** underneath the ordinary action. Approving refunds a Stripe-paid order in
+full; cash and unpaid orders are cancelled with no provider call, and an e-wallet order is recorded
+as needing a refund **by hand** rather than quietly keeping the money. A refund that fails still
+cancels the order and says so on it.
+
+`cancelled` is a kitchen status but deliberately not part of the pass, so the ordinary status
+endpoint cannot reach it — that route has no refund, and cancelling through it would keep the money.
+
+**Refunded money leaves the day's takings.** `refunded` is a *payment* status, so a
+cancelled-and-refunded order is `cancelled` food and `refunded` money — and since revenue is
+`paymentStatus === "paid"` in one place, it drops out of the report with no reporting rule to
+maintain. It only drops out once Stripe **confirms** the refund settled: a refund that is queued,
+refused, or on a rail we cannot refund automatically leaves the order counting, because the shop
+still holds that money. A late webhook cannot put a refunded order back into the takings either.
+
 ## The fishing game
 
 A customer earns a **chance** four ways, each once per session — the session being their cart:
