@@ -43,6 +43,10 @@ export const updateQuantityInput = cartLineRefInput.extend({
 export const confirmOrderInput = z.object({
   cartId: z.string().min(1),
   customerName: z.string().min(1).max(60).optional().describe("Name to call out at pickup."),
+  payAtCounter: z
+    .boolean()
+    .optional()
+    .describe("Customer will settle with staff before leaving; no gateway is opened."),
 });
 
 export const startPaymentInput = z.object({

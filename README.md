@@ -566,6 +566,28 @@ not. That was the existing choice for table orders and is deliberately unchanged
 Both boards badge anything not going to a table, and the sales report splits its takings into
 dine-in and takeaway.
 
+## Pay at counter
+
+A third option at checkout, for dine-in: **Pay at counter — settle the bill with staff before you
+leave.** Choosing it changes the button from *Pay RM18.59* to *Place order*, and submits without
+opening any payment flow.
+
+The ticket goes to the kitchen straight away, because nothing is waiting on a gateway. The money
+does not count until somebody takes it: the order sits at `unpaid_counter`, and revenue is
+`paid` and nothing else, so an unsettled order is simply not in the takings.
+
+Both staff boards show an amber **Unpaid** tag and a **Take RM…** row:
+
+- **Cash** — done on the tap. No gateway, no webhook, the till is the record.
+- **Card** / **E-wallet** — opens a real session and hands back a link or QR to show the customer.
+  The order stays unpaid until the provider's webhook confirms it, exactly as for a customer paying
+  on their own phone.
+
+An order that has had a QR put in front of it goes on reading Unpaid until it is actually paid —
+otherwise it would look like money already on its way while it was still sitting uncollected. Cash
+is not available on one of those, because notes on top of a QR that may have just gone through is a
+double charge; that one is a cancellation, not a second settlement.
+
 ## Cancelling an order
 
 The customer asks; staff decide. Only the person at the pass can see whether the fish is already in
@@ -656,14 +678,20 @@ plays the odds the game has always had.
 
 | Tier | Weight at score 0 | Weight at score 100 | Reward |
 | --- | --- | --- | --- |
-| small_fry | 55% | 21% | RM2 off |
-| uncommon | 25% | 29% | 10% off the subtotal |
-| rare | 15% | 35% | a free drink, as a real RM0 line |
-| jackpot | 5% | 15% | RM10 off |
+| small_fry | 55% | 35% | RM2 off |
+| uncommon | 25% | 27% | 10% off the subtotal |
+| rare | 15% | 27% | a free drink, as a real RM0 line |
+| jackpot | 5% | 11% | RM10 off |
 
-Reeling well roughly triples the jackpot; a perfect reel still lands a small fry one time in five.
-Every adjusted weight stays positive, so the guarantee is arithmetic rather than aspirational —
-skill is a tilt, never a ladder.
+Reeling well roughly doubles the jackpot; a perfect reel still lands a small fry more than a third of
+the time. Every adjusted weight stays positive, so the guarantee is arithmetic rather than
+aspirational — skill is a tilt, never a ladder.
+
+**The odds and the reel are one setting in two files.** Making the reel kind enough for a child
+pushed the giveaway from RM3.49 a play to RM3.92 without changing a single odd, because scores went
+up and the score tilts the roll; the biases were then scaled back by about a third to put the bill
+where it was. `tests/rewardBalance.test.ts` measures the two together — real reel, real table, a
+written-down mix of how people play — and fails if either drifts.
 
 Every tier is a real reward — there is no miss. Discounts come off **before tax**, clamped so two
 rewards cannot take an order below zero; a free item is a real line that prices at zero and still

@@ -668,22 +668,64 @@ itemAddButton.addEventListener("click", async () => {
  * The radio list of payment methods, shared by checkout and the order page's
  * recovery panel so both submit the same `method` value.
  */
-function methodPicker(methods) {
-  return el(
+/**
+ * Paying staff on the way out, as a third choice beside the two gateways.
+ *
+ * `counter` is not a `PaymentMethod` and never becomes one — see the note on
+ * `Order.paidInCash`. It is a choice made *here*, on the picker, and the only
+ * thing it changes server-side is that no gateway is opened.
+ */
+const COUNTER_METHOD = "counter";
+
+/**
+   * `counter` is offered at **checkout only**.
+   *
+   * The other caller is the recovery panel on an order that was placed but
+   * never paid. That order already exists as a gateway order, and its button
+   * goes straight to `startPayment` — a counter option there would be a radio
+   * that 400s. Settling one of those is a conversation at the counter, not a
+   * button on the customer's phone.
+   */
+function methodPicker(methods, onChange, includeCounter = false) {
+  const picker = el(
     "div",
     { class: "methods" },
-    methods.map((option, index) =>
-      el("label", { class: "method" }, [
-        el("input", { type: "radio", name: "method", value: option.method, checked: index === 0 }),
-        el("div", {}, [
-          el("div", { class: "method-label", text: option.label }),
-          el("div", { class: "method-desc", text: option.description }),
-          el("div", { class: "method-brands", text: option.brands.join(" · ") }),
-          option.simulated ? el("div", { class: "method-sim", text: "Test mode" }) : null,
+    [
+      ...methods.map((option, index) =>
+        el("label", { class: "method" }, [
+          el("input", { type: "radio", name: "method", value: option.method, checked: index === 0 }),
+          el("div", {}, [
+            el("div", { class: "method-label", text: option.label }),
+            el("div", { class: "method-desc", text: option.description }),
+            el("div", { class: "method-brands", text: option.brands.join(" · ") }),
+            option.simulated ? el("div", { class: "method-sim", text: "Test mode" }) : null,
+          ]),
         ]),
-      ]),
-    ),
+      ),
+      includeCounter
+        ? el("label", { class: "method" }, [
+            el("input", { type: "radio", name: "method", value: COUNTER_METHOD }),
+            el("div", {}, [
+              el("div", { class: "method-label", text: "Pay at counter" }),
+              // The one line that has to be unambiguous: nothing is being taken
+              // now, and they cannot simply walk out.
+              el("div", { class: "method-desc", text: "Settle the bill with staff before you leave" }),
+              el("div", { class: "method-brands", text: "Cash, card or e-wallet at the counter" }),
+            ]),
+          ])
+        : null,
+    ].filter(Boolean),
   );
+
+  // The button says what it is about to do, and for this option that is not
+  // "pay" — nothing is charged until somebody is standing at the counter.
+  if (onChange) picker.addEventListener("change", onChange);
+  return picker;
+}
+
+/** True when the customer has chosen to settle with staff rather than now. */
+function payingAtCounter() {
+  return view.querySelector('input[name="method"]:checked')?.value === COUNTER_METHOD;
 }
 
 /** Starts a payment attempt for an order and returns what the adapter recorded. */
@@ -716,6 +758,11 @@ async function renderCheckoutView() {
     onClick: () => pay(errorEl, payButton),
   });
 
+  /** Keeps the button honest about what the next tap does. */
+  const syncButton = () => {
+    payButton.textContent = payingAtCounter() ? "Place order" : `Pay ${cart.total}`;
+  };
+
   mount(view,
     el("h1", { style: "font-size:22px;margin-bottom:16px", text: "Checkout" }),
 
@@ -745,7 +792,7 @@ async function renderCheckoutView() {
       ]),
 
       el("h2", { text: "How would you like to pay?" }),
-      methodPicker(methods),
+      methodPicker(methods, syncButton, true),
     ]),
 
     payButton,
@@ -757,9 +804,11 @@ async function renderCheckoutView() {
 async function pay(errorEl, payButton) {
   errorEl.hidden = true;
   payButton.disabled = true;
-  payButton.textContent = "Starting payment…";
 
   const method = view.querySelector('input[name="method"]:checked')?.value;
+  const atCounter = method === COUNTER_METHOD;
+  payButton.textContent = atCounter ? "Placing order…" : "Starting payment…";
+
   const customerName = view.querySelector("#customer-name")?.value.trim();
 
   try {
@@ -769,7 +818,13 @@ async function pay(errorEl, payButton) {
     if (!state.pendingOrder) {
       const { order } = await api("/api/orders", {
         method: "POST",
-        body: JSON.stringify({ cartId: state.cart.cartId, ...(customerName ? { customerName } : {}) }),
+        body: JSON.stringify({
+          cartId: state.cart.cartId,
+          ...(customerName ? { customerName } : {}),
+          // The whole of what this choice does server-side: no gateway is
+          // opened, and the order lands owing money at the counter.
+          ...(atCounter ? { payAtCounter: true } : {}),
+        }),
       });
       state.pendingOrder = order;
 
@@ -780,6 +835,14 @@ async function pay(errorEl, payButton) {
     }
 
     const order = state.pendingOrder;
+
+    // Nothing to start: the money happens at the counter, so the customer goes
+    // straight to their order and the kitchen already has the ticket.
+    if (atCounter) {
+      state.pendingOrder = null;
+      navigate(`/order/${order.id}`);
+      return;
+    }
 
     const payment = await startPayment(order.id, method);
 
@@ -1113,6 +1176,7 @@ function statusLabel(status) {
     failed: "Payment failed",
     expired: "Payment expired",
     refunded: "Refunded",
+    unpaid_counter: "Pay at the counter",
   }[status] ?? status;
 }
 

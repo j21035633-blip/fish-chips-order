@@ -730,3 +730,29 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 @media print {
   .qr-kind { border: 1px solid #000; background: transparent !important; color: #000 !important; }
 }
+
+/* An order placed but not yet settled at the counter. */
+.tag.unpaid-counter { background: #fdf1dd; color: var(--amber); font-weight: 800; }
+.settle-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+.settle-ask { flex: 1; font-weight: 750; font-size: 14px; min-width: 90px; }
+.settle-cash,
+.settle-gateway {
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+/* Cash finishes on the tap; the other two only open a session. */
+.settle-cash { border: 0; background: var(--sea); color: #fff; }
+.settle-gateway { border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.settle-cash:disabled, .settle-gateway:disabled { opacity: 0.5; cursor: default; }

@@ -239,6 +239,45 @@ export class PaymentService {
     return this.cancelAndRefund(await this.orders.cancellationTarget(orderId));
   }
 
+/**
+   * Settle an order the customer chose to pay for at the counter.
+   *
+   * Three ways, and they are not variations on one thing:
+   *
+   * - **cash** is over and done with. There is no provider to ask and no
+   *   webhook coming, so `takeCash` marks it paid on the spot — the money is
+   *   in the till and the till is the record.
+   * - **card** and **ewallet** open a real gateway session for the order total
+   *   and hand back a link or a QR for the staff member to turn round to the
+   *   customer. It is **not** paid at that point, and deliberately: the money
+   *   only counts when the provider's webhook says so, which is the same rule
+   *   every other card order in this system follows. A staff member watching a
+   *   customer tap a phone is not proof of payment.
+   *
+   * The eligibility check comes first, so an order that is already paid, or one
+   * with a gateway of its own mid-flight, cannot be settled twice.
+   */
+  async settleAtCounter(
+    orderId: string,
+    method: "cash" | PaymentMethod,
+  ): Promise<{ order: Order; settled: boolean }> {
+    await this.orders.counterSettlementTarget(orderId);
+
+    if (method === "cash") {
+      return { order: await this.orders.takeCash(orderId), settled: true };
+    }
+
+    // The customer's own path, reused whole: same adapters, same idempotency,
+    // same webhook. Nothing about how this order gets paid differs from one
+    // paid on a phone at the table — only who is holding the phone.
+    await this.initiate(orderId, method);
+    // ...but it goes on owing until the webhook says otherwise. `initiate`
+    // leaves an order `pending`, which would take the Unpaid badge off the
+    // boards and make it look, to everyone on shift, like money already on its
+    // way — while it was still sitting uncollected.
+    return { order: await this.orders.keepOwingAtCounter(orderId), settled: false };
+  }
+
   /**
    * A staff member cancels an order themselves, without being asked.
    *

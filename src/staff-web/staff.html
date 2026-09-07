@@ -33,7 +33,10 @@
         cancelActions,
         cancelFlag,
         el,
+        owesAtCounter,
+        settleActions,
         staffCancel,
+        unpaidTag,
         errorBanner,
         orderFeed,
         orderLabel,
@@ -147,7 +150,9 @@
           ),
           el("div", { class: "foot" }, [
             el("span", { class: "total", text: order.total }),
-            el("span", { class: `tag ${order.paymentStatus}`, text: paid ? "Paid" : order.paymentStatus }),
+            owesAtCounter(order)
+              ? unpaidTag()
+              : el("span", { class: `tag ${order.paymentStatus}`, text: paid ? "Paid" : order.paymentStatus }),
             previous
               ? el("button", {
                   class: "undo",
@@ -175,7 +180,41 @@
           // Under the foot, so the decision is separated from the ordinary
           // "move it along" buttons it must never be mistaken for.
           wantsCancel ? cancelActions(order, (action) => decide(order.id, action), busy.has(order.id)) : null,
+          // Last, because taking money is the ordinary case and cancelling is
+          // the exception — and the two must never sit next to each other.
+          owesAtCounter(order)
+            ? settleActions(order, (how) => settle(order.id, how), busy.has(order.id))
+            : null,
         ]);
+      }
+
+      /**
+       * Take the money for an order the customer left owing at the counter.
+       *
+       * Cash comes back settled. Card and e-wallet come back with a link or a
+       * QR to turn round to the customer, and the order stays unpaid until the
+       * provider's webhook says otherwise — so what is shown says which of the
+       * two just happened, rather than claiming the money is in.
+       */
+      async function settle(orderId, method) {
+        busy.add(orderId);
+        try {
+          const { settled, payment } = await api(`/api/staff/orders/${orderId}/settle`, {
+            method: 'PATCH',
+            body: JSON.stringify({ method }),
+          });
+          if (!settled) {
+            const where = payment?.checkoutUrl ?? payment?.qrCodeUrl;
+            showError(where
+              ? `Show the customer: ${where} — the order stays unpaid until they pay.`
+              : 'Payment started. The order stays unpaid until it confirms.');
+          }
+          await feed.refresh();
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          busy.delete(orderId);
+        }
       }
 
       /**

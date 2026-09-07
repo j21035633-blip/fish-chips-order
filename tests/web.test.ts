@@ -183,11 +183,13 @@ describe("customer page", async () => {
     expect(view.textContent).toContain("Checkout");
     expect(view.textContent).toContain("How would you like to pay?");
 
+    // Two gateways, plus settling with staff on the way out.
     const methods = view.querySelectorAll(".method");
-    expect(methods).toHaveLength(2);
+    expect(methods).toHaveLength(3);
     expect(view.textContent).toContain("Card");
     expect(view.textContent).toContain("E-wallet / QR");
     expect(view.textContent).toContain("Touch 'n Go");
+    expect(view.textContent).toContain("Pay at counter");
 
     // Card is preselected so the customer can pay without choosing.
     const checked = view.querySelector('input[name="method"]:checked') as HTMLInputElement;
@@ -230,9 +232,13 @@ describe("customer page", async () => {
     // Not "waiting to confirm" — there is nothing in flight to wait for.
     expect(view.textContent).not.toContain("Waiting for payment to confirm");
 
-    // The recovery panel is a full method picker, not a dead end.
+    // The recovery panel is a full method picker, not a dead end — but only of
+    // the two gateways. This order already exists as a gateway order, and its
+    // button goes straight to startPayment; settling it at the counter is a
+    // conversation with staff, not a radio on the customer's phone.
     expect(view.textContent).toContain("How would you like to pay?");
     expect(view.querySelectorAll(".method")).toHaveLength(2);
+    expect(view.textContent).not.toContain("Pay at counter");
     expect(view.textContent).toContain("Pay RM18.59");
   });
 

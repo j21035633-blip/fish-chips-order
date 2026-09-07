@@ -317,6 +317,15 @@ export interface ConfirmOrderInput {
    * paying by card — holds it off the pass until the payment settles.
    */
   takeaway?: { holdForPayment: boolean } | undefined;
+  /**
+   * The customer chose to settle with staff before leaving.
+   *
+   * Deliberately **not** a hold: nothing was charged, so there is nothing to
+   * wait for, and the ticket reaches the kitchen the moment it is placed — the
+   * same as any other QR order. The hold exists for card takeaways, where the
+   * customer is standing at the terminal with a card in their hand.
+   */
+  payAtCounter?: boolean | undefined;
 }
 
 export interface DailySales {
@@ -430,7 +439,10 @@ export class OrderService {
       subtotal: priced.subtotal,
       tax: priced.tax,
       total: priced.total,
-      paymentStatus: "pending",
+      // `pending` means a gateway is mid-flight. A counter order has no gateway
+      // and never will until somebody settles it, and the counter has to be
+      // able to tell those two apart to know whose money to go and collect.
+      paymentStatus: input.payAtCounter ? "unpaid_counter" : "pending",
       // The kitchen has the ticket the moment the order exists; whether to cook
       // it before it is paid is the counter's call, not this service's.
       kitchenStatus: "received",
@@ -546,6 +558,57 @@ export class OrderService {
     await this.orders.save(order);
     const { order: paid } = await this.markPaid(orderId);
     return paid;
+  }
+
+/**
+   * Keeps an order owing at the counter after a gateway session is opened on it.
+   *
+   * `initiate` moves an order to `pending`, which is right for a customer paying
+   * on their own phone and wrong here. A counter order that has had a QR put in
+   * front of it has still not been paid, and if it stopped saying so the Unpaid
+   * badge would come off the boards — and the order would look, to everyone on
+   * shift, like money that was already on its way — while it was still owed.
+   *
+   * The payment record stays attached, so the webhook still finds it and still
+   * settles it. Only the status is held back.
+   *
+   * Note this does **not** re-open cash: `takeCash` still refuses an order with
+   * a live card session, because taking notes on top of a QR that may already
+   * have gone through is a double charge. A customer who walks off mid-payment
+   * is a cancellation, not a second settlement.
+   */
+  async keepOwingAtCounter(orderId: string): Promise<Order> {
+    const order = await this.get(orderId);
+    if (order.paymentStatus !== "pending") return order;
+
+    order.paymentStatus = "unpaid_counter";
+    order.updatedAt = new Date().toISOString();
+    await this.orders.save(order);
+    return order;
+  }
+
+  /**
+   * The order a staff member is about to settle at the counter.
+   *
+   * Refuses anything that is not actually owed at the counter: an order already
+   * paid must not be charged twice, and a card order mid-flight with a gateway
+   * is somebody else's problem — settling that one here would take the money
+   * twice when its webhook lands.
+   */
+  async counterSettlementTarget(orderId: string): Promise<Order> {
+    const order = await this.get(orderId);
+
+    if (order.paymentStatus === "paid") {
+      throw new OrderValidationError("That order is already paid.", "already_paid", { orderId });
+    }
+    if (order.paymentStatus !== "unpaid_counter") {
+      throw new OrderValidationError(
+        "That order is not waiting to be paid at the counter.",
+        "not_a_counter_order",
+        { orderId, paymentStatus: order.paymentStatus },
+      );
+    }
+    return order;
   }
 
   async markFailed(orderId: string, reason: string): Promise<MarkPaidResult> {

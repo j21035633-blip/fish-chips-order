@@ -18,12 +18,26 @@ import type { Allergen } from "../menu/types.js";
  * `cancelled`, the money is `refunded` — which is also what makes the revenue
  * fix a one-word change rather than a new rule in the report.
  *
+ * `unpaid_counter` is a customer who chose to settle with staff before leaving:
+ * nothing has been charged, no provider was ever asked, and there is no webhook
+ * coming. It is distinct from `pending` precisely because `pending` means "a
+ * gateway is mid-flight" — the counter needs to tell the two apart to know
+ * which orders to go and collect money for.
+ *
  * **Only `paid` counts as revenue.** `paidBetween` is the single gate, in both
  * the in-memory repository and the Mongo one, so a status that is not `paid` is
  * out of the day's takings by construction rather than by a filter somebody has
- * to remember to add.
+ * to remember to add. That is what keeps an unsettled counter order out of the
+ * report until somebody actually takes the money.
  */
-export const PAYMENT_STATUSES = ["pending", "paid", "failed", "expired", "refunded"] as const;
+export const PAYMENT_STATUSES = [
+  "pending",
+  "paid",
+  "failed",
+  "expired",
+  "refunded",
+  "unpaid_counter",
+] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 
 /** Which rail the customer chose. `card` is Stripe; `ewallet` is Revenue Monster. */

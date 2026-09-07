@@ -86,6 +86,48 @@ poller cannot otherwise see), and re-polls on `visibilitychange`, `focus` and `o
 one that matters during service, because a browser stops timers on a locked screen and a tablet
 picked up ten minutes later would otherwise sit on stale orders.
 
+### Pay at counter
+
+A third choice on the checkout picker, beside the two gateways: **settle the bill with staff before
+you leave.** It is for dine-in QR orders, and it is the only path where the food goes out before the
+money comes in.
+
+```
+POST  /api/orders                        { cartId, payAtCounter: true }
+PATCH /api/staff/orders/{id}/settle      { method: "cash" | "card" | "ewallet" }
+```
+
+Two rules carry it, and they pull against each other:
+
+- **The ticket reaches the kitchen immediately.** Nothing is waiting on a gateway because there is no
+  gateway. `holdForPayment` is deliberately *not* set — that exists for a card takeaway where the
+  customer is standing at the terminal.
+- **The money reaches the report only when somebody takes it.** `paymentStatus` is
+  `unpaid_counter`, and revenue is `paid` and nothing else, so an unsettled order is out of the
+  takings by construction.
+
+`unpaid_counter` is distinct from `pending` on purpose: `pending` means a provider is mid-flight,
+and the counter has to tell the two apart to know whose money to go and collect.
+
+**Settling.** Cash goes through `takeCash` and is done on the tap — no provider, no webhook, the
+till is the record. Card and e-wallet open a real session through the customer's own `initiate` path
+and hand back a link or QR to turn round to the customer; the order is **not** paid at that point and
+only moves when the provider's webhook says so. A staff member watching somebody tap a phone is not
+proof of payment.
+
+> **The order goes on saying `unpaid_counter` after a session is opened.** `initiate` would leave it
+> `pending`, which takes the Unpaid badge off the boards and makes it look, to everyone on shift,
+> like money already on its way while it is still uncollected. `keepOwingAtCounter` holds the status
+> back; the payment record still attaches, so the webhook still finds and settles it.
+>
+> This does **not** re-open cash. `takeCash` still refuses an order with a live card session, because
+> notes in the till on top of a QR that may have gone through seconds ago is a double charge. A
+> customer who walks off mid-payment is a cancellation, not a second settlement.
+
+On both boards an unpaid order wears an amber **Unpaid** tag and carries a **Take RM…** row with
+Cash / Card / E-wallet. Cash is the filled button; the other two are outlined, because only one of
+the three finishes on the tap.
+
 ### Cancellation: the customer asks, staff answer
 
 A customer can ask for an order to be called off; **only staff can actually cancel one.** The reason
@@ -335,13 +377,26 @@ arithmetic rather than aspirational: no score empties the table at either end.
 
 | Tier | Weight (score 0) | `skillBias` | Weight (score 100) | Reward |
 | --- | --- | --- | --- | --- |
-| `small_fry` | 55% | ×0.4 | 21% | RM2 off |
-| `uncommon` | 25% | ×1.2 | 29% | 10% off the subtotal |
-| `rare` | 15% | ×2.4 | 35% | A free drink, added as a real RM0 line |
-| `jackpot` | 5% | ×3.0 | 15% | RM10 off |
+| `small_fry` | 55% | ×0.65 | 35% | RM2 off |
+| `uncommon` | 25% | ×1.10 | 27% | 10% off the subtotal |
+| `rare` | 15% | ×1.85 | 27% | A free drink, added as a real RM0 line |
+| `jackpot` | 5% | ×2.25 | 11% | RM10 off |
 
-So reeling well roughly triples the jackpot and more than doubles the rare, and a perfect reel still
-lands a small fry one time in five. Skill is a tilt, never a ladder.
+So reeling well roughly doubles the jackpot, and a perfect reel still lands a small fry more than a
+third of the time. Skill is a tilt, never a ladder.
+
+**`skillBias` and the reel are one setting in two files, and neither can be tuned alone.** The bias
+says what a score is worth; the reel says what scores people get; the shop's bill is the product.
+The biases above are *not* the original ones — they were scaled back by about a third when the reel
+was made kind enough for a child, because easier scores on the old curve were quietly giving away
+RM3.92 a play instead of RM3.49, with no odd having changed. `tests/rewardBalance.test.ts` drives
+the real reel over a written-down mix of ways people play, prices the result against the real table,
+and fails if the bill drifts.
+
+Worth knowing before tuning either: the rebalanced curve is deliberately shallow, so the **money is
+now nearly insensitive to the reel**. Measured, halving the safe band moves the bill by 13 sen and
+nearly doubling it by 4. That is why the balance test guards the mean score directly as well as the
+cost — the cost assertions catch an odds change, and the score guard is what catches a reel change.
 
 **Every tier is a real reward — there is no miss.** Someone who earned a cast by leaving a review
 should not be told they caught an old boot. The table lives in `src/game/rewards.ts`; retuning it is

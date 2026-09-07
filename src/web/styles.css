@@ -1093,3 +1093,6 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
 .game-intro p { margin: 0 0 10px; }
 .earn-ways { margin: 0 0 14px; padding-left: 20px; }
 .earn-ways li { margin-bottom: 6px; }
+
+/* Paying at the counter: an order that is placed but not settled. */
+.status.unpaid_counter { background: #fdf1dd; color: #8a5a00; }

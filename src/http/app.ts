@@ -446,6 +446,21 @@ export function createServer(app: Services = services) {
   });
 
   /**
+   * Take the money for an order the customer chose to pay at the counter.
+   *
+   * Cash comes back settled. Card and e-wallet come back with a link or a QR to
+   * show the customer, and **not** paid — that waits on the provider's webhook,
+   * exactly as it does for a customer paying on their own phone.
+   */
+  server.patch("/api/staff/orders/:orderId/settle", (req, res) => {
+    void runAsync(res, async () => {
+      const { method } = settleInput.parse(req.body ?? {});
+      const { order, settled } = await app.payments.settleAtCounter(req.params.orderId, method);
+      return { order, settled, payment: order.payment };
+    });
+  });
+
+  /**
    * Staff cancel an order themselves, without waiting to be asked.
    *
    * Same endpoint shape as the two decisions above and the same money behind
@@ -812,6 +827,14 @@ function renderStaffPage(file: string): string {
  * would cancel the order and quietly keep the payment.
  */
 const staffStatusInput = z.object({ status: z.enum(PASS_STATUSES) });
+
+/**
+ * `cash` sits alongside the two `PaymentMethod`s rather than inside them, for
+ * the reason spelled out on `Order.paidInCash`: adding cash to that union would
+ * put it in the *customer's* payment picker, which is the one place it must
+ * never appear.
+ */
+const settleInput = z.object({ method: z.enum(["cash", ...PAYMENT_METHODS]) });
 
 /**
  * Length-capped so a megabyte of "password" cannot be hashed on demand, and

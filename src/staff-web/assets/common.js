@@ -299,6 +299,46 @@ export function staffCancel({ armed, busy, onArm, onDismiss, onConfirm }) {
   ]);
 }
 
+/** True when this order is waiting for somebody to take money at the counter. */
+export function owesAtCounter(order) {
+  return order.paymentStatus === "unpaid_counter";
+}
+
+/**
+ * The badge on an order the customer will settle on the way out.
+ *
+ * Amber rather than red: nothing has gone wrong, and it is not urgent the way a
+ * cancellation request is. It is a note to whoever is on the till that this one
+ * has money still to collect.
+ */
+export function unpaidTag() {
+  return el("span", { class: "tag unpaid-counter", text: "Unpaid" });
+}
+
+/**
+ * The three ways to take that money.
+ *
+ * Cash is first and separate: it is the one that finishes on the tap, with no
+ * gateway and no waiting. The other two open a real session and hand back a
+ * link or a QR to turn round to the customer — and the order stays unpaid until
+ * the provider's webhook says otherwise, which is the same rule every card
+ * order in this system follows.
+ */
+export function settleActions(order, settle, busy = false) {
+  return el("div", { class: "settle-actions" }, [
+    el("span", { class: "settle-ask", text: `Take ${order.total}` }),
+    el("button", { class: "settle-cash", type: "button", text: "Cash", disabled: busy, onclick: () => settle("cash") }),
+    el("button", { class: "settle-gateway", type: "button", text: "Card", disabled: busy, onclick: () => settle("card") }),
+    el("button", {
+      class: "settle-gateway",
+      type: "button",
+      text: "E-wallet",
+      disabled: busy,
+      onclick: () => settle("ewallet"),
+    }),
+  ]);
+}
+
 /** The badge a flagged ticket wears. Loud, because the kitchen has to see it. */
 export function cancelFlag() {
   return el("span", { class: "cancel-flag", text: "Cancellation requested" });
