@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 import type { NextFunction, Request, Response } from "express";
 
@@ -34,12 +34,52 @@ export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const OPEN_PATHS = new Set(["/login", "/logout", "/session"]);
 
 export interface StaffSession {
+  /**
+   * This session's own id. The reason it exists: with nothing to name a single
+   * session by, logging out can only ask the browser to forget its cookie —
+   * the token itself stays valid until it expires, so anyone who copied it
+   * keeps the keys for the rest of the twelve hours. See `revokeSession`.
+   */
+  sid: string;
   /** Seconds since the epoch, as in a JWT — both are integers, so both compare cleanly. */
   iat: number;
   exp: number;
 }
 
-/** False when `STAFF_PASSWORD` is unset: the gate is off and everything below is open. */
+/**
+ * How the staff area is gated right now.
+ *
+ * - `password` — `STAFF_PASSWORD` is set. The normal case: sign in to get in.
+ * - `open`     — no password, and nothing about this deployment says public.
+ *                Local development stays runnable without a secret, loudly.
+ * - `locked`   — no password on a deployment that *is* public. The staff area
+ *                closes rather than opening: a variable someone forgot to set
+ *                must not be the difference between a gate and no gate on a
+ *                shop the whole internet can reach.
+ *
+ * The customer flow is untouched in all three. Only `/api/staff/*` and the
+ * staff pages read this.
+ */
+export type StaffGateMode = "password" | "open" | "locked";
+
+/**
+ * Does this look like a deployment strangers can reach?
+ *
+ * Two independent signals, either of which is enough, because the thing being
+ * guarded against is someone forgetting to set something: an https public URL
+ * (Railway hands one out) or an explicit production NODE_ENV. A plain
+ * `http://localhost` dev server matches neither and behaves as it always has.
+ */
+function deploymentIsPublic(): boolean {
+  return config.publicBaseUrl.startsWith("https://") || process.env.NODE_ENV === "production";
+}
+
+export function staffGateMode(): StaffGateMode {
+  if (config.staffPassword !== undefined) return "password";
+  return deploymentIsPublic() ? "locked" : "open";
+}
+
+/** False when `STAFF_PASSWORD` is unset: there is no password anyone can sign in with. */
 export function staffAuthEnabled(): boolean {
   return config.staffPassword !== undefined;
 }
@@ -81,6 +121,7 @@ function sign(payload: string): string {
 /** A fresh session token, valid from now. */
 export function issueSession(now = Date.now()): string {
   const session: StaffSession = {
+    sid: randomUUID(),
     iat: Math.floor(now / 1000),
     exp: Math.floor((now + SESSION_TTL_MS) / 1000),
   };
@@ -106,6 +147,12 @@ export function readSession(token: string | undefined, now = Date.now()): StaffS
   try {
     const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as StaffSession;
     if (typeof session?.exp !== "number" || session.exp * 1000 <= now) return undefined;
+    // No sid means a token minted before sessions could be revoked one at a
+    // time. There is no way to honour a logout against one, so it is not
+    // honoured at all: the cost is that the deploy adding this signs the
+    // kitchen out once.
+    if (typeof session.sid !== "string" || session.sid.length === 0) return undefined;
+    if (isRevoked(session.sid, now)) return undefined;
     return session;
   } catch {
     // A signature that verifies over a payload that is not JSON should not be
@@ -119,9 +166,73 @@ export function hasStaffSession(req: Request): boolean {
   return readSession(readCookie(req, STAFF_SESSION_COOKIE)) !== undefined;
 }
 
-/** Whether this request may see the staff area at all — true throughout when the gate is off. */
+/**
+ * Whether this request may see the staff area at all.
+ *
+ * `open` is the only mode that lets a request through without a session, and
+ * it is the one that cannot happen on a public deployment — see
+ * `staffGateMode`.
+ */
 export function staffAccessAllowed(req: Request): boolean {
-  return !staffAuthEnabled() || hasStaffSession(req);
+  const mode = staffGateMode();
+  if (mode === "open") return true;
+  if (mode === "locked") return false;
+  return hasStaffSession(req);
+}
+
+/**
+ * Revoked session ids, held until the moment they would have expired anyway.
+ *
+ * This is what makes logging out a server-side act rather than a request the
+ * browser is free to ignore. Clearing the cookie tells one browser to forget
+ * one copy of the token; it does nothing about a copy taken off a shared
+ * tablet, and nothing at all if the response never arrives. Naming the session
+ * here means the *server* stops accepting it, whoever presents it.
+ *
+ * In-memory and per-process, like the login throttle above and for the same
+ * reason: one shop, one process. A restart forgets its revocations, which is
+ * survivable because it also drops every in-flight session's usefulness far
+ * more cheaply than a database would — and the twelve-hour expiry is the
+ * backstop underneath either way.
+ */
+const revoked = new Map<string, number>();
+
+function isRevoked(sid: string, now: number): boolean {
+  const expiresAt = revoked.get(sid);
+  if (expiresAt === undefined) return false;
+  if (expiresAt <= now) {
+    // Past its own expiry the token is refused by the clock, so the entry has
+    // stopped earning its keep.
+    revoked.delete(sid);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Stops accepting this token, now, for every request that presents it.
+ *
+ * Takes the raw cookie rather than a parsed session so callers cannot revoke
+ * something they never verified: a token that does not check out is already
+ * refused, and adding attacker-supplied ids to this map is how it would grow
+ * without bound.
+ */
+export function revokeSession(token: string | undefined, now = Date.now()): boolean {
+  const session = readSession(token, now);
+  if (session === undefined) return false;
+
+  // Bounded by the number of real sign-ins in a twelve-hour window, as long as
+  // dead entries are swept: one shift's worth, not one scan's worth.
+  for (const [sid, expiresAt] of revoked) {
+    if (expiresAt <= now) revoked.delete(sid);
+  }
+  revoked.set(session.sid, session.exp * 1000);
+  return true;
+}
+
+/** Test seam, alongside `resetLoginThrottle`. Nothing in the app calls this. */
+export function resetRevokedSessions(): void {
+  revoked.clear();
 }
 
 /**

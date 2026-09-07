@@ -1,5 +1,6 @@
 import { services } from "../app/container.js";
 import { config } from "../config/env.js";
+import { staffGateMode } from "../staff/auth.js";
 import { createServer } from "./app.js";
 
 const RETRY_DELAY_MS = 5_000;
@@ -38,11 +39,21 @@ createServer(services).listen(config.port, () => {
   console.log(`fish-chips-order listening on ${config.publicBaseUrl} (storage: ${services.storage.kind})`);
 });
 
-if (config.staffPassword === undefined) {
+if (staffGateMode() === "open") {
   console.warn(
     `[staff] STAFF_PASSWORD is not set — the staff area at ${config.staffDashboardPath} is open to ` +
-      "anyone who finds the path, including the routes that edit the menu and accept uploads. Set it " +
-      "in the Railway dashboard. /health reports \"staffAuth\": \"disabled\" until you do.",
+      "anyone who reaches it, including the routes that edit the menu and accept uploads. This is " +
+      "allowed here because nothing about this deployment looks public; set the password before it " +
+      "is. /health reports \"staffAuth\": \"disabled\" until you do.",
+  );
+} else if (staffGateMode() === "locked") {
+  // Loud, and worth being loud about: the shop is up, the staff area is not,
+  // and one variable is the whole difference.
+  console.error(
+    `[staff] STAFF_PASSWORD is not set and this deployment is public — the staff area at ${config.staffDashboardPath} ` +
+      "is CLOSED to everyone, staff included, rather than open to everyone. Set STAFF_PASSWORD in the " +
+      "Railway dashboard to open it. The customer ordering flow is unaffected. /health reports " +
+      "\"staffAuth\": \"unconfigured\" until you do.",
   );
 }
 

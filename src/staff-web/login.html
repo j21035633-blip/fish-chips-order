@@ -60,12 +60,34 @@
         return staffBase() || "/";
       }
 
+      /**
+       * Puts the form beyond use and says why.
+       *
+       * For the one case the form cannot answer: the server has no password
+       * configured, so there is no value anyone could type that would work.
+       * Leaving a live field there would have someone trying the manager's
+       * password over and over against a door with no lock fitted.
+       */
+      function showUnconfigured() {
+        password.disabled = true;
+        submit.disabled = true;
+        showError(
+          "The staff area is closed because no password has been configured on the server. " +
+            "Set STAFF_PASSWORD and redeploy — until then nobody can sign in.",
+        );
+      }
+
       // Already signed in — a tablet that woke up on this page should not make
       // anyone type a password they have already typed.
       fetch("/api/staff/session")
         .then((response) => response.json())
         .then((session) => {
-          if (session.authenticated || session.authRequired === false) location.replace(destination());
+          if (session.authenticated || session.authRequired === false) {
+            location.replace(destination());
+            return;
+          }
+          // Sign-in required, but there is nothing to sign in with.
+          if (session.configured === false) showUnconfigured();
         })
         .catch(() => {
           // Offline or the server is down. The form still works; let them try.
@@ -96,12 +118,19 @@
             return;
           }
 
+          if (response.status === 503 && body.error === "staff_auth_unconfigured") {
+            showUnconfigured();
+            return;
+          }
+
           showError(body.message ?? `Sign in failed (${response.status})`);
           password.select();
         } catch (failure) {
           showError(failure.message ?? "Could not reach the server.");
         } finally {
-          submit.disabled = false;
+          // Not unconditionally: an unconfigured server disables both fields on
+          // purpose, and re-enabling here would hand back a form that cannot work.
+          if (!password.disabled) submit.disabled = false;
         }
       });
     </script>

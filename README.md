@@ -433,16 +433,28 @@ the password written on the wall anyway. The gate covers the four pages *and* ev
 route — including the ones that write the menu and accept uploads, which is the part path obscurity
 never protected.
 
-**`STAFF_PASSWORD` must be set in the Railway dashboard before any of this protects anything.**
-Unset, the gate is off and the staff area is as open as it was before — deliberate, so local
-development and the tests run without a secret, but it means a deploy that forgot the variable is
-unprotected. It says so out loud: the server warns at startup and `GET /health` reports
-`"staffAuth": "disabled"` until it is set.
+**`STAFF_PASSWORD` must be set in the Railway dashboard.** What an unset password means depends on
+whether the deployment looks public — an https `PUBLIC_BASE_URL`, or `NODE_ENV=production`:
+
+| `STAFF_PASSWORD` | Deployment | Staff area | `/health` |
+| --- | --- | --- | --- |
+| set | anywhere | sign in to get in | `"password"` |
+| unset | local `http://localhost` | **open**, with a startup warning | `"disabled"` |
+| unset | public | **closed** to everyone, staff included | `"unconfigured"` |
+
+The middle row is what keeps local development and the tests runnable without a secret. The bottom
+row is the one that matters: it used to be open too, which meant a deploy that forgot the variable
+served the whole staff area — menu writes and uploads included — to anyone who found the path. It
+now fails shut instead, and the login page says why rather than presenting a form no password can
+satisfy. **The customer ordering flow is unaffected in all three**, so a shop in the bottom row keeps
+taking orders while somebody sets the variable.
 
 A browser without a valid session is redirected to `{STAFF_DASHBOARD_PATH}/login?next=…` before the
 page is rendered — server-side, because a guard in the page's own script can only hide a document
-that has already been sent. An API call that 401s sends the page to the same screen, which is how a
-session expiring mid-service is handled. **Log out** sits in the header on every view.
+that has already been sent.
+
+An API call that 401s sends the page to the same screen, which is how a session expiring mid-service
+is handled. **Log out** sits in the header on every view.
 
 The session is a payload and an HMAC over it, in a `httpOnly` `SameSite=Lax` cookie, valid **12
 hours** — longer than the longest shift, short enough that a tablet left on overnight signs in again
@@ -452,6 +464,16 @@ wanting — nothing else to configure, and changing `STAFF_PASSWORD` invalidates
 under the old one, which is how you revoke access on the day someone leaves. A restart does not sign
 the kitchen out. Failed logins are throttled at 8 per 10 minutes per address; that is a speed bump
 against online guessing, not a defence against a password that has leaked.
+
+**Log out retires that session server-side**, and this is worth being precise about. Each token
+carries its own id, and `POST /api/staff/logout` adds that id to a revocation list the server keeps
+until the token would have expired anyway. Clearing the cookie alone would not have done it: that is
+a request to one browser, and the token it names stays valid for the rest of its twelve hours — so a
+copy read off a shared tablet, or a browser that never processed the response, stayed signed in
+through a logout the screen said had worked. Signing out at the till does not sign the kitchen board
+out; the list is per-session, not per-password. It lives in memory, like the login throttle and for
+the same reason (one shop, one process), and a restart forgets it — the twelve-hour expiry is the
+backstop underneath.
 
 Two things still hold, and neither was ever a substitute for the above:
 

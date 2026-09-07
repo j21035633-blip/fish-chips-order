@@ -102,6 +102,68 @@ describe("staff nav", () => {
       expect(header.lastElementChild, view).toBe(logout);
     }
   });
+
+  /**
+   * The client half of logging out.
+   *
+   * The server retires the session (see `tests/staffAuth.test.ts`), but only if
+   * it is asked to. A Log out that merely navigated to the login page would
+   * look identical on screen and leave the session live, so what is asserted
+   * here is the request — and that the navigation waits for it.
+   */
+  it("asks the server to end the session before it navigates", async () => {
+    mountAs("kitchen");
+    const { header } = nav.mountStaffChrome({ title: "Kitchen" });
+
+    const calls: [string, string | undefined][] = [];
+    let release = (): void => {};
+    const inFlight = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((url: string, options?: { method?: string }) => {
+      calls.push([String(url), options?.method]);
+      return inFlight.then(() => new Response("{}", { headers: { "content-type": "application/json" } }));
+    }) as typeof fetch;
+
+    const replaced: string[] = [];
+    const realLocation = window.location;
+    // jsdom refuses a real navigation, and Location.replace is read-only — so
+    // the whole object is swapped for the duration. The destination is the
+    // assertion either way.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        pathname: "/staff-a8f3k2m9/kitchen",
+        search: "",
+        replace: (url: string) => replaced.push(url),
+      },
+    });
+
+    try {
+      const button = header.querySelector(".logout") as HTMLButtonElement;
+      const clicked = button.click();
+      void clicked;
+
+      // The request is out, and nothing has navigated yet: a logout that
+      // redirected first would race the browser against its own session.
+      expect(calls).toEqual([["/api/staff/logout", "POST"]]);
+      expect(replaced).toEqual([]);
+      expect(button.disabled).toBe(true);
+
+      release();
+      await inFlight;
+      // One turn for the click handler's own continuation.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(replaced).toHaveLength(1);
+      expect(replaced[0]).toContain("/staff-a8f3k2m9/login");
+    } finally {
+      globalThis.fetch = realFetch;
+      Object.defineProperty(window, "location", { configurable: true, value: realLocation });
+    }
+  });
 });
 
 describe("staff page markup", () => {
@@ -249,5 +311,42 @@ describe("quick add on the pass", () => {
     expect(html).toContain("optionGroup(group, priceOptions)");
     // An item with no options must not open an empty sheet.
     expect(html).toContain("if (item.optionGroups.length === 0)");
+  });
+});
+
+/**
+ * The login screen's one job beyond taking a password: not lying about whether
+ * one will work. A server with no `STAFF_PASSWORD` configured refuses every
+ * attempt, so a live form there would have someone trying the manager's
+ * password against a door with no lock fitted.
+ */
+describe("login page", () => {
+  const html = readFileSync(resolve(staffDir, "login.html"), "utf8");
+
+  it("reads both halves of the session probe, not just whether auth is required", () => {
+    // authRequired answers "must I sign in?", configured answers "is there
+    // anything to sign in with?". They differ only on an unconfigured deploy.
+    expect(html).toContain("session.authRequired === false");
+    expect(html).toContain("session.configured === false");
+  });
+
+  it("puts the form beyond use when no password is configured", () => {
+    expect(html).toContain("function showUnconfigured()");
+    expect(html).toContain("password.disabled = true");
+    expect(html).toContain("STAFF_PASSWORD");
+    // Both the probe on load and a 503 from a submitted attempt reach it.
+    expect(html).toContain('body.error === "staff_auth_unconfigured"');
+  });
+
+  it("does not re-enable a form it has just disabled", () => {
+    // The submit handler's finally block runs after showUnconfigured, and an
+    // unconditional `submit.disabled = false` there would undo it.
+    expect(html).toContain("if (!password.disabled) submit.disabled = false;");
+  });
+
+  it("honours ?next= only for same-site paths", () => {
+    // The server sets it when it turns a page away, so it is attacker-reachable:
+    // an absolute URL here would make the sign-in screen an open redirect.
+    expect(html).toContain('next.startsWith("/") && !next.startsWith("//")');
   });
 });

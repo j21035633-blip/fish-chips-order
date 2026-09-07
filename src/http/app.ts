@@ -25,8 +25,11 @@ import {
   recordLoginFailure,
   requireStaffApi,
   requireStaffPage,
+  readCookie,
+  revokeSession,
   sessionCookieOptions,
   staffAuthEnabled,
+  staffGateMode,
   STAFF_SESSION_COOKIE,
   throttleKey,
 } from "../staff/auth.js";
@@ -90,10 +93,11 @@ export function createServer(app: Services = services) {
       phase: 2,
       storage: app.storage.kind,
       indexes: app.storage.indexes,
-      // Same reasoning as `storage`: a deploy that forgot STAFF_PASSWORD is
-      // serving an open staff area, and that should be visible without having
-      // to go and try the door.
-      staffAuth: staffAuthEnabled() ? "password" : "disabled",
+      // Same reasoning as `storage`: how the staff area is gated should be
+      // visible without having to go and try the door. "unconfigured" is a
+      // deploy that forgot STAFF_PASSWORD — the area is shut rather than open,
+      // and this is the line that says why nobody can sign in.
+      staffAuth: { password: "password", open: "disabled", locked: "unconfigured" }[staffGateMode()],
     });
   });
 
@@ -286,14 +290,35 @@ export function createServer(app: Services = services) {
    */
   server.use("/api/staff", requireStaffApi);
 
-  /** What the login page asks before deciding whether to show itself. */
+  /**
+   * What the login page asks before deciding whether to show itself.
+   *
+   * `authRequired` answers "must I sign in?" and `configured` answers "is there
+   * anything to sign in with?" — they come apart in exactly one case, the
+   * locked deploy, where the honest answer is yes and no. The page needs both
+   * to avoid presenting a form that cannot succeed.
+   */
   server.get("/api/staff/session", (req, res) => {
-    res.json({ authenticated: hasStaffSession(req), authRequired: staffAuthEnabled() });
+    res.json({
+      authenticated: hasStaffSession(req),
+      authRequired: staffGateMode() !== "open",
+      configured: staffAuthEnabled(),
+    });
   });
 
   server.post("/api/staff/login", (req, res) => {
     run(res, () => {
       if (!staffAuthEnabled()) {
+        if (staffGateMode() === "locked") {
+          // No password on a public deployment. There is no value to type that
+          // would work, so say that rather than rejecting every attempt as
+          // though the person at the tablet had got it wrong.
+          res.status(503).json({
+            error: "staff_auth_unconfigured",
+            message: "The staff area is closed because no password is configured. Set STAFF_PASSWORD and redeploy.",
+          });
+          return undefined;
+        }
         // Nothing to sign in to. Saying so beats a 401 the page cannot act on:
         // the caller is already through the door.
         res.json({ ok: true, authRequired: false });
@@ -327,11 +352,22 @@ export function createServer(app: Services = services) {
     });
   });
 
-  server.post("/api/staff/logout", (_req, res) => {
+  server.post("/api/staff/logout", (req, res) => {
+    // Two separate things, and only the first is a logout.
+    //
+    // Revoking retires the token itself: the server stops accepting it from
+    // anyone, so a copy taken off the tablet — or one still sitting in a
+    // browser that never processed the response — is dead the moment this
+    // returns. Clearing the cookie is the tidy-up that stops *this* browser
+    // sending a token it can no longer use.
+    const revoked = revokeSession(readCookie(req, STAFF_SESSION_COOKIE));
+
     // Cleared with the same options it was set with; a mismatched path would
     // leave the old cookie in place and log nobody out.
     res.clearCookie(STAFF_SESSION_COOKIE, sessionCookieOptions());
-    res.json({ ok: true });
+    // `revoked: false` is the ordinary "you were not signed in anyway" case,
+    // not a failure — logging out twice is allowed to be boring.
+    res.json({ ok: true, revoked });
   });
 
   // --------------------------------------------------------------- staff view
