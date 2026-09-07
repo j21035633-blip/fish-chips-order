@@ -1160,6 +1160,12 @@ async function renderSimulatedCheckout() {
 // ---------------------------------------------------------- QR table landing
 
 /**
+ * The parameter a Play QR carries. Mirrors `PLAY_VIEW` in `src/qr/tables.ts`,
+ * which is what mints the codes; there is a test holding the two together.
+ */
+const PLAY_VIEW = "fish";
+
+/**
  * Where a table's QR points: `/order?table=5`.
  *
  * A scan always opens a brand-new session. The previous customer's cart at this
@@ -1171,7 +1177,12 @@ async function renderSimulatedCheckout() {
  * here, which is exactly when a fresh cart is wanted.
  */
 async function renderTableLanding() {
-  const table = new URLSearchParams(location.search).get("table");
+  const params = new URLSearchParams(location.search);
+  const table = params.get("table");
+  // The Play QR is the Order QR with one parameter on it. Same table, same
+  // fresh cart, same chances — it only decides which screen is on top when the
+  // page finishes loading.
+  const wantsGame = params.get("view") === PLAY_VIEW;
 
   if (table) {
     try {
@@ -1191,6 +1202,60 @@ async function renderTableLanding() {
   // the customer already had.
   history.replaceState({}, "", "/");
   await renderMenuView();
+
+  // The menu is drawn either way, so the game opens *over* it and closing it
+  // leaves the customer somewhere useful rather than on a dead end.
+  if (wantsGame) await openGameLanding();
+}
+
+/**
+ * What a Play QR lands on.
+ *
+ * With a chance in hand it is simply the game. With none — which is the normal
+ * case for somebody who has just sat down — opening an empty game would be a
+ * screen with nothing to do on it, so this explains what the game is and how a
+ * chance is earned instead.
+ *
+ * The earning *actions* deliberately stay where they already live, in the cart
+ * sheet beside the order they attach to. Duplicating them here would mean two
+ * copies of the upload wiring, and the review and share buttons need a cart to
+ * hang a proof on anyway.
+ */
+async function openGameLanding() {
+  await refreshChances();
+
+  if ((state.chances?.chances ?? 0) > 0) {
+    fishing.open();
+    return;
+  }
+
+  const pending = state.chances?.chancesPending ?? 0;
+
+  mount(
+    view,
+    el("section", { class: "panel game-intro" }, [
+      el("h2", { text: "🎣 Catch your reward" }),
+      el("p", {
+        text: pending
+          ? "Your proof is with the staff. As soon as they approve it, your cast is ready."
+          : "Every cast wins something — money off, a free drink, or 10% off the whole order.",
+      }),
+      el("p", { class: "muted", text: "You just need a chance to play. There are four ways to earn one:" }),
+      el("ul", { class: "earn-ways" }, [
+        el("li", { text: "Spend RM50 on your order — added automatically" }),
+        el("li", { text: "Leave us a Google review" }),
+        el("li", { text: "Share a photo of your food" }),
+        el("li", { text: "Leave a phone number or email" }),
+      ]),
+      el("p", { class: "muted", text: "The last three are in your order, under “Earn a fishing chance”." }),
+      el("button", {
+        class: "primary wide",
+        type: "button",
+        text: "Start your order",
+        onClick: () => navigate("/"),
+      }),
+    ]),
+  );
 }
 
 // ------------------------------------------------------------------ router

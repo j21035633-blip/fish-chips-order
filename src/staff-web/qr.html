@@ -26,8 +26,10 @@
       </form>
 
       <p id="hint" class="empty">
-        Each code opens the menu for that table. Scanning always starts a fresh order, so the
-        previous diner's cart never carries over.
+        Two codes per table. <strong>Order</strong> opens the menu; <strong>Play</strong> opens the
+        fishing game — same table and same session, just a different first screen, so a Play code is
+        the one for a table tent advertising the game. Scanning either always starts a fresh order,
+        so the previous diner's cart never carries over.
       </p>
 
       <div id="codes" class="qr-sheet"></div>
@@ -49,9 +51,17 @@
       const sheet = document.getElementById("codes");
       const hint = document.getElementById("hint");
 
-      function card({ table, url, png }) {
-        return el("figure", { class: "qr-card" }, [
-          el("img", { src: png, alt: `QR code for table ${table}`, loading: "lazy" }),
+      /**
+       * One code, labelled.
+       *
+       * The label is the whole reason this is a separate function: two codes for
+       * the same table are indistinguishable to look at, and a Play code stuck
+       * on the wall where the Order code should be is a table that cannot order.
+       */
+      function code({ kind, table, url, png }) {
+        return el("figure", { class: `qr-card qr-${kind.toLowerCase()}` }, [
+          el("span", { class: "qr-kind", text: kind }),
+          el("img", { src: png, alt: `${kind} QR code for table ${table}`, loading: "lazy" }),
           el("figcaption", {}, [
             el("strong", { text: `Table ${table}` }),
             el("span", { class: "qr-url", text: url }),
@@ -61,9 +71,17 @@
           el("a", {
             class: "qr-download",
             href: png,
-            download: `table-${table}.png`,
+            download: `table-${table}-${kind.toLowerCase()}.png`,
             text: "Download PNG",
           }),
+        ]);
+      }
+
+      /** Both codes for one table, kept side by side so a pair is never split up. */
+      function card(entry) {
+        return el("div", { class: "qr-pair" }, [
+          code({ kind: "Order", table: entry.table, url: entry.url, png: entry.png }),
+          code({ kind: "Play", table: entry.table, url: entry.playUrl, png: entry.playPng }),
         ]);
       }
 
@@ -78,7 +96,9 @@
         try {
           const { codes } = await api(`/api/staff/qr-codes?tables=${encodeURIComponent(spec)}`);
           sheet.replaceChildren(...codes.map(card));
-          count.textContent = `${codes.length} code${codes.length === 1 ? "" : "s"}`;
+          // Two per table now, and the count says so rather than quietly
+          // halving what is on screen.
+          count.textContent = `${codes.length} table${codes.length === 1 ? "" : "s"} · ${codes.length * 2} codes`;
           printButton.hidden = codes.length === 0;
           hint.hidden = true;
         } catch (error) {

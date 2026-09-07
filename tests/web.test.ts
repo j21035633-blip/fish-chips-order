@@ -844,3 +844,145 @@ describe("view cart from the options sheet", async () => {
     expect(view.textContent).toContain("Pay RM18.59");
   });
 });
+
+/** The page's main region, which every test below reads. */
+const view = () => document.getElementById("view")!;
+
+/**
+ * Scanning the Play QR, on the real customer page.
+ *
+ * Two states matter and they are easy to get backwards: with a chance in hand
+ * the game should simply open, and with none — the normal case for somebody who
+ * has just sat down — an empty game screen would be a dead end, so it has to
+ * explain how a chance is earned instead.
+ */
+describe("landing from the Play QR", () => {
+  const dialogOpen = () => document.getElementById("fish")!.hasAttribute("open");
+
+  it("explains how to earn a chance rather than opening an empty game", async () => {
+    await bootPage("/order?table=7&view=fish");
+
+    const text = view().textContent!;
+    // The four ways in, in the customer's own terms.
+    expect(text).toContain("RM50");
+    expect(text).toContain("review");
+    expect(text).toContain("Share");
+    expect(text).toMatch(/phone number or email/i);
+
+    // And emphatically not a game with nothing to do in it.
+    expect(dialogOpen()).toBe(false);
+    expect(view().querySelector(".game-intro")).not.toBeNull();
+  });
+
+  it("offers a way out, into the menu", async () => {
+    await bootPage("/order?table=7&view=fish");
+
+    const start = [...view().querySelectorAll("button")].find(
+      (button) => button.textContent === "Start your order",
+    ) as HTMLButtonElement;
+    expect(start).toBeDefined();
+
+    start.click();
+    await settle();
+    expect(view().textContent).toContain("Classic Battered Dory");
+  });
+
+  it("starts a fresh session at a table, exactly as the Order QR does", async () => {
+    // Worth stating plainly, because it is the reason the earn screen is the
+    // *normal* landing: a scan always opens a new session, so a Play code on a
+    // table has no chances on it yet. That rule is older than this feature and
+    // is not bent for it — the previous diner's cart must never carry over.
+    await bootPage("/order?table=7");
+    const first = localStorage.getItem("fishchips.cartId");
+
+    await bootPageKeepingStorage("/order?table=7&view=fish");
+
+    expect(localStorage.getItem("fishchips.cartId")).not.toBe(first);
+    expect(dialogOpen()).toBe(false);
+  });
+
+  it("opens the game straight away when the session already has a chance", async () => {
+    // No table on this one, so the session carries: a poster or a counter-top
+    // tent, rather than a sticker that re-seats somebody.
+    await bootPage("/");
+    const cartId = localStorage.getItem("fishchips.cartId")!;
+    // Earned the honest way, through the real endpoint.
+    await fetch(`${base}/api/order/chances/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cartId, contact: "player@example.com" }),
+    });
+
+    await bootPageKeepingStorage("/order?view=fish");
+
+    expect(localStorage.getItem("fishchips.cartId")).toBe(cartId);
+    expect(dialogOpen()).toBe(true);
+  });
+
+  it("is the same session as the Order QR, not a second one", async () => {
+    // The claim the whole feature rests on: one table, one cart, one ledger.
+    await bootPage("/order?table=7&view=fish");
+    const fromPlay = localStorage.getItem("fishchips.cartId");
+    expect(fromPlay).toBeTruthy();
+
+    const cart = await (await fetch(`${base}/api/carts/${fromPlay}`)).json();
+    expect(cart.cart.tableNumber).toBe("7");
+  });
+
+  it("leaves the plain Order QR landing on the menu, as it always did", async () => {
+    await bootPage("/order?table=7");
+
+    expect(dialogOpen()).toBe(false);
+    expect(view().textContent).toContain("Classic Battered Dory");
+    expect(view().querySelector(".game-intro")).toBeNull();
+  });
+
+  it("tidies the parameter away, so a refresh does not re-open the game", async () => {
+    // Same reason the table parameter is dropped: a refresh should resume this
+    // customer's session, not replay the scan.
+    await bootPage("/order?table=7&view=fish");
+    expect(location.pathname).toBe("/");
+    expect(location.search).toBe("");
+  });
+
+  it("agrees with the code that mints the URL", async () => {
+    // The page reads "fish" and `src/qr/tables.ts` writes it. Two constants,
+    // one string — this is what stops them drifting apart.
+    const { PLAY_VIEW } = await import("../src/qr/tables.js");
+    const app = readFileSync(resolve(webDir, "app.js"), "utf8");
+    expect(app).toContain(`const PLAY_VIEW = "${PLAY_VIEW}";`);
+  });
+});
+
+/** The staff page has to show both, and say which is which. */
+describe("the staff QR page offers both codes", () => {
+  const staffDir = resolve(process.cwd(), "src/staff-web");
+  const html = () => readFileSync(resolve(staffDir, "qr.html"), "utf8");
+
+  it("draws a labelled pair per table", () => {
+    const page = html();
+    expect(page).toContain("function code({ kind, table, url, png })");
+    expect(page).toContain('code({ kind: "Order"');
+    expect(page).toContain('code({ kind: "Play"');
+    expect(page).toContain("entry.playUrl");
+    expect(page).toContain("entry.playPng");
+  });
+
+  it("names the downloads apart, so two files do not overwrite each other", () => {
+    expect(html()).toContain("download: `table-${table}-${kind.toLowerCase()}.png`");
+  });
+
+  it("tells staff what the difference is", () => {
+    const page = html();
+    expect(page).toMatch(/Play<\/strong> opens the\s+fishing game/);
+    expect(page).toContain("table tent");
+  });
+
+  it("styles the two labels apart, and keeps them legible in print", () => {
+    const css = readFileSync(resolve(staffDir, "assets/staff.css"), "utf8");
+    expect(css).toContain(".qr-order .qr-kind");
+    expect(css).toContain(".qr-play .qr-kind");
+    // Printed in grey, a colour-only distinction is no distinction at all.
+    expect(css.slice(css.indexOf("@media print"))).toContain(".qr-kind");
+  });
+});

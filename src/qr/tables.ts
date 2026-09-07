@@ -57,11 +57,36 @@ export function orderUrl(baseUrl: string, table: string): string {
   return url.toString();
 }
 
+/** The query parameter that lands a scan on the game instead of the menu. */
+export const PLAY_VIEW = "fish";
+
+/**
+ * The same table, landing on the fishing game.
+ *
+ * **Not a second session.** It is `orderUrl` with one parameter added, so it
+ * carries the same table, opens the same kind of fresh cart, and earns and
+ * spends the same chances. The only thing the parameter decides is which screen
+ * is on top when the page finishes loading; the customer can walk from the game
+ * to the menu and back, and neither code knows or cares which one they scanned.
+ *
+ * The point of it is a table tent that advertises the game, separate from the
+ * sticker that takes orders.
+ */
+export function playUrl(baseUrl: string, table: string): string {
+  const url = new URL(orderUrl(baseUrl, table));
+  url.searchParams.set("view", PLAY_VIEW);
+  return url.toString();
+}
+
 export interface TableCode {
   table: string;
+  /** Where the ordinary sticker points: straight to the menu for this table. */
   url: string;
   /** The QR image as a `data:image/png;base64,…` URI, ready for `<img src>`. */
   png: string;
+  /** The same table, opening on the game. Same session, different landing. */
+  playUrl: string;
+  playPng: string;
 }
 
 /**
@@ -74,14 +99,18 @@ export interface TableCode {
  * gives up on.
  */
 export async function tableCodes(baseUrl: string, tables: string[], width = 600): Promise<TableCode[]> {
+  const image = (url: string) =>
+    QRCode.toDataURL(url, { errorCorrectionLevel: ERROR_CORRECTION, margin: 2, width });
+
   return Promise.all(
     tables.map(async (table) => {
       const url = orderUrl(baseUrl, table);
-      return {
-        table,
-        url,
-        png: await QRCode.toDataURL(url, { errorCorrectionLevel: ERROR_CORRECTION, margin: 2, width }),
-      };
+      const play = playUrl(baseUrl, table);
+      // Both at once: a staff member printing table tents wants the pair for a
+      // table together, and generating them separately would mean two passes
+      // over the same list.
+      const [png, playPng] = await Promise.all([image(url), image(play)]);
+      return { table, url, png, playUrl: play, playPng };
     }),
   );
 }

@@ -1087,3 +1087,9 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
   .kitchen-status.cancelled { background: #4a221d; color: #ffb3a7; }
   .denied-note { background: #3a2f16; color: #ffd98a; }
 }
+
+/* The Play QR landing, when there is no chance to spend yet. */
+.game-intro h2 { font-size: 21px; margin-bottom: 8px; }
+.game-intro p { margin: 0 0 10px; }
+.earn-ways { margin: 0 0 14px; padding-left: 20px; }
+.earn-ways li { margin-bottom: 6px; }

@@ -490,14 +490,25 @@ status stays freely reversible. The customer API is untouched and stays open, wh
 
 Two ways to the same codes, both from `src/qr/tables.ts`.
 
+Each table gets **two**, side by side and labelled. **Order** opens the menu, as it always has.
+**Play** is the same URL with `&view=fish` on it and opens the fishing game — for a table tent
+advertising the game, separate from the sticker that takes orders. It is **not a second session**:
+same table, same cart, same chances, and the customer can walk from the game to the menu and back.
+The parameter only decides which screen loads first.
+
+A Play scan at a table starts a fresh session like any scan, so a customer who has just sat down has
+no chance to spend yet — that lands on a screen explaining what the game is and the four ways to earn
+a cast, rather than an empty game. It opens straight into the game when the session already has one.
+
 **In the staff area**, at `/qr`: type the tables (`1-12`, or `1-8,PATIO-1`), press **Generate
-codes**, and the codes appear — with **Print sheet**, which prints the cards and nothing else, and a
-**Download PNG** on each. Nothing is stored: a code is a pure function of the public URL and the
+codes**, and both codes per table appear — with **Print sheet**, which prints the cards and nothing
+else, and a **Download PNG** on each (named `table-1-order.png` and `table-1-play.png`, so a pair
+cannot overwrite itself). Nothing is stored: a code is a pure function of the public URL and the
 table number, so there is nothing to keep and nothing to go stale the day `PUBLIC_BASE_URL` changes.
 This is a page now because there is a staff password now — an open route that mints table codes
 hands anyone a link that opens an order against someone else's table.
 
-**On the command line**, for a bulk run that lands as files:
+**On the command line**, for a bulk run that lands as files — Order codes only:
 
 ```
 npm run qr -- --tables 1-12

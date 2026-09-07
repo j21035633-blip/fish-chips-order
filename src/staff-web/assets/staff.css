@@ -701,3 +701,32 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 /* The kitchen card's action row: the one advance button, plus Cancel. */
 .card-actions { display: flex; gap: 8px; align-items: stretch; }
 .card-actions .advance { flex: 1; }
+
+/*
+ * A table's two codes, kept together.
+ *
+ * Side by side and labelled, because they are identical to look at and a Play
+ * code stuck where the Order code belongs is a table that cannot order.
+ */
+.qr-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  break-inside: avoid;
+}
+.qr-kind {
+  display: inline-block;
+  align-self: start;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.qr-order .qr-kind { background: var(--sea-wash); color: var(--sea); }
+.qr-play .qr-kind { background: #fdf1dd; color: var(--amber); }
+/* On paper the label has to survive being printed in grey. */
+@media print {
+  .qr-kind { border: 1px solid #000; background: transparent !important; color: #000 !important; }
+}

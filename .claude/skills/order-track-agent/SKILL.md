@@ -428,6 +428,25 @@ function of the public URL and the table number, so there is nothing to keep and
 when `PUBLIC_BASE_URL` changes. The page gets data URIs (shown, printed, saved with `<a download>`);
 the CLI writes PNGs plus a print sheet, which is the right shape for forty stickers.
 
+**Two codes per table.** `orderUrl` is the sticker that opens the menu; `playUrl` is the same URL
+with `&view=fish` on it, for a table tent advertising the game. It is emphatically **not a second
+session** — same table, same fresh cart, same chance ledger — and the parameter decides only which
+screen is on top when the page finishes loading. `tableCodes` returns both (`url`/`png` and
+`playUrl`/`playPng`); the Order fields kept their names, so nothing that already read them changed.
+The CLI mints Order codes only, since it calls `orderUrl` directly.
+
+**A Play scan at a table still starts a fresh session**, because every scan does — that rule is older
+than this feature and is not bent for it. So the normal landing is *not* the game: somebody who has
+just sat down has no chances, and an empty game screen would be a dead end. `openGameLanding` shows
+what the game is and the four ways to earn a cast instead, with a way through to the menu. The game
+opens immediately only when the session already has a chance — the `/order?view=fish` form with no
+table, which is a poster or a counter-top tent.
+
+The earning *actions* stay in the cart sheet where they already live, beside the order a proof
+attaches to; the landing explains them and points at them rather than holding a second copy of the
+upload wiring. `PLAY_VIEW` is declared in both `src/qr/tables.ts` and `src/web/app.js`, with a test
+holding the two strings together.
+
 Error correction is level `Q` — a sticker in a chip shop gets smudged. Codes point at
 `/order?table=N`, which always opens a fresh session. Tests decode both the files and the page's
 data URIs with a real QR reader: the failure worth catching is a code that renders and does not scan.
