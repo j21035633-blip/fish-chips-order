@@ -379,11 +379,17 @@ describe("performance tilts the roll", () => {
     const perfect = distribution(MAX_PERFORMANCE);
 
     // "Meaningfully" is the requirement, so the assertion is a multiple rather
-    // than a nudge: roughly three times the jackpots and over twice the rares.
-    expect(perfect.jackpot!).toBeGreaterThan(lazy.jackpot! * 2.4);
-    expect(perfect.rare!).toBeGreaterThan(lazy.rare! * 2);
+    // than a nudge: roughly double the jackpots, and half again as many rares.
+    //
+    // The tilt used to be steeper. It was scaled back when the reel became easy
+    // enough for a child — see `skillBias` — because the two together are what
+    // set the shop's bill, and easier scores on the old curve were quietly
+    // giving away RM3.92 a play instead of RM3.49. `tests/rewardBalance.test.ts`
+    // holds that pairing; this one only holds that skill still counts.
+    expect(perfect.jackpot!).toBeGreaterThan(lazy.jackpot! * 1.8);
+    expect(perfect.rare!).toBeGreaterThan(lazy.rare! * 1.5);
     // And correspondingly fewer of the smallest.
-    expect(perfect.small_fry!).toBeLessThan(lazy.small_fry! * 0.55);
+    expect(perfect.small_fry!).toBeLessThan(lazy.small_fry! * 0.75);
 
     // The base row is still the configured table, so nothing regressed for a
     // client that sends no score at all.

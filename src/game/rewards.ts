@@ -30,6 +30,14 @@ export interface TierSpec {
    * amount of skill, and no amount of failure, can take a tier off the table.
    * A terrible reel still lands on a real reward and a perfect one can still
    * land on a small fry.
+   *
+   * **These numbers are paired with the reel, and neither can be changed
+   * alone.** They set what a *score* is worth, and the reel sets what scores
+   * people get; the shop's bill is the product of the two. When the reel was
+   * made easy enough for a child, scores went up and the giveaway went with
+   * them — RM3.49 to RM3.92 a play — without a single odd changing. These were
+   * then scaled back to put the bill where it was. `tests/rewardBalance.test.ts`
+   * measures the pair together and fails if either drifts.
    */
   skillBias: number;
   kind: RewardKind;
@@ -52,10 +60,10 @@ export interface TierSpec {
  * the wrong way round.
  */
 export const REWARD_TABLE: readonly TierSpec[] = [
-  { tier: "small_fry", weight: 55, skillBias: 0.4, kind: "discount_fixed", label: "RM2 off", amountSen: 200 },
-  { tier: "uncommon", weight: 25, skillBias: 1.2, kind: "discount_percent", label: "10% off", percent: 10 },
-  { tier: "rare", weight: 15, skillBias: 2.4, kind: "free_item", label: "A free Teh Ais", itemId: "drink-teh-ais" },
-  { tier: "jackpot", weight: 5, skillBias: 3, kind: "discount_fixed", label: "RM10 off", amountSen: 1000 },
+  { tier: "small_fry", weight: 55, skillBias: 0.65, kind: "discount_fixed", label: "RM2 off", amountSen: 200 },
+  { tier: "uncommon", weight: 25, skillBias: 1.1, kind: "discount_percent", label: "10% off", percent: 10 },
+  { tier: "rare", weight: 15, skillBias: 1.85, kind: "free_item", label: "A free Teh Ais", itemId: "drink-teh-ais" },
+  { tier: "jackpot", weight: 5, skillBias: 2.25, kind: "discount_fixed", label: "RM10 off", amountSen: 1000 },
 ];
 
 /** The base odds' total, at zero performance. */
