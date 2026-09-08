@@ -64,7 +64,8 @@ stylesheet in `src/staff-web/assets/`:
 | `/qr` | **Table QR Codes** | Type the tables, generate, print the sheet or download a PNG each |
 | `/approvals` | **Approvals** | Review and share screenshots waiting on a yes or a no — see *The fishing game* |
 | `/accounts` | **Staff** | Individual staff records, for attributing cashiering — see *Staff accounts* |
-| `/login` | **Sign in** | The one page outside the gate. No nav, one password field — see *Staff auth* |
+| `/login` | **Sign in** | Outside the gate. Staff ID and password — see *Staff auth* |
+| `/login/emergency` | **Emergency access** | The shared password, for bootstrap and recovery only — see *Staff auth* |
 
 Each view is its own document rather than a client-side router, so a tablet on the pass reloads into
 the view it was showing. Add a seventh view by adding one entry to `STAFF_VIEWS` in
@@ -605,12 +606,52 @@ is exactly the accountability hole this closes. The takeaway's pay sheet asks in
 it is already a dialog outside the polled region, and it stays open on a rejection so a wrong code is
 a correction rather than a lost walk-in.
 
-### Staff auth — one shared password
+### Staff auth — individual sign-in, roles, and one emergency door
 
-Everything under the staff path and everything under `/api/staff/` is behind a single password that
-the whole shop shares. Deliberately not per-user accounts: one shop, one tablet on the pass, and
-individual logins would be ceremony that ends with the password written on the wall anyway. It lives
-in `src/staff/auth.ts`.
+`src/staff/auth.ts` + `src/staff/roles.ts`. Everyone signs in with their own staff ID and the
+password hashed on their `StaffAccount`. A **Role** is a name and a set of the seven `NAV_SECTIONS`
+(`dashboard`, `kitchen_counter`, `sales_report`, `menu`, `table_qr`, `approvals`, `staff`).
+
+**`SECTION_ROUTES` in `auth.ts` is the whole authorization policy** — one table mapping each
+`/api/staff` path to the section(s) that may reach it, granted on *any* match because both boards
+share `/overview` and the order actions. It **fails closed**: a path nothing claims is refused even
+for an Owner, so a route added without a permission is dead rather than open, and
+`staffRoles.test.ts` walks the real Express router to prove nothing was forgotten.
+
+Pages are gated on the same table (`PAGE_SECTIONS` in `app.ts`) and answer 403 with a page that
+names the first section the person *does* have. Hiding a nav tab is not a gate.
+
+**Owner is reserved and virtual** — never stored, always every section, refused by create, update and
+delete at the route *and* at the service. There is no row to corrupt and no way for a role edit to
+lock out the last administrator.
+
+**The token is a cache.** `resolveGrant` re-reads the account and its role on every request, so
+deactivating somebody or narrowing a role bites immediately. A lookup that throws falls back to the
+token's baked sections — an unreachable database must not sign the kitchen out.
+
+**The emergency door.** `POST /api/staff/login/emergency` takes `STAFF_PASSWORD`, grants every
+section, names nobody, and is usable only while there is no active Owner (bootstrap) or
+`STAFF_EMERGENCY_LOGIN=true` (recovery). It closes behind itself: `resolveGrant` stops honouring an
+emergency session once neither holds, so creating the first Owner ends the session that created it.
+It has its own page and is linked from the normal login screen only when `bootstrapAvailable`.
+
+**Migration.** `RoleService.ensureRolesFor` runs at boot over every distinct `StaffAccount.role` and
+materialises a Role with `DEFAULT_SECTIONS` (`kitchen_counter` + `menu`). Idempotent, and it never
+overwrites a role an Owner has since adjusted. `resolve` falls back to the same default for a role
+record that has gone missing, so the gate never throws somebody out over a dangling name.
+
+`STAFF_SESSION_SECRET` signs the cookie (v2 key; v1 tokens do not verify, so everyone signs in once
+after this deploy). It falls back to `STAFF_PASSWORD`, then to a per-process key.
+
+**The per-transaction cashiering check is unrelated and unchanged** — see *Staff accounts*. Signing in
+says who is on shift; the id and name typed when money is taken says who took *this* payment, and one
+does not stand in for the other.
+
+### Staff auth — the session machinery underneath
+
+Everything under the staff path and everything under `/api/staff/` is behind the gate in
+`src/staff/auth.ts`. *Who* gets through it is the section above; this is the cookie, the throttle and
+the mounting, which are unchanged by that.
 
 > **MANUAL RAILWAY STEP — set `STAFF_PASSWORD` in the service's variables before this protects
 > anything in production.** It is a plain string, set in the Railway dashboard (Service → Variables),
@@ -619,8 +660,10 @@ in `src/staff/auth.ts`.
 > it means a deploy that forgot the variable is unprotected. It is loud rather than silent: the
 > server warns at startup, and `GET /health` reports `"staffAuth": "disabled"` until it is set.
 
-**The flow.** `POST /api/staff/login { password }` → 200 and a `staff_session` cookie, or 401
-`invalid_password`. A browser hitting any staff page without a valid cookie is **302'd** to
+**The flow.** `POST /api/staff/login { staffId, password }` → 200 and a `staff_session` cookie, or
+401 `invalid_credentials` (identical for a wrong password and an id nobody has, so the form cannot
+be used to enumerate staff codes) or `account_inactive`. A browser hitting any staff page without a
+valid cookie is **302'd** to
 `{STAFF_DASHBOARD_PATH}/login?next=<where it was going>`; sign in and it lands where it was headed.
 `POST /api/staff/logout` clears the cookie; the **Log out** button in the shared header calls it.
 Any staff API call that comes back 401 sends the page to the login screen — that is how a session
@@ -631,10 +674,14 @@ upload builds its own multipart request).
 this is a cookie the server issues to itself, not a token for a third party to read. Details that
 matter if you touch it:
 
-- **The signing key is derived from the password itself** (`sha256("…:v1:" + STAFF_PASSWORD)`). So
-  there is no second secret to configure, changing the password **invalidates every existing
-  session** — which is how you revoke access on the day someone leaves — and a restart or redeploy
-  does *not* sign the kitchen out.
+- **The signing key is `STAFF_SESSION_SECRET`** (`sha256("…:v2:" + secret)`), falling back to
+  `STAFF_PASSWORD` and then to a per-process key. It used to be derived from the password alone;
+  that stopped being right when the password became a recovery credential, because rotating one must
+  not sign the whole shop out. Changing the secret still **invalidates every existing session**,
+  which is how you revoke access shop-wide. v1 tokens do not verify, so this deploy signs everyone
+  out once.
+- **The payload carries the identity** — staff id, name, role and the sections it had at sign-in —
+  and the gate re-reads the account anyway. See the section above.
 - **12-hour expiry.** Longer than the longest shift; a tablet left on overnight signs in again in
   the morning.
 - Cookie is `httpOnly`, `SameSite=Lax`, `Path=/` (it has two consumers under different prefixes),
@@ -642,24 +689,28 @@ matter if you touch it:
 - The password is compared in constant time, over sha256 digests so a length mismatch cannot throw
   and leak the real length.
 - **Failed logins are throttled** per client address: 8 in 10 minutes and the endpoint 429s without
-  looking at the password at all. In-memory, per-process — a speed bump against online guessing of a
-  shared password on a public URL, not a defence against one that has leaked.
+  looking at the password at all. Per address rather than per account on purpose — a per-account
+  counter would let somebody work through the staff codes one at a time, and would hand anyone a way
+  to lock a cashier out of their own till by guessing wrong at them.
 
 **The gate is mounted at the prefix** (`server.use("/api/staff", requireStaffApi)`), above every
 staff route, so **a route added later is protected without anyone having to remember**. `/login`,
 `/logout` and `/session` are exempted inside the middleware rather than by sitting above it, so
-reordering `app.ts` cannot quietly open a hole. Page guarding is `requireStaffPage` on each view's
-route — server-side on purpose: a guard running in the page's own script can only hide a document
-that has already been sent. The shared assets stay ungated; they are code, not data, and the login
-screen needs its own stylesheet.
+reordering `app.ts` cannot quietly open a hole — and `/login/emergency` is exempt the same way.
+Authentication and *authorization* both happen there: the same middleware resolves the grant and then
+checks it against `SECTION_ROUTES`. Page guarding is `requireStaffPage` on each view's route —
+server-side on purpose: a guard running in the page's own script can only hide a document that has
+already been sent. The shared assets stay ungated; they are code, not data, and the login screen
+needs its own stylesheet.
 
 Login page is `src/staff-web/login.html` (`data-staff-view="login"`, no nav — there is nothing to
 navigate to yet). It honours `?next=` only for same-site paths: an absolute URL there would be an
 open redirect, on exactly the sort of page a phisher would want one.
 
-**What this still is not.** There is no audit trail — every action is "a staff member", which is why
-kitchen status stays freely reversible. There is no lockout for a leaked password other than
-changing it. And the customer API is untouched and stays open, which is the point.
+**What this still is not.** Moving a ticket along the pass is not attributed to anybody, which is
+why kitchen status stays freely reversible; the two cashiering flows are — see *Staff accounts*.
+There is no per-account lockout after repeated failures, only the per-address throttle. And the
+customer API is untouched and stays open, which is the point.
 
 ### Staff HTTP surface
 

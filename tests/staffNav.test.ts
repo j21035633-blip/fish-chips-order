@@ -31,6 +31,35 @@ beforeEach(() => {
 });
 
 describe("staff nav", () => {
+  it("draws only the views a role is permitted", () => {
+    // Presentation, not protection — the server gates each page and each API
+    // route on the same list. This is what stops a cashier being shown a Sales
+    // Report tab that would 403 if they tapped it.
+    const labels = (sections: string[]) =>
+      [...nav.staffNav("dashboard", sections).querySelectorAll("a")].map((link: Element) => link.textContent);
+
+    expect(labels(["kitchen_counter", "menu"])).toEqual(["Kitchen & Counter", "Menu"]);
+    expect(labels([])).toEqual([]);
+    // Order follows the nav's own, not the order the sections arrived in.
+    expect(labels(["staff", "dashboard"])).toEqual(["Dashboard", "Staff"]);
+  });
+
+  it("lands somebody on the first page their role actually opens", () => {
+    // The dashboard is a section like any other. Sending a cashier there for
+    // signing in correctly would be a 403 as a welcome screen.
+    expect(nav.homePathFor(["kitchen_counter", "menu"])).toBe("/staff-a8f3k2m9/kitchen");
+    expect(nav.homePathFor(["dashboard", "menu"])).toBe("/staff-a8f3k2m9");
+    // Nothing at all is a real state — a role with no sections — and it lands
+    // on a page that explains itself rather than on a refusal.
+    expect(nav.homePathFor([])).toBe("/staff-a8f3k2m9/login");
+  });
+
+  it("gives every view a permission section, so none is unreachable", () => {
+    for (const view of nav.STAFF_VIEWS) {
+      expect(typeof view.section, view.id).toBe("string");
+    }
+  });
+
   it("offers every view, in order", () => {
     const labels = [...nav.staffNav().querySelectorAll("a")].map((link: Element) => link.textContent);
     expect(labels).toEqual([
@@ -94,7 +123,10 @@ describe("staff nav", () => {
     const header = document.body.firstElementChild!;
     expect(header.tagName).toBe("HEADER");
     expect(header.querySelector("h1")?.textContent).toBe("Sales Report");
-    expect(header.querySelectorAll(".staff-nav a")).toHaveLength(nav.STAFF_VIEWS.length);
+    // Empty until the server says what this role may reach. Drawn empty rather
+    // than full-then-trimmed: a tab that flashes up and vanishes reads as a
+    // glitch, and on a tablet it is a tab somebody may already have tapped.
+    expect(header.querySelectorAll(".staff-nav a")).toHaveLength(0);
 
     // The slot is the one part a view fills in for itself.
     slot.append(document.createElement("span"));

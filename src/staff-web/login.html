@@ -11,15 +11,30 @@
     <main>
       <form id="login-form" class="login-card" novalidate>
         <h1>Staff sign in</h1>
-        <p class="sub">One password for everyone on shift. Ask the manager if you do not have it.</p>
+        <p class="sub">Your own staff ID and password. Ask an Owner if you do not have one yet.</p>
+
+        <div class="field">
+          <label for="staff-id">Staff ID</label>
+          <!--
+            autofocus so a tablet on the pass is one tap from typing. The code is
+            short and uppercase, so the keyboard is told as much.
+          -->
+          <input
+            id="staff-id"
+            name="staffId"
+            type="text"
+            autocomplete="username"
+            autocapitalize="characters"
+            spellcheck="false"
+            maxlength="12"
+            placeholder="e.g. AR47"
+            required
+            autofocus
+          />
+        </div>
 
         <div class="field">
           <label for="password">Password</label>
-          <!--
-            autofocus so a tablet on the pass is one tap from typing, and
-            autocomplete="current-password" so a saved password fills in rather
-            than being retyped between shifts.
-          -->
           <input
             id="password"
             name="password"
@@ -28,23 +43,35 @@
             autocapitalize="off"
             spellcheck="false"
             required
-            autofocus
           />
         </div>
 
         <p id="form-error" class="form-error" hidden></p>
 
         <button id="submit" class="advance" type="submit">Sign in</button>
+
+        <!--
+          The shared-password door. Hidden unless the server says it is genuinely
+          usable, which is only before this shop has an Owner or when somebody has
+          deliberately reopened it — otherwise it is a second front door advertised
+          on the front door.
+        -->
+        <p id="bootstrap" class="login-alt" hidden>
+          No Owner account exists yet.
+          <a id="bootstrap-link" href="{{STAFF_BASE}}/login/emergency">Set one up with the shop password</a>.
+        </p>
       </form>
     </main>
 
     <script type="module">
-      import { staffBase } from "{{STAFF_BASE}}/assets/nav.js";
+      import { homePathFor } from "{{STAFF_BASE}}/assets/nav.js";
 
       const form = document.getElementById("login-form");
+      const staffId = document.getElementById("staff-id");
       const password = document.getElementById("password");
       const submit = document.getElementById("submit");
       const error = document.getElementById("form-error");
+      const bootstrap = document.getElementById("bootstrap");
 
       /**
        * Where to go once signed in.
@@ -54,21 +81,25 @@
        * paths are honoured — an absolute URL in a query parameter is an open
        * redirect, and this page is exactly the sort a phisher would like one on.
        */
-      function destination() {
+      function destination(sections) {
         const next = new URLSearchParams(location.search).get("next");
         if (next && next.startsWith("/") && !next.startsWith("//")) return next;
-        return staffBase() || "/";
+        // Not always the dashboard: it is a section like any other, and landing
+        // somebody on a page their role forbids is a 403 for signing in
+        // correctly.
+        return homePathFor(sections);
       }
 
       /**
        * Puts the form beyond use and says why.
        *
-       * For the one case the form cannot answer: the server has no password
+       * For the one case the form cannot answer: the server has nothing
        * configured, so there is no value anyone could type that would work.
-       * Leaving a live field there would have someone trying the manager's
-       * password over and over against a door with no lock fitted.
+       * Leaving a live field there would have someone trying passwords against a
+       * door with no lock fitted.
        */
       function showUnconfigured() {
+        staffId.disabled = true;
         password.disabled = true;
         submit.disabled = true;
         showError(
@@ -83,11 +114,15 @@
         .then((response) => response.json())
         .then((session) => {
           if (session.authenticated || session.authRequired === false) {
-            location.replace(destination());
+            location.replace(destination(session.sections));
             return;
           }
-          // Sign-in required, but there is nothing to sign in with.
-          if (session.configured === false) showUnconfigured();
+          if (session.configured === false) {
+            showUnconfigured();
+            return;
+          }
+          // Offered only while it is the one way in.
+          bootstrap.hidden = session.bootstrapAvailable !== true;
         })
         .catch(() => {
           // Offline or the server is down. The form still works; let them try.
@@ -107,14 +142,14 @@
           const response = await fetch("/api/staff/login", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ password: password.value }),
+            body: JSON.stringify({ staffId: staffId.value.trim(), password: password.value }),
           });
           const body = await response.json().catch(() => ({}));
 
           if (response.ok) {
             // replace, not assign: the back button should not return to a login
             // screen that has already done its job.
-            location.replace(destination());
+            location.replace(destination(body.sections));
             return;
           }
 
@@ -128,7 +163,7 @@
         } catch (failure) {
           showError(failure.message ?? "Could not reach the server.");
         } finally {
-          // Not unconditionally: an unconfigured server disables both fields on
+          // Not unconditionally: an unconfigured server disables the fields on
           // purpose, and re-enabling here would hand back a form that cannot work.
           if (!password.disabled) submit.disabled = false;
         }

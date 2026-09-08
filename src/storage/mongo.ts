@@ -5,6 +5,7 @@ import type { MenuPersistence } from "../menu/store.js";
 import type { Menu } from "../menu/types.js";
 import type { Proof, ProofRepository, ProofStatus } from "../game/proofs.js";
 import type { StaffAccount, StaffAccountRepository } from "../staff/accounts.js";
+import type { Role, RoleRepository } from "../staff/roles.js";
 import type { CartRepository, OrderRepository } from "../orders/repository.js";
 import type { Cart, Order } from "../orders/types.js";
 
@@ -31,6 +32,8 @@ type StoredMenu = Menu & { _id: string };
 type StoredProof = Proof & { _id: string };
 /** Keyed by the staff code itself, so the code is unique by construction. */
 type StoredStaffAccount = StaffAccount & { _id: string };
+/** Keyed by the role's normalised name, so "Cashier" and "cashier " are one role. */
+type StoredRole = Role & { _id: string };
 
 /**
  * The menu is one document under a fixed id. Staff edits replace it wholesale,
@@ -161,6 +164,30 @@ export class MongoStorage {
       },
       async list(): Promise<StaffAccount[]> {
         return (await collection().find({}).sort({ name: 1 }).toArray()).map(strip);
+      },
+    };
+  }
+
+  /**
+   * Roles. Keyed by the normalised name, which is what `StaffAccount.role`
+   * resolves through. Owner is never in here — it is virtual, so there is no row
+   * for a bad migration or a stray write to take away.
+   */
+  roles(): RoleRepository {
+    const collection = () => this.database.collection<StoredRole>("staff_roles");
+    return {
+      async get(key: string): Promise<Role | undefined> {
+        const doc = await collection().findOne({ _id: key });
+        return doc === null ? undefined : strip(doc);
+      },
+      async save(key: string, role: Role): Promise<void> {
+        await collection().replaceOne({ _id: key }, role, { upsert: true });
+      },
+      async list(): Promise<Role[]> {
+        return (await collection().find({}).sort({ name: 1 }).toArray()).map(strip);
+      },
+      async remove(key: string): Promise<void> {
+        await collection().deleteOne({ _id: key });
       },
     };
   }

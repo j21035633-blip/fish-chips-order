@@ -3,21 +3,29 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto
 import type { NextFunction, Request, Response } from "express";
 
 import { config } from "../config/env.js";
+import { NAV_SECTIONS, type SectionKey } from "./roles.js";
 
 /**
- * The staff gate: one shared password for everyone behind the counter.
+ * The staff gate: each person signs in as themselves, and their role says what
+ * they can reach.
  *
- * Deliberately not per-user accounts. There is one shop, one shared tablet on
- * the pass and a till nobody logs into either; individual logins would be
- * ceremony that ends with the password written on the wall anyway. What this
- * buys is the thing the unguessable path never could: `/api/staff/*` stops
- * being as open as the customer API, and that now covers menu writes and file
- * uploads, not just a status toggle.
+ * This used to be one password the whole shop shared. It is now
+ * `StaffAccount` + `Role`: the session names who is holding it and which nav
+ * sections they may reach, and every `/api/staff` route declares the section it
+ * belongs to. The shared password survives only as `emergency` — a door for
+ * bootstrapping the first Owner, and for getting back in when nobody can.
  *
  * No JWT library, because nothing here needs one. The session is a payload and
  * an HMAC over it — the same primitive the Revenue Monster signing already
  * uses — and it is *not* a bearer token for third parties to read: it is a
  * cookie this server issues to itself.
+ *
+ * **The token is a cache, not the authority.** It carries the sections the role
+ * had at sign-in, but the gate re-reads the account on every request, so a role
+ * narrowed or an account deactivated mid-shift takes effect on the next request
+ * rather than in twelve hours. The baked copy is what the gate falls back to
+ * when the account cannot be read at all — a database blip must not sign the
+ * whole kitchen out during service.
  */
 
 /** Name of the cookie the session lives in. */
@@ -31,7 +39,40 @@ export const STAFF_SESSION_COOKIE = "staff_session";
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
 /** Paths under `/api/staff` that must stay reachable without a session. */
-const OPEN_PATHS = new Set(["/login", "/logout", "/session"]);
+const OPEN_PATHS = new Set(["/login", "/login/emergency", "/logout", "/session"]);
+
+/**
+ * Which section each `/api/staff` route belongs to, and the whole authorization
+ * policy in one table.
+ *
+ * A route matching more than one section is granted by **any** of them: the
+ * boards share `/overview` and the order actions, and somebody with only
+ * Kitchen & Counter has to be able to work them.
+ *
+ * **Unmatched means denied.** A route added below without an entry here is
+ * refused rather than left open — forgetting to add a permission must fail
+ * closed, and `staffRoles.test.ts` walks the real router to prove every
+ * registered path matches something.
+ */
+const SECTION_ROUTES: readonly (readonly [RegExp, readonly SectionKey[]])[] = [
+  [/^\/overview$/, ["dashboard", "kitchen_counter"]],
+  [/^\/orders\/takeaway$/, ["kitchen_counter"]],
+  [/^\/orders\/[^/]+\/(status|approve-cancel|deny-cancel|cancel|settle)$/, ["dashboard", "kitchen_counter"]],
+  [/^\/sales-report$/, ["sales_report"]],
+  [/^\/menu-items(\/.*)?$/, ["menu"]],
+  [/^\/qr-codes$/, ["table_qr"]],
+  [/^\/proofs(\/.*)?$/, ["approvals"]],
+  [/^\/accounts(\/.*)?$/, ["staff"]],
+  [/^\/roles(\/.*)?$/, ["staff"]],
+];
+
+/** The sections that may reach this path, or undefined if nothing claims it. */
+export function sectionsForPath(path: string): readonly SectionKey[] | undefined {
+  for (const [pattern, sections] of SECTION_ROUTES) {
+    if (pattern.test(path)) return sections;
+  }
+  return undefined;
+}
 
 export interface StaffSession {
   /**
@@ -44,6 +85,14 @@ export interface StaffSession {
   /** Seconds since the epoch, as in a JWT — both are integers, so both compare cleanly. */
   iat: number;
   exp: number;
+  /** Who signed in. Absent on an emergency session, which is nobody in particular. */
+  staffId?: string;
+  name?: string;
+  role?: string;
+  /** The sections their role permitted at sign-in. Re-checked per request. */
+  sections: SectionKey[];
+  /** True for the shared-password recovery door. */
+  emergency?: boolean;
 }
 
 /**
@@ -74,12 +123,23 @@ function deploymentIsPublic(): boolean {
   return config.publicBaseUrl.startsWith("https://") || process.env.NODE_ENV === "production";
 }
 
+/**
+ * Either secret turns the gate on: `STAFF_SESSION_SECRET` is enough on its own,
+ * because individual accounts are what people sign in with now and the shared
+ * password is only the recovery door. Setting neither on a public deployment
+ * still locks rather than opens — a variable somebody forgot must not be the
+ * difference between a gate and no gate.
+ */
 export function staffGateMode(): StaffGateMode {
-  if (config.staffPassword !== undefined) return "password";
+  if (config.staffPassword !== undefined || config.staffSessionSecret !== undefined) return "password";
   return deploymentIsPublic() ? "locked" : "open";
 }
 
-/** False when `STAFF_PASSWORD` is unset: there is no password anyone can sign in with. */
+/**
+ * False when `STAFF_PASSWORD` is unset — there is then no **emergency**
+ * password. Individual sign-in does not go through it; `staffGateMode` is what
+ * says whether anybody can sign in at all.
+ */
 export function staffAuthEnabled(): boolean {
   return config.staffPassword !== undefined;
 }
@@ -98,16 +158,31 @@ export function passwordMatches(candidate: string): boolean {
 }
 
 /**
- * The signing key, derived from the password itself rather than configured
- * separately.
+ * Per-process fallback secret.
  *
- * Two consequences worth wanting: there is no second secret to forget to set,
- * and changing `STAFF_PASSWORD` invalidates every session issued under the old
- * one — which is exactly what you want on the day someone leaves. It survives a
- * restart, so a redeploy does not sign the whole kitchen out.
+ * Only reached when neither `STAFF_SESSION_SECRET` nor `STAFF_PASSWORD` is set,
+ * which is local development and the tests. Sessions then do not survive a
+ * restart, which is the honest outcome: the alternative is a hard-coded key,
+ * and a hard-coded key on a deployment somebody forgot to configure is worse
+ * than a sign-in screen after every deploy. `server.ts` warns about it.
+ */
+const processSecret = randomUUID();
+
+/**
+ * The signing key.
+ *
+ * `STAFF_SESSION_SECRET` first, because sessions are no longer tied to the
+ * shared password — that is an emergency door now, and rotating it must not
+ * sign the whole shop out. `STAFF_PASSWORD` stays as the fallback so a
+ * deployment that has not set the new variable keeps working as it did.
+ *
+ * v2: the payload gained an identity and a section list, so a v1 token signed
+ * over the old shape must not verify. Everybody signs in again once, with their
+ * own account, which is the point of the change anyway.
  */
 function sessionKey(): Buffer {
-  return createHash("sha256").update(`fish-chips-order:staff-session:v1:${config.staffPassword ?? ""}`).digest();
+  const secret = config.staffSessionSecret ?? config.staffPassword ?? processSecret;
+  return createHash("sha256").update(`fish-chips-order:staff-session:v2:${secret}`).digest();
 }
 
 function sha256(value: string): Buffer {
@@ -118,15 +193,35 @@ function sign(payload: string): string {
   return createHmac("sha256", sessionKey()).update(payload).digest("base64url");
 }
 
+/** Who a token is being minted for. Everything but the clock. */
+export interface SessionIdentity {
+  staffId?: string | undefined;
+  name?: string | undefined;
+  role?: string | undefined;
+  sections: SectionKey[];
+  emergency?: boolean | undefined;
+}
+
 /** A fresh session token, valid from now. */
-export function issueSession(now = Date.now()): string {
+export function issueSession(identity: SessionIdentity, now = Date.now()): string {
   const session: StaffSession = {
     sid: randomUUID(),
     iat: Math.floor(now / 1000),
     exp: Math.floor((now + SESSION_TTL_MS) / 1000),
+    sections: identity.sections,
   };
+  if (identity.staffId !== undefined) session.staffId = identity.staffId;
+  if (identity.name !== undefined) session.name = identity.name;
+  if (identity.role !== undefined) session.role = identity.role;
+  if (identity.emergency) session.emergency = true;
+
   const payload = Buffer.from(JSON.stringify(session), "utf8").toString("base64url");
   return `${payload}.${sign(payload)}`;
+}
+
+/** The recovery session: every section, and marked as what it is. */
+export function issueEmergencySession(now = Date.now()): string {
+  return issueSession({ sections: [...NAV_SECTIONS], emergency: true }, now);
 }
 
 /**
@@ -152,6 +247,9 @@ export function readSession(token: string | undefined, now = Date.now()): StaffS
     // honoured at all: the cost is that the deploy adding this signs the
     // kitchen out once.
     if (typeof session.sid !== "string" || session.sid.length === 0) return undefined;
+    // A token carrying no section list predates roles. There is no honest way
+    // to decide what it should reach, so it is not a session any more.
+    if (!Array.isArray(session.sections)) return undefined;
     if (isRevoked(session.sid, now)) return undefined;
     return session;
   } catch {
@@ -173,11 +271,100 @@ export function hasStaffSession(req: Request): boolean {
  * it is the one that cannot happen on a public deployment — see
  * `staffGateMode`.
  */
-export function staffAccessAllowed(req: Request): boolean {
+/**
+ * What a request has been granted, once the gate has looked at it.
+ *
+ * Put on `res.locals.staff` so a route can read who is asking without repeating
+ * the work — `/session` reports it straight back to the page that draws the nav.
+ */
+export interface StaffGrant {
+  sections: readonly SectionKey[];
+  staffId?: string;
+  name?: string;
+  role?: string;
+  /** Signed in through the shared-password recovery door. */
+  emergency: boolean;
+  /** The gate is off entirely — local development with no password set. */
+  open: boolean;
+}
+
+/** The two lookups the gate needs. Structural, so nothing here imports a service. */
+export interface StaffGateDeps {
+  /** The account, or undefined when there is genuinely no such account. */
+  account(staffId: string): Promise<{ name: string; role: string; active: boolean } | undefined>;
+  sectionsFor(roleName: string | undefined): Promise<SectionKey[]>;
+  /** Whether the shared-password door is currently open. See `login/emergency`. */
+  emergencyAllowed(): Promise<boolean>;
+}
+
+/** Everything a grant carries when the gate is switched off. */
+function openGrant(): StaffGrant {
+  return { sections: [...NAV_SECTIONS], emergency: false, open: true };
+}
+
+/**
+ * Resolves a request to a grant, or undefined for "not signed in".
+ *
+ * The account is re-read here rather than trusted from the token, which is what
+ * makes deactivating somebody take effect on their next request instead of at
+ * the end of their twelve-hour session. The one case that falls back to the
+ * token is a lookup that *failed* — as opposed to one that came back empty —
+ * because a database that is briefly unreachable must not turn into everybody
+ * on shift being signed out at once.
+ */
+export async function resolveGrant(req: Request, deps: StaffGateDeps): Promise<StaffGrant | undefined> {
   const mode = staffGateMode();
-  if (mode === "open") return true;
-  if (mode === "locked") return false;
-  return hasStaffSession(req);
+  if (mode === "open") return openGrant();
+  if (mode === "locked") return undefined;
+
+  const session = readSession(readCookie(req, STAFF_SESSION_COOKIE));
+  if (session === undefined) return undefined;
+
+  if (session.emergency) {
+    // The recovery door closes behind itself: once there is an Owner to sign in
+    // as, a session minted from the shared password stops being honoured rather
+    // than lingering for the rest of its twelve hours.
+    if (!(await deps.emergencyAllowed())) return undefined;
+    return { sections: [...NAV_SECTIONS], emergency: true, open: false };
+  }
+
+  if (session.staffId === undefined) return undefined;
+
+  let account: Awaited<ReturnType<StaffGateDeps["account"]>>;
+  try {
+    account = await deps.account(session.staffId);
+  } catch {
+    // Could not ask. Fall back to what the token was issued with.
+    return grantFromToken(session);
+  }
+
+  if (account === undefined) return undefined;
+  if (!account.active) return undefined;
+
+  let sections: readonly SectionKey[];
+  try {
+    sections = await deps.sectionsFor(account.role);
+  } catch {
+    sections = session.sections;
+  }
+
+  const grant: StaffGrant = { sections, emergency: false, open: false, staffId: session.staffId };
+  grant.name = account.name;
+  grant.role = account.role;
+  return grant;
+}
+
+function grantFromToken(session: StaffSession): StaffGrant {
+  const grant: StaffGrant = { sections: session.sections, emergency: false, open: false };
+  if (session.staffId !== undefined) grant.staffId = session.staffId;
+  if (session.name !== undefined) grant.name = session.name;
+  if (session.role !== undefined) grant.role = session.role;
+  return grant;
+}
+
+/** True when this grant may reach a route belonging to any of `sections`. */
+export function grantPermits(grant: StaffGrant, sections: readonly SectionKey[]): boolean {
+  return sections.some((section) => grant.sections.includes(section));
 }
 
 /**
@@ -282,14 +469,51 @@ export function readCookie(req: Request, name: string): string | undefined {
  * exemptions are checked here rather than relying on mount order, so moving the
  * routes around cannot quietly open one.
  */
-export function requireStaffApi(req: Request, res: Response, next: NextFunction): void {
-  if (OPEN_PATHS.has(req.path) || staffAccessAllowed(req)) {
-    next();
-    return;
-  }
-  // 401 rather than 404: the pages' fetch wrapper turns exactly this into a
-  // redirect to the login screen when a session expires mid-service.
-  res.status(401).json({ error: "staff_auth_required", message: "Sign in to use the staff area." });
+export function createRequireStaffApi(deps: StaffGateDeps) {
+  return function requireStaffApi(req: Request, res: Response, next: NextFunction): void {
+    if (OPEN_PATHS.has(req.path)) {
+      next();
+      return;
+    }
+
+    void resolveGrant(req, deps)
+      .then((grant) => {
+        if (grant === undefined) {
+          // 401 rather than 404: the pages' fetch wrapper turns exactly this
+          // into a redirect to the login screen when a session expires
+          // mid-service.
+          res.status(401).json({ error: "staff_auth_required", message: "Sign in to use the staff area." });
+          return;
+        }
+
+        res.locals.staff = grant;
+
+        const sections = sectionsForPath(req.path);
+        if (sections === undefined) {
+          // Fail closed. Either a route was added without a section, or this is
+          // a path no route serves; both are safer refused than allowed.
+          res.status(403).json({
+            error: "staff_section_unknown",
+            message: "That is not a staff route this role can be checked against.",
+          });
+          return;
+        }
+
+        if (!grantPermits(grant, sections)) {
+          // 403, not 401: they are signed in, and signing in again changes
+          // nothing. Only an Owner widening their role would.
+          res.status(403).json({
+            error: "staff_section_forbidden",
+            message: "Your role does not include that part of the staff area.",
+            details: { required: sections, granted: grant.sections },
+          });
+          return;
+        }
+
+        next();
+      })
+      .catch(next);
+  };
 }
 
 /**
@@ -300,12 +524,71 @@ export function requireStaffApi(req: Request, res: Response, next: NextFunction)
  * hide a view that has already been sent. This is what makes the redirect a
  * real gate rather than a cosmetic one.
  */
-export function requireStaffPage(req: Request, res: Response, next: NextFunction): void {
-  if (staffAccessAllowed(req)) {
-    next();
-    return;
-  }
-  res.redirect(302, `${config.staffDashboardPath}/login?next=${encodeURIComponent(req.originalUrl)}`);
+export function createRequireStaffPage(deps: StaffGateDeps, pageSection: (path: string) => SectionKey | undefined) {
+  return function requireStaffPage(req: Request, res: Response, next: NextFunction): void {
+    void resolveGrant(req, deps)
+      .then((grant) => {
+        if (grant === undefined) {
+          res.redirect(302, `${config.staffDashboardPath}/login?next=${encodeURIComponent(req.originalUrl)}`);
+          return;
+        }
+
+        const section = pageSection(req.path);
+        if (section !== undefined && !grantPermits(grant, [section])) {
+          // Enforced here as well as in the nav, because hiding a tab is not a
+          // gate — the URL is still typeable, and the page behind it would have
+          // been sent before its own script could decide otherwise.
+          res.status(403).type("html").send(forbiddenPage(grant));
+          return;
+        }
+
+        next();
+      })
+      .catch(next);
+  };
+}
+
+/**
+ * What somebody sees when they reach a page their role does not include.
+ *
+ * A page rather than a redirect: bouncing them somewhere else makes it look
+ * like the link was broken, and a bookmark that silently lands somewhere
+ * different is worse than being told why. It offers the first section they do
+ * have, so it is never a dead end.
+ */
+function forbiddenPage(grant: StaffGrant): string {
+  const base = config.staffDashboardPath;
+  const first = grant.sections[0];
+  const home = first === undefined ? `${base}/login` : `${base}${PAGE_FOR_SECTION[first]}`;
+  const label = first === undefined ? "Sign in as somebody else" : "Go to what you can open";
+
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Not your section — Anchor &amp; Batter</title>
+<link rel="stylesheet" href="${base}/assets/staff.css" /></head>
+<body class="login-page"><main><div class="login-card">
+<h1>Not your section</h1>
+<p class="sub">${escapeHtml(grant.name ?? "This account")}${
+    grant.role === undefined ? "" : ` (${escapeHtml(grant.role)})`
+  } does not have access to this part of the staff area. Ask an Owner if you need it.</p>
+<a class="advance wide" href="${home}">${label}</a>
+</div></main></body></html>`;
+}
+
+/** Where each section lives, for the "go somewhere you can open" link. */
+const PAGE_FOR_SECTION: Record<SectionKey, string> = {
+  dashboard: "",
+  kitchen_counter: "/kitchen",
+  sales_report: "/sales",
+  menu: "/menu",
+  table_qr: "/qr",
+  approvals: "/approvals",
+  staff: "/accounts",
+};
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }
 
 /**

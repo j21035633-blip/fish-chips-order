@@ -353,6 +353,81 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 .ghost:hover { color: var(--ink); }
 .hint { font-size: 12px; color: var(--ink-soft); }
 
+/* --- roles, and who is signed in ----------------------------------------- */
+.signed-in-slot { display: flex; align-items: center; }
+.signed-in { display: flex; flex-direction: column; line-height: 1.2; text-align: right; }
+.signed-in-name { font-size: 13px; font-weight: 650; }
+.signed-in-role { font-size: 11px; color: var(--ink-soft); }
+/* An emergency session is nobody in particular and can see everything. It says
+   so in the header for as long as it lasts. */
+.signed-in.emergency {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--amber);
+  background: #fdf1dd;
+  border-radius: 999px;
+  padding: 5px 11px;
+  text-align: center;
+}
+
+.roles-section { margin-top: 26px; }
+.roles-section .section-head-row { display: flex; align-items: center; gap: 12px; margin-bottom: 2px; }
+.roles-section .section-head { font-size: 15px; margin: 0; margin-right: auto; }
+.roles-section > .hint { margin: 0 0 14px; }
+.roles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-items: start; }
+.role-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.role-card.reserved { border-left: 3px solid var(--sea); }
+.role-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.role-name { font-weight: 700; font-size: 15px; }
+.role-count { margin-left: auto; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.role-sections { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+/* Every section on every card, granted ones filled: what a role cannot open is
+   as much a fact about it as what it can, and a list of only the granted ones
+   makes the two impossible to compare at a glance. */
+.section-chip {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  background: var(--bg);
+}
+.section-chip.on { background: var(--sea-wash); color: var(--sea); border-color: var(--sea-wash); font-weight: 650; }
+.role-card .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.role-card .row-actions button {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.role-card .row-actions button:hover { color: var(--ink); }
+.role-card .row-actions .destroy:hover { color: var(--danger); border-color: var(--danger); }
+.role-card .row-actions .destroy.confirming { color: var(--danger); border-color: var(--danger); font-weight: 650; }
+.role-card .hint { margin: 0; }
+
+.sections-field { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 0; }
+.sections-field legend { font-size: 12px; color: var(--ink-soft); padding: 0 6px; }
+.section-toggles { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.form-grid .field select {
+  font: inherit;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  width: 100%;
+}
+.form-grid .field select:disabled { color: var(--ink-soft); background: var(--bg); }
+
+/* The emergency door, and the link to it. */
+.login-alt { font-size: 13px; color: var(--ink-soft); margin: 14px 0 0; text-align: center; }
+.login-alt a { color: var(--sea); }
+.emergency-card { border-top: 4px solid var(--amber); }
+.emergency-card .hint { display: block; margin-top: 14px; line-height: 1.5; }
+.emergency-card code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.login-card .advance.wide { display: block; width: 100%; text-align: center; text-decoration: none; }
+
 /* --- staff accounts, and the per-transaction check ----------------------- */
 .visually-hidden {
   position: absolute;

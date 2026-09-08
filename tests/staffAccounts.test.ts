@@ -31,6 +31,7 @@ import {
   normaliseId,
   passwordMatches,
 } from "../src/staff/accounts.js";
+import { InMemoryRoleRepository, RoleService } from "../src/staff/roles.js";
 
 let accounts: StaffAccountService;
 
@@ -235,6 +236,7 @@ describe("over HTTP", () => {
       payments: createPaymentService(orders),
       proofs: new InMemoryProofRepository(),
       staffAccounts: new StaffAccountService(new InMemoryStaffAccountRepository()),
+      staffRoles: new RoleService(new InMemoryRoleRepository()),
       storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} },
     } as unknown as Services;
 
@@ -282,6 +284,10 @@ describe("over HTTP", () => {
 
   describe("the admin routes", () => {
     it("creates, lists, edits and deactivates", async () => {
+      // The role has to exist: an account parked on a name no role record
+      // matches would leave the gate guessing what it may reach.
+      expect((await call("POST", "/api/staff/roles", { name: "Kitchen", permittedSections: ["kitchen_counter"] })).status).toBe(201);
+
       const created = await call("POST", "/api/staff/accounts", {
         staffId: "BW12",
         name: "Ben Wong",
@@ -299,6 +305,10 @@ describe("over HTTP", () => {
       // The hash never crosses the wire, on any route.
       expect(JSON.stringify(listed)).not.toContain("passwordHash");
 
+      // A role nobody created is refused rather than stored.
+      expect((await call("PATCH", "/api/staff/accounts/BW12", { role: "Manager" })).status).toBe(404);
+
+      await call("POST", "/api/staff/roles", { name: "Manager", permittedSections: ["sales_report", "staff"] });
       const edited = await json(await call("PATCH", "/api/staff/accounts/BW12", { role: "Manager" }));
       expect(edited.account).toMatchObject({ staffId: "BW12", name: "Ben Wong", role: "Manager" });
 

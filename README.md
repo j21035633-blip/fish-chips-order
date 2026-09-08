@@ -486,16 +486,69 @@ check immediately, and its code is never handed to anyone else.
 
 A password is stored, hashed with scrypt, for a per-account login later. Nothing reads it yet.
 
-### One shared password, on the pages and the API
+### Everyone signs in as themselves, and a role says what they can open
 
-Everyone behind the counter signs in with the same password, set in `STAFF_PASSWORD`. Not per-user
-accounts: one shop, one tablet on the pass, and individual logins would be ceremony that ends with
-the password written on the wall anyway. The gate covers the four pages *and* every `/api/staff/`
-route — including the ones that write the menu and accept uploads, which is the part path obscurity
-never protected.
+The shared password is no longer how anybody gets in. Each person has a staff account with their own
+password — the hash that has been stored since accounts existed — and a **role**, which is a name and
+a set of the seven nav sections. The session names who is holding it, the nav draws only the tabs
+their role permits, and every `/api/staff` route declares the section it belongs to and returns 403
+if the role does not include it. The nav filtering is presentation; **the gate is the server**, so a
+hidden tab is still a URL that 403s when it is typed, and the page behind it is never sent.
 
-**`STAFF_PASSWORD` must be set in the Railway dashboard.** What an unset password means depends on
-whether the deployment looks public — an https `PUBLIC_BASE_URL`, or `NODE_ENV=production`:
+```
+POST   /api/staff/login              { staffId, password }
+POST   /api/staff/login/emergency    { password }      the shared password, conditions below
+GET    /api/staff/roles              list (needs the staff section)
+POST   /api/staff/roles              Owner only
+PATCH  /api/staff/roles/{name}       Owner only
+DELETE /api/staff/roles/{name}       Owner only, and refused while somebody holds it
+PATCH  /api/staff/accounts/{id}      { role } is Owner only
+```
+
+**Owner is reserved and virtual.** It always has every section, it is never stored, and every route
+that could edit, delete or recreate it refuses. Keeping it out of the database is what makes that
+cheap — there is no row for a bad migration or a stray write to take away, and so no way for a role
+edit to lock the last administrator out of the page they would need to undo it.
+
+**The token is a cache, not the authority.** It carries the sections the role had at sign-in, but the
+gate re-reads the account on every request: narrow a role or deactivate somebody and it takes effect
+on their next request rather than in twelve hours. A lookup that *fails* — as opposed to one that
+comes back empty — falls back to the token, because a database blip must not sign the whole kitchen
+out mid-service.
+
+**Roles migrate from the free text they used to be.** Every distinct `role` value on an existing
+account becomes a real Role with Kitchen & Counter and Menu, at boot, idempotently. Nobody's access
+changes shape on the day of the deploy, and an Owner widens them afterwards on the Staff page. Sales,
+QR codes and other people's accounts are deliberately not granted by a migration nobody chose.
+
+### The shared password, kept only as a way back in
+
+`STAFF_PASSWORD` still turns the gate on and is still the recovery door, and it is nothing else. It
+has its own endpoint and its own page (`/login/emergency`), and it works only while one of two things
+is true:
+
+- **there is no active Owner yet** — the first-run case, where somebody has to be able to get in and
+  create one; or
+- **`STAFF_EMERGENCY_LOGIN=true`** — the documented way back in after losing every Owner. Turn it on,
+  get in, make an Owner, turn it off.
+
+It is not offered on the normal sign-in screen unless the server says it is genuinely the only way
+in, and the door **closes behind itself**: an emergency session stops being honoured the moment
+neither condition holds, so a recovery session does not outlive the recovery.
+
+Set `STAFF_SESSION_SECRET` as well. Sessions used to be signed with a key derived from
+`STAFF_PASSWORD`; they are not tied to it any more, because rotating a recovery credential must not
+sign the whole shop out. With neither set, sessions are signed with a per-process key and everybody
+is signed out on every restart — the server warns about it at boot.
+
+### Turning the gate on
+
+The gate covers every staff page *and* every `/api/staff/` route — including the ones that write the
+menu and accept uploads, which is the part path obscurity never protected. It is on whenever
+`STAFF_SESSION_SECRET` or `STAFF_PASSWORD` is set; who gets through it is the two sections above.
+
+**Set both in the Railway dashboard.** What neither being set means depends on whether the deployment
+looks public — an https `PUBLIC_BASE_URL`, or `NODE_ENV=production`:
 
 | `STAFF_PASSWORD` | Deployment | Staff area | `/health` |
 | --- | --- | --- | --- |

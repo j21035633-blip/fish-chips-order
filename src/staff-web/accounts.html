@@ -12,9 +12,9 @@
 
     <main>
       <p class="empty" id="intro">
-        Who is behind the counter. These are for putting a name on a transaction — the staff ID and
-        name are typed when money is taken, and stamped onto the order. Signing in to this area is
-        still the one shared password, unchanged.
+        Who works here, and what each of them can open. Signing in is per person: a staff ID and their
+        own password. The staff ID and name typed when money is taken is a separate check — see the
+        Kitchen &amp; Counter page.
       </p>
       <table class="accounts" id="accounts">
         <thead>
@@ -29,6 +29,23 @@
         <tbody id="rows"></tbody>
       </table>
       <p id="empty" class="empty" hidden>Nobody added yet.</p>
+
+      <!--
+        Roles, and the sections each one opens. Owner-only, because a role is
+        what decides who can read the takings and who can edit other people's
+        accounts. Hidden entirely rather than shown disabled for anyone else.
+      -->
+      <section id="roles-section" class="roles-section" hidden>
+        <div class="section-head-row">
+          <h2 class="section-head">Roles</h2>
+          <button id="add-role" class="advance" type="button">Add role</button>
+        </div>
+        <p class="hint">
+          A role is a set of pages. Owner always has every page and cannot be changed — it is what
+          stops a role edit locking the last administrator out.
+        </p>
+        <div id="roles" class="roles"></div>
+      </section>
     </main>
 
     <dialog id="form-dialog" class="form-dialog" aria-labelledby="form-title">
@@ -51,17 +68,13 @@
           <div class="form-two">
             <div class="field">
               <label for="staff-role">Role</label>
-              <input id="staff-role" name="role" type="text" maxlength="40" list="roles" placeholder="Cashier" />
-              <datalist id="roles">
-                <option value="Cashier"></option>
-                <option value="Kitchen"></option>
-                <option value="Manager"></option>
-              </datalist>
+              <select id="staff-role" name="role"></select>
+              <span class="hint" id="role-hint">Decides which pages they can open.</span>
             </div>
             <div class="field">
               <label for="staff-password">Password</label>
               <input id="staff-password" name="password" type="password" maxlength="200" autocomplete="new-password" />
-              <span class="hint" id="password-hint">At least 6 characters.</span>
+              <span class="hint" id="password-hint">At least 6 characters. This is what they sign in with.</span>
             </div>
           </div>
         </div>
@@ -75,16 +88,45 @@
       </form>
     </dialog>
 
+    <dialog id="role-dialog" class="form-dialog" aria-labelledby="role-title">
+      <form id="role-form" novalidate>
+        <h2 id="role-title">Add role</h2>
+
+        <div class="form-grid">
+          <div class="field">
+            <label for="role-name">Role name</label>
+            <input id="role-name" name="name" type="text" maxlength="40" required />
+            <span class="hint" id="role-name-hint">e.g. Cashier, Kitchen, Manager.</span>
+          </div>
+
+          <fieldset class="sections-field">
+            <legend>Pages this role can open</legend>
+            <div id="role-sections" class="section-toggles"></div>
+          </fieldset>
+        </div>
+
+        <p id="role-error" class="form-error" hidden></p>
+
+        <div class="form-foot">
+          <button id="role-cancel" class="ghost" type="button">Cancel</button>
+          <button id="role-save" class="advance" type="submit">Add role</button>
+        </div>
+      </form>
+    </dialog>
+
     <script type="module">
       import { api, el, errorBanner } from "{{STAFF_BASE}}/assets/common.js";
-      import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
+      import { mountStaffChrome, staffSession } from "{{STAFF_BASE}}/assets/nav.js";
 
       const { slot } = mountStaffChrome({ title: "Staff" });
       const countEl = el("span", { class: "card-count", text: "—" });
-      slot.append(
-        countEl,
-        el("button", { class: "advance", type: "button", text: "Add staff", onClick: () => openForm(null) }),
-      );
+      const addButton = el("button", {
+        class: "advance",
+        type: "button",
+        text: "Add staff",
+        onClick: () => openForm(null),
+      });
+      slot.append(countEl, addButton);
 
       const rowsEl = document.getElementById("rows");
       const tableEl = document.getElementById("accounts");
@@ -93,26 +135,59 @@
       const form = document.getElementById("account-form");
       const idInput = document.getElementById("staff-id");
       const idHint = document.getElementById("id-hint");
+      const roleSelect = document.getElementById("staff-role");
+      const roleHint = document.getElementById("role-hint");
       const passwordInput = document.getElementById("staff-password");
       const passwordHint = document.getElementById("password-hint");
       const formError = document.getElementById("form-error");
       const saveButton = document.getElementById("save");
       const showError = errorBanner();
 
+      // Roles UI, all of which is Owner-only.
+      const rolesSection = document.getElementById("roles-section");
+      const rolesEl = document.getElementById("roles");
+      const roleDialog = document.getElementById("role-dialog");
+      const roleForm = document.getElementById("role-form");
+      const roleNameInput = document.getElementById("role-name");
+      const roleNameHint = document.getElementById("role-name-hint");
+      const roleSectionsEl = document.getElementById("role-sections");
+      const roleError = document.getElementById("role-error");
+      const roleSaveButton = document.getElementById("role-save");
+
+      /** Section keys the server knows, and how each reads on this page. */
+      const SECTION_LABEL = {
+        dashboard: "Dashboard",
+        kitchen_counter: "Kitchen & Counter",
+        sales_report: "Sales Report",
+        menu: "Menu",
+        table_qr: "Table QR Codes",
+        approvals: "Approvals",
+        staff: "Staff",
+      };
+
       // The account being edited, or null when adding.
       let editing = null;
+      // The role being edited, or null when adding.
+      let editingRole = null;
       // Which row is one tap from being deactivated. A confirm step in the row
       // rather than a modal, the same as the menu page's delete.
       let confirming = null;
+      let confirmingRole = null;
       let busy = new Set();
+      let roles = [];
+      let sections = Object.keys(SECTION_LABEL);
+      let isOwner = false;
 
       // ------------------------------------------------------------- listing
 
       async function refresh() {
         try {
-          const { accounts } = await api("/api/staff/accounts");
+          const [{ accounts }, roleData] = await Promise.all([api("/api/staff/accounts"), api("/api/staff/roles")]);
+          roles = roleData.roles;
+          if (Array.isArray(roleData.sections) && roleData.sections.length > 0) sections = roleData.sections;
           showError();
           draw(accounts);
+          drawRoles();
         } catch (error) {
           showError(error.message);
         }
@@ -162,6 +237,48 @@
         ]);
       }
 
+      function drawRoles() {
+        rolesSection.hidden = !isOwner;
+        if (!isOwner) return;
+
+        rolesEl.replaceChildren(
+          ...roles.map((role) => {
+            const armed = confirmingRole === role.name;
+
+            return el("article", { class: `role-card${role.reserved ? " reserved" : ""}` }, [
+              el("div", { class: "role-head" }, [
+                el("span", { class: "role-name", text: role.name }),
+                role.reserved ? el("span", { class: "tag paid", text: "Reserved" }) : null,
+                el("span", { class: "role-count", text: `${role.permittedSections.length} of ${sections.length}` }),
+              ]),
+              el(
+                "div",
+                { class: "role-sections" },
+                sections.map((section) =>
+                  el("span", {
+                    class: role.permittedSections.includes(section) ? "section-chip on" : "section-chip",
+                    text: SECTION_LABEL[section] ?? section,
+                  }),
+                ),
+              ),
+              // Owner carries no controls at all, rather than disabled ones:
+              // there is nothing to do to it, and a greyed button invites a try.
+              role.reserved
+                ? el("p", { class: "hint", text: "Always every page. Cannot be edited or deleted." })
+                : el("div", { class: "row-actions" }, [
+                    el("button", { type: "button", text: "Edit", onClick: () => openRoleForm(role) }),
+                    el("button", {
+                      class: armed ? "destroy confirming" : "destroy",
+                      type: "button",
+                      text: armed ? "Really delete?" : "Delete",
+                      onClick: () => removeRole(role),
+                    }),
+                  ]),
+            ]);
+          }),
+        );
+      }
+
       // ------------------------------------------------------------- actions
 
       /** Two taps: the first names what will happen, the second does it. */
@@ -199,6 +316,25 @@
         }
       }
 
+      async function removeRole(role) {
+        if (confirmingRole !== role.name) {
+          confirmingRole = role.name;
+          drawRoles();
+          return;
+        }
+
+        confirmingRole = null;
+        try {
+          await api(`/api/staff/roles/${encodeURIComponent(role.name)}`, { method: "DELETE" });
+          showError();
+        } catch (error) {
+          // Usually "somebody still has this role" — which names them, so it is
+          // worth showing rather than swallowing.
+          showError(error.message);
+        }
+        await refresh();
+      }
+
       // ---------------------------------------------------------------- form
 
       function openForm(account) {
@@ -218,11 +354,24 @@
           : "2–12 letters, digits or dashes. Leave blank to generate one.";
 
         document.getElementById("staff-name").value = account?.name ?? "";
-        document.getElementById("staff-role").value = account?.role ?? "";
+
+        // Only an Owner may assign a role. For anyone else the field shows what
+        // the account has and is not sendable — the server refuses it either way.
+        const current = account?.role ?? "";
+        const options = roles.map((role) => role.name);
+        if (current && !options.includes(current)) options.push(current);
+        roleSelect.replaceChildren(
+          ...options.map((name) => el("option", { value: name, text: name, selected: name === current })),
+        );
+        roleSelect.disabled = !isOwner;
+        roleHint.textContent = isOwner
+          ? "Decides which pages they can open."
+          : "Only an Owner can change somebody's role.";
+
         passwordInput.value = "";
         passwordHint.textContent = account
           ? "Leave blank to keep the current password."
-          : "At least 6 characters.";
+          : "At least 6 characters. This is what they sign in with.";
 
         saveButton.textContent = account ? "Save changes" : "Add staff member";
         dialog.showModal();
@@ -235,8 +384,11 @@
         formError.hidden = true;
 
         const name = document.getElementById("staff-name").value.trim();
-        const role = document.getElementById("staff-role").value.trim();
+        const role = roleSelect.value;
         const password = passwordInput.value;
+        // Sent only when this session may actually set it; otherwise the server
+        // would refuse an edit that changed nothing about the role.
+        const rolePart = isOwner && role ? { role } : {};
 
         saveButton.disabled = true;
         try {
@@ -245,7 +397,7 @@
             // it" — so the field is only sent when something was typed into it.
             await api(`/api/staff/accounts/${encodeURIComponent(editing.staffId)}`, {
               method: "PATCH",
-              body: JSON.stringify({ name, role, ...(password ? { password } : {}) }),
+              body: JSON.stringify({ name, ...rolePart, ...(password ? { password } : {}) }),
             });
           } else {
             await api("/api/staff/accounts", {
@@ -254,7 +406,7 @@
                 // Blank means "generate one from the name".
                 ...(idInput.value.trim() ? { staffId: idInput.value.trim() } : {}),
                 name,
-                role,
+                ...rolePart,
                 password,
               }),
             });
@@ -267,6 +419,84 @@
         } finally {
           saveButton.disabled = false;
         }
+      });
+
+      // ----------------------------------------------------------- role form
+
+      function openRoleForm(role) {
+        editingRole = role;
+        confirmingRole = null;
+
+        document.getElementById("role-title").textContent = role ? `Edit ${role.name}` : "Add role";
+        roleForm.reset();
+        roleError.hidden = true;
+
+        roleNameInput.value = role?.name ?? "";
+        // The name is what every account holding it points at, so renaming would
+        // unassign everybody. Shown, fixed.
+        roleNameInput.disabled = role !== null;
+        roleNameHint.textContent = role
+          ? "Fixed — accounts point at it by name."
+          : "e.g. Cashier, Kitchen, Manager.";
+
+        const permitted = role?.permittedSections ?? [];
+        roleSectionsEl.replaceChildren(
+          ...sections.map((section) =>
+            el("label", { class: "checkbox" }, [
+              el("input", {
+                type: "checkbox",
+                value: section,
+                checked: permitted.includes(section),
+                "data-section": section,
+              }),
+              el("span", { text: SECTION_LABEL[section] ?? section }),
+            ]),
+          ),
+        );
+
+        roleSaveButton.textContent = role ? "Save changes" : "Add role";
+        roleDialog.showModal();
+      }
+
+      document.getElementById("add-role").addEventListener("click", () => openRoleForm(null));
+      document.getElementById("role-cancel").addEventListener("click", () => roleDialog.close());
+
+      roleForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        roleError.hidden = true;
+
+        const permittedSections = [...roleSectionsEl.querySelectorAll("input[type=checkbox]")]
+          .filter((box) => box.checked)
+          .map((box) => box.dataset.section);
+
+        roleSaveButton.disabled = true;
+        try {
+          if (editingRole) {
+            await api(`/api/staff/roles/${encodeURIComponent(editingRole.name)}`, {
+              method: "PATCH",
+              body: JSON.stringify({ permittedSections }),
+            });
+          } else {
+            await api("/api/staff/roles", {
+              method: "POST",
+              body: JSON.stringify({ name: roleNameInput.value.trim(), permittedSections }),
+            });
+          }
+          roleDialog.close();
+          await refresh();
+        } catch (error) {
+          roleError.textContent = error.message;
+          roleError.hidden = false;
+        } finally {
+          roleSaveButton.disabled = false;
+        }
+      });
+
+      // The Owner-only parts are drawn from what the server says this session
+      // is, not from anything the page decides for itself.
+      void staffSession().then((session) => {
+        isOwner = session.isOwner === true;
+        drawRoles();
       });
 
       void refresh();

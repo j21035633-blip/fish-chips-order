@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Emergency access — Anchor &amp; Batter</title>
+    <link rel="stylesheet" href="{{STAFF_BASE}}/assets/staff.css" />
+  </head>
+  <body class="login-page" data-staff-base="{{STAFF_BASE}}" data-staff-view="login">
+    <main>
+      <form id="login-form" class="login-card emergency-card" novalidate>
+        <h1>Emergency access</h1>
+        <p class="sub">
+          The shop-wide password, for two situations only: setting up the very first Owner account, or
+          getting back in after every Owner account has been lost. It grants every section and puts
+          nobody's name on anything.
+        </p>
+
+        <div class="field">
+          <label for="password">Shop password</label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            autocapitalize="off"
+            spellcheck="false"
+            required
+            autofocus
+          />
+        </div>
+
+        <p id="form-error" class="form-error" hidden></p>
+
+        <button id="submit" class="advance" type="submit">Sign in for recovery</button>
+
+        <p class="login-alt">
+          <a href="{{STAFF_BASE}}/login">Back to normal sign in</a>
+        </p>
+
+        <p class="hint">
+          Once an Owner account exists this door closes on its own, and any session opened through it
+          stops working. To reopen it after losing every Owner, set <code>STAFF_EMERGENCY_LOGIN=true</code>,
+          sign in here, make a new Owner, then unset it again.
+        </p>
+      </form>
+    </main>
+
+    <script type="module">
+      import { staffBase } from "{{STAFF_BASE}}/assets/nav.js";
+
+      const form = document.getElementById("login-form");
+      const password = document.getElementById("password");
+      const submit = document.getElementById("submit");
+      const error = document.getElementById("form-error");
+
+      function showError(message) {
+        error.textContent = message ?? "";
+        error.hidden = !message;
+      }
+
+      /**
+       * Nothing to recover.
+       *
+       * Reached by typing this URL on a shop that already has an Owner. The form
+       * is disabled rather than left live, because every attempt would be refused
+       * and the honest answer is "sign in as yourself".
+       */
+      function showClosed(message) {
+        password.disabled = true;
+        submit.disabled = true;
+        showError(message);
+      }
+
+      // Straight to the Staff page: creating the first Owner is the only reason
+      // to be here, and that is where it is done.
+      const afterLogin = () => `${staffBase()}/accounts`;
+
+      fetch("/api/staff/session")
+        .then((response) => response.json())
+        .then((session) => {
+          if (session.configured === false) {
+            showClosed("No shop password is configured on the server. Set STAFF_PASSWORD and redeploy.");
+            return;
+          }
+          if (session.bootstrapAvailable !== true) {
+            showClosed(
+              "Emergency access is closed because this shop already has an Owner account. " +
+                "Sign in with your own staff ID instead.",
+            );
+          }
+        })
+        .catch(() => {
+          // Offline. Let them try; the endpoint is the one that decides.
+        });
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        showError();
+        submit.disabled = true;
+
+        try {
+          const response = await fetch("/api/staff/login/emergency", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ password: password.value }),
+          });
+          const body = await response.json().catch(() => ({}));
+
+          if (response.ok) {
+            location.replace(afterLogin());
+            return;
+          }
+
+          if (response.status === 403 || response.status === 503) {
+            showClosed(body.message ?? "Emergency access is not available.");
+            return;
+          }
+
+          showError(body.message ?? `Sign in failed (${response.status})`);
+          password.select();
+        } catch (failure) {
+          showError(failure.message ?? "Could not reach the server.");
+        } finally {
+          if (!password.disabled) submit.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

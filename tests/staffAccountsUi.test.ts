@@ -267,10 +267,23 @@ describe("the Staff page", () => {
     expect(html()).toContain("...(password ? { password } : {})");
   });
 
-  it("says plainly that this is not the sign-in", () => {
-    // The shared password is unchanged, and a manager reading this page should
-    // not think it replaced anything.
-    expect(html()).toMatch(/still the one shared password/);
+  it("says these accounts are the sign-in, and that cashiering is a separate check", () => {
+    // Both halves matter to whoever reads this page: the password on an account
+    // is now what gets somebody in, and the id-and-name typed at the till is
+    // still its own thing and not affected by any of it.
+    const source = html();
+    expect(source).toMatch(/Signing in is per person/);
+    expect(source).toMatch(/separate check/);
+  });
+
+  it("keeps roles behind an Owner check that comes from the server", () => {
+    const source = html();
+    expect(source).toContain('id="roles-section"');
+    expect(source).toContain("isOwner = session.isOwner === true;");
+    // Hidden outright rather than shown disabled — a greyed control invites a try.
+    expect(source).toContain("rolesSection.hidden = !isOwner;");
+    // And Owner itself carries no controls at all.
+    expect(source).toContain("role.reserved");
   });
 
   it("styles a deactivated row as readable rather than hidden", () => {

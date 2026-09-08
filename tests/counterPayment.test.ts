@@ -19,6 +19,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { Services } from "../src/app/container.js";
 import { InMemoryProofRepository } from "../src/game/proofs.js";
 import { InMemoryStaffAccountRepository, StaffAccountService } from "../src/staff/accounts.js";
+import { InMemoryRoleRepository, RoleService } from "../src/staff/roles.js";
 import { createServer } from "../src/http/app.js";
 import { menuService } from "../src/menu/service.js";
 import { InMemoryCartRepository, InMemoryOrderRepository } from "../src/orders/repository.js";
@@ -218,6 +219,7 @@ describe("over HTTP", () => {
       payments: new PaymentService(orderService, [new StripeAdapter(NO_KEYS, BASE_URL)], BASE_URL),
       proofs: new InMemoryProofRepository(),
       staffAccounts: accounts,
+      staffRoles: new RoleService(new InMemoryRoleRepository()),
       storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} },
     } as unknown as Services;
 

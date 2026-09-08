@@ -11,6 +11,7 @@ import {
 import { CartService, OrderService } from "../orders/service.js";
 import { createPaymentService, PaymentService } from "../payments/service.js";
 import { InMemoryStaffAccountRepository, StaffAccountService } from "../staff/accounts.js";
+import { InMemoryRoleRepository, RoleService } from "../staff/roles.js";
 import { MongoStorage, type IndexState } from "../storage/mongo.js";
 
 /**
@@ -53,6 +54,11 @@ export interface Services {
    * gets in, this decides whose name goes on a transaction.
    */
   staffAccounts: StaffAccountService;
+  /**
+   * Roles and what each may reach. Read by the staff gate on every request, so
+   * a role narrowed on the Staff page takes effect on the next one.
+   */
+  staffRoles: RoleService;
 }
 
 export function createServices(): Services {
@@ -82,6 +88,7 @@ export function createServices(): Services {
     staffAccounts: new StaffAccountService(
       mongo ? mongo.staffAccounts() : new InMemoryStaffAccountRepository(),
     ),
+    staffRoles: new RoleService(mongo ? mongo.roles() : new InMemoryRoleRepository()),
   };
 }
 

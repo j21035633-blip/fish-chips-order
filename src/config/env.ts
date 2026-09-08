@@ -82,6 +82,24 @@ export interface AppConfig {
    */
   staffPassword: string | undefined;
   /**
+   * Signs the session cookie.
+   *
+   * Separate from the password now that the password is only the emergency
+   * door: rotating a recovery credential must not sign the whole shop out.
+   * Falls back to `STAFF_PASSWORD`, so a deployment that has not set this keeps
+   * working; with neither, sessions are signed with a per-process key and do not
+   * survive a restart. See `sessionKey` in `staff/auth.ts`.
+   */
+  staffSessionSecret: string | undefined;
+  /**
+   * Forces the shared-password door open even once there is an Owner.
+   *
+   * The documented way back in when every Owner account is lost or locked out.
+   * Off unless explicitly set, because it is a shop-wide password that grants
+   * every section — turn it on, get back in, make a new Owner, turn it off.
+   */
+  staffEmergencyLogin: boolean;
+  /**
    * Where uploaded menu-item images are written, and what `/uploads` serves.
    *
    * Defaults to `uploads` beside the working directory, which on Railway (whose
@@ -101,6 +119,8 @@ export function loadConfig(): AppConfig {
     businessTimeZone: str("BUSINESS_TIMEZONE") ?? "Asia/Kuala_Lumpur",
     staffDashboardPath: normalisePath(str("STAFF_DASHBOARD_PATH") ?? "/staff"),
     staffPassword: str("STAFF_PASSWORD"),
+    staffSessionSecret: str("STAFF_SESSION_SECRET"),
+    staffEmergencyLogin: (str("STAFF_EMERGENCY_LOGIN") ?? "").toLowerCase() === "true",
     uploadsDir: resolve(str("UPLOADS_DIR") ?? "uploads"),
     mongo: {
       // Railway's own MongoDB service publishes MONGO_URL; accept it so the

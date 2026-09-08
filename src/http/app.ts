@@ -18,13 +18,15 @@ import { PaymentProviderError } from "../payments/types.js";
 import { expandTables, MAX_TABLES, tableCodes } from "../qr/tables.js";
 import {
   clearLoginFailures,
-  hasStaffSession,
   issueSession,
   loginRetryAfter,
   passwordMatches,
   recordLoginFailure,
-  requireStaffApi,
-  requireStaffPage,
+  createRequireStaffApi,
+  createRequireStaffPage,
+  issueEmergencySession,
+  resolveGrant,
+  type StaffGrant,
   readCookie,
   revokeSession,
   sessionCookieOptions,
@@ -34,6 +36,7 @@ import {
   throttleKey,
 } from "../staff/auth.js";
 import { StaffAccountError } from "../staff/accounts.js";
+import { isOwnerRole, NAV_SECTIONS, OWNER_ROLE, RoleError, type SectionKey } from "../staff/roles.js";
 import { createMenuTools } from "../tools/menuTools.js";
 import { createOrderTools } from "../tools/orderTools.js";
 
@@ -317,6 +320,29 @@ export function createServer(app: Services = services) {
    * protect it. Login and logout are exempted inside the middleware rather than
    * by sitting above it, so reordering this file cannot open a hole.
    */
+  /**
+   * What the gate needs to answer a request: the account behind the session, the
+   * sections its role currently permits, and whether the recovery door is open.
+   *
+   * Read live rather than trusted from the token — see `resolveGrant`.
+   */
+  const gateDeps = {
+    async account(staffId: string) {
+      try {
+        const account = await app.staffAccounts.get(staffId);
+        return { name: account.name, role: account.role, active: account.active };
+      } catch (error) {
+        // "No such account" is an answer; anything else is a failure to ask, and
+        // `resolveGrant` treats the two differently on purpose.
+        if (error instanceof StaffAccountError) return undefined;
+        throw error;
+      }
+    },
+    sectionsFor: (roleName: string | undefined) => app.staffRoles.sectionsFor(roleName),
+    emergencyAllowed: () => emergencyLoginAllowed(app),
+  };
+
+  const requireStaffApi = createRequireStaffApi(gateDeps);
   server.use("/api/staff", requireStaffApi);
 
   /**
@@ -328,29 +354,62 @@ export function createServer(app: Services = services) {
    * to avoid presenting a form that cannot succeed.
    */
   server.get("/api/staff/session", (req, res) => {
-    res.json({
-      authenticated: hasStaffSession(req),
-      authRequired: staffGateMode() !== "open",
-      configured: staffAuthEnabled(),
+    void runAsync(res, async () => {
+      const grant = await resolveGrant(req, gateDeps);
+      return {
+        authenticated: grant !== undefined,
+        authRequired: staffGateMode() !== "open",
+        // "Is there anything to sign in with?" — false only on the locked
+        // deployment, where the honest answer to `authRequired` is yes and to
+        // this is no. The login page needs both halves to explain itself.
+        configured: staffGateMode() !== "locked",
+        // What the nav draws from. Absent when nobody is signed in, so the page
+        // renders nothing rather than guessing.
+        staffId: grant?.staffId ?? null,
+        name: grant?.name ?? null,
+        role: grant?.role ?? null,
+        isOwner: grant === undefined ? false : grant.open || grant.emergency || isOwnerRole(grant.role),
+        sections: grant?.sections ?? [],
+        emergency: grant?.emergency ?? false,
+        // Only true while the shared-password door is genuinely usable, so the
+        // sign-in screen can offer it exactly when it is the only way in.
+        bootstrapAvailable: await emergencyLoginAllowed(app),
+      };
     });
   });
 
+  /**
+   * Signing in as yourself.
+   *
+   * The staff id and the password on that account — the hash that has been
+   * stored since accounts existed and that nothing used to read. The session it
+   * mints carries who they are and the sections their role permits.
+   *
+   * The failed-attempt throttle is per client address rather than per account,
+   * on purpose: it is there to stop somebody working through the staff codes at
+   * machine speed, and a per-account counter would let them do exactly that one
+   * account at a time — while handing anyone a way to lock a cashier out of
+   * their own till by guessing wrong at them.
+   */
   server.post("/api/staff/login", (req, res) => {
-    run(res, () => {
-      if (!staffAuthEnabled()) {
-        if (staffGateMode() === "locked") {
-          // No password on a public deployment. There is no value to type that
-          // would work, so say that rather than rejecting every attempt as
-          // though the person at the tablet had got it wrong.
-          res.status(503).json({
-            error: "staff_auth_unconfigured",
-            message: "The staff area is closed because no password is configured. Set STAFF_PASSWORD and redeploy.",
-          });
-          return undefined;
-        }
+    void runAsync(res, async () => {
+      const mode = staffGateMode();
+      if (mode === "open") {
         // Nothing to sign in to. Saying so beats a 401 the page cannot act on:
         // the caller is already through the door.
         res.json({ ok: true, authRequired: false });
+        return undefined;
+      }
+      if (mode === "locked") {
+        // A public deployment with neither secret set. No staff id and password
+        // would work, so say that rather than rejecting every attempt as though
+        // the person at the tablet had got it wrong.
+        res.status(503).json({
+          error: "staff_auth_unconfigured",
+          message:
+            "The staff area is closed because nothing is configured on the server. " +
+            "Set STAFF_SESSION_SECRET (and STAFF_PASSWORD for recovery) and redeploy.",
+        });
         return undefined;
       }
 
@@ -366,18 +425,94 @@ export function createServer(app: Services = services) {
         return undefined;
       }
 
-      const { password } = staffLoginInput.parse(req.body ?? {});
+      const input = staffLoginInput.parse(req.body ?? {});
+
+      let account;
+      try {
+        account = await app.staffAccounts.login(input.staffId, input.password);
+      } catch (error) {
+        recordLoginFailure(key);
+        throw error;
+      }
+
+      clearLoginFailures(key);
+      const sections = await app.staffRoles.sectionsFor(account.role);
+      res.cookie(
+        STAFF_SESSION_COOKIE,
+        issueSession({ staffId: account.staffId, name: account.name, role: account.role, sections }),
+        sessionCookieOptions(),
+      );
+      return {
+        ok: true,
+        authRequired: true,
+        staffId: account.staffId,
+        name: account.name,
+        role: account.role,
+        sections,
+        isOwner: isOwnerRole(account.role),
+      };
+    });
+  });
+
+  /**
+   * The shared password, kept only as a door of last resort.
+   *
+   * Deliberately its own route and its own page. It grants every section without
+   * naming anybody, which is exactly what you want for bootstrapping the first
+   * Owner and exactly what you do not want as an ordinary way in — so it is
+   * usable only while one of two things is true:
+   *
+   * - **there is no active Owner yet**, which is the first-run case: somebody has
+   *   to be able to get in and create one; or
+   * - **`STAFF_EMERGENCY_LOGIN=true`**, the documented way back in when every
+   *   Owner account has been lost. Turn it on, get in, make an Owner, turn it off.
+   *
+   * The door closes behind itself: `resolveGrant` stops honouring an emergency
+   * session the moment neither condition holds, so a recovery session does not
+   * outlive the recovery.
+   */
+  server.post("/api/staff/login/emergency", (req, res) => {
+    void runAsync(res, async () => {
+      if (!staffAuthEnabled()) {
+        res.status(503).json({
+          error: "staff_auth_unconfigured",
+          message: "There is no emergency password configured. Set STAFF_PASSWORD and redeploy.",
+        });
+        return undefined;
+      }
+
+      if (!(await emergencyLoginAllowed(app))) {
+        res.status(403).json({
+          error: "emergency_login_closed",
+          message:
+            "Emergency sign-in is closed because this shop already has an Owner account. " +
+            "Sign in with your own staff ID, or set STAFF_EMERGENCY_LOGIN=true to reopen it.",
+        });
+        return undefined;
+      }
+
+      const key = throttleKey(req);
+      const retryAfter = loginRetryAfter(key);
+      if (retryAfter > 0) {
+        res.setHeader("retry-after", String(retryAfter));
+        res.status(429).json({
+          error: "too_many_attempts",
+          message: `Too many failed attempts. Try again in ${Math.ceil(retryAfter / 60)} minute(s).`,
+          retryAfter,
+        });
+        return undefined;
+      }
+
+      const { password } = emergencyLoginInput.parse(req.body ?? {});
       if (!passwordMatches(password)) {
         recordLoginFailure(key);
-        // No detail, deliberately: "wrong password" and "no password set" must
-        // look identical from outside.
         res.status(401).json({ error: "invalid_password", message: "That password is not right." });
         return undefined;
       }
 
       clearLoginFailures(key);
-      res.cookie(STAFF_SESSION_COOKIE, issueSession(), sessionCookieOptions());
-      return { ok: true, authRequired: true };
+      res.cookie(STAFF_SESSION_COOKIE, issueEmergencySession(), sessionCookieOptions());
+      return { ok: true, emergency: true, sections: [...NAV_SECTIONS] };
     });
   });
 
@@ -576,6 +711,11 @@ export function createServer(app: Services = services) {
   server.post("/api/staff/accounts", (req, res) => {
     void runAsync(res, async () => {
       const input = staffAccountInput.parse(req.body ?? {});
+      // Naming a role is assigning one, whether the account is new or not.
+      if (input.role !== undefined) {
+        requireOwner(res);
+        await app.staffRoles.get(input.role);
+      }
       const account = await app.staffAccounts.create(input);
       res.status(201).json({ account });
       return undefined;
@@ -591,6 +731,12 @@ export function createServer(app: Services = services) {
   server.patch("/api/staff/accounts/:staffId", (req: Request<{ staffId: string }>, res) => {
     void runAsync(res, async () => {
       const input = staffAccountPatch.parse(req.body ?? {});
+      if (input.role !== undefined) {
+        requireOwner(res);
+        // Refuses a role that does not exist, so an account cannot be parked on
+        // a name the gate would then have to guess the sections for.
+        await app.staffRoles.get(input.role);
+      }
       // `active` is its own instruction rather than a field of the patch, so a
       // form resubmitting everything it loaded cannot silently reinstate
       // somebody who was taken off the till.
@@ -610,6 +756,47 @@ export function createServer(app: Services = services) {
       account: await app.staffAccounts.deactivate(req.params.staffId),
       deactivated: true,
     }));
+  });
+
+  // ------------------------------------------------------------ staff roles
+  /**
+   * Roles and what each one can reach.
+   *
+   * Reading is open to anyone with the staff section, because the account form
+   * needs the list to offer it. Writing is Owner-only: a role is the thing that
+   * decides who can see the till takings and who can edit other people's
+   * accounts, so widening one has to be a decision an Owner made.
+   */
+  server.get("/api/staff/roles", (_req, res) => {
+    void runAsync(res, async () => ({ roles: await app.staffRoles.list(), sections: [...NAV_SECTIONS] }));
+  });
+
+  server.post("/api/staff/roles", (req, res) => {
+    void runAsync(res, async () => {
+      requireOwner(res);
+      const role = await app.staffRoles.create(roleInput.parse(req.body ?? {}));
+      res.status(201).json({ role });
+      return undefined;
+    });
+  });
+
+  server.patch("/api/staff/roles/:name", (req: Request<{ name: string }>, res) => {
+    void runAsync(res, async () => {
+      requireOwner(res);
+      const input = rolePatch.parse(req.body ?? {});
+      return { role: await app.staffRoles.update(req.params.name, input) };
+    });
+  });
+
+  server.delete("/api/staff/roles/:name", (req: Request<{ name: string }>, res) => {
+    void runAsync(res, async () => {
+      requireOwner(res);
+      // Who still holds it, so the refusal can name them rather than just
+      // saying no.
+      const holders = await app.staffAccounts.holdersOf(req.params.name);
+      const role = await app.staffRoles.remove(req.params.name, holders);
+      return { deleted: true, role: role.name };
+    });
   });
 
   // --------------------------------------------------------- staff approvals
@@ -818,12 +1005,34 @@ export function createServer(app: Services = services) {
     // The one page that must not be behind the gate, or there is no way through
     // it. It carries no data — just a password field.
     server.get(`${config.staffDashboardPath}/login`, staffPage("login.html"));
+    // Ungated like the login screen, and for the same reason: it is the way in.
+    // What keeps it from being a second front door is the endpoint behind it,
+    // which refuses once the shop has an Owner.
+    server.get(`${config.staffDashboardPath}/login/emergency`, staffPage("emergency.html"));
 
     // Four views over one area. Each is its own document rather than a client
     // router, so a tablet on the pass reloads into the view it was showing —
     // and each is guarded server-side, so an unauthenticated reload lands on
     // the login screen instead of a page that renders and then thinks better
     // of it.
+    /**
+     * Every staff page and the section it belongs to.
+     *
+     * The pages are gated on this as well as the nav being filtered, because
+     * hiding a tab is not a gate: the URL is still typeable and the document
+     * would already have been sent before its own script could object.
+     */
+    const PAGE_SECTIONS: Record<string, SectionKey> = {
+      [config.staffDashboardPath]: "dashboard",
+      [`${config.staffDashboardPath}/kitchen`]: "kitchen_counter",
+      [`${config.staffDashboardPath}/sales`]: "sales_report",
+      [`${config.staffDashboardPath}/menu`]: "menu",
+      [`${config.staffDashboardPath}/qr`]: "table_qr",
+      [`${config.staffDashboardPath}/approvals`]: "approvals",
+      [`${config.staffDashboardPath}/accounts`]: "staff",
+    };
+    const requireStaffPage = createRequireStaffPage(gateDeps, (path) => PAGE_SECTIONS[path]);
+
     server.get(config.staffDashboardPath, requireStaffPage, staffPage("staff.html"));
     server.get(`${config.staffDashboardPath}/kitchen`, requireStaffPage, staffPage("kitchen.html"));
     server.get(`${config.staffDashboardPath}/sales`, requireStaffPage, staffPage("sales.html"));
@@ -931,6 +1140,7 @@ const staffAccountInput = z.object({
 
 const staffAccountPatch = z.object({
   name: z.string().optional(),
+  /** Owner-only, and checked against a real role — see the route. */
   role: z.string().optional(),
   /** Absent leaves the stored hash alone; present resets it. */
   password: z.string().optional(),
@@ -943,7 +1153,17 @@ const staffAccountPatch = z.object({
  * non-empty so a blank field is a 400 the form can explain rather than a 401
  * that reads as a wrong password.
  */
-const staffLoginInput = z.object({ password: z.string().min(1).max(200) });
+const staffLoginInput = z.object({ staffId: z.string().min(1).max(12), password: z.string().min(1).max(200) });
+
+/** The recovery door still takes only the one shared password. */
+const emergencyLoginInput = z.object({ password: z.string().min(1).max(200) });
+
+const roleInput = z.object({
+  name: z.string(),
+  permittedSections: z.array(z.string()).optional(),
+});
+
+const rolePatch = z.object({ permittedSections: z.array(z.string()).optional() });
 
 const availabilityInput = z.object({ available: z.boolean() });
 
@@ -1167,6 +1387,41 @@ async function runAsync(res: Response, handler: () => unknown): Promise<void> {
   }
 }
 
+/**
+ * Whether the shared-password door is currently usable.
+ *
+ * Two ways, and only two: the shop has no active Owner to sign in as — the
+ * first-run case — or somebody deliberately set `STAFF_EMERGENCY_LOGIN`, which
+ * is the documented way back in after losing every Owner account.
+ */
+async function emergencyLoginAllowed(app: Services): Promise<boolean> {
+  if (!staffAuthEnabled()) return false;
+  if (config.staffEmergencyLogin) return true;
+  return !(await app.staffAccounts.hasActiveOwner());
+}
+
+/**
+ * Refuses anyone who is not an Owner.
+ *
+ * Thrown rather than returned so a route cannot forget to check the answer. The
+ * gate has already established that they may reach the staff section at all;
+ * this is the narrower question of whether they may change what a role can do.
+ *
+ * An open deployment and an emergency session both pass, because both are
+ * already unrestricted — the first has no gate, and the second exists precisely
+ * to create the Owner this would otherwise require.
+ */
+function requireOwner(res: Response): void {
+  const grant = res.locals.staff as StaffGrant | undefined;
+  if (grant === undefined || grant.open || grant.emergency || isOwnerRole(grant.role)) return;
+
+  throw new RoleError(
+    `Only an ${OWNER_ROLE} can change roles or assign one.`,
+    "owner_required",
+    { role: grant.role ?? null },
+  );
+}
+
 function respondToError(res: Response, error: unknown): void {
   if (error instanceof ZodError) {
     res.status(400).json({ error: "invalid_request", issues: error.issues });
@@ -1186,12 +1441,36 @@ function respondToError(res: Response, error: unknown): void {
     res.status(status).json({ error: error.code, message: error.message, details: error.details });
     return;
   }
+  if (error instanceof RoleError) {
+    // `owner_required` is a 403 — they are signed in and it will not help to do
+    // it again. A reserved-role edit is a 403 too, because no amount of
+    // permission makes Owner editable.
+    const status =
+      error.code === "unknown_role"
+        ? 404
+        : error.code === "owner_required" || error.code === "reserved_role"
+          ? 403
+          : error.code === "duplicate_role"
+            ? 409
+            : 400;
+    res.status(status).json({ error: error.code, message: error.message, details: error.details });
+    return;
+  }
   if (error instanceof StaffAccountError) {
     // A missing account is a 404 on the admin routes; a code already in use is
     // a conflict; everything else — including a cashier's id/name pair that does
     // not check out — is something the person at the keyboard can fix.
     const status =
-      error.code === "unknown_staff_account" ? 404 : error.code === "duplicate_staff_id" ? 409 : 400;
+      error.code === "unknown_staff_account"
+        ? 404
+        : error.code === "duplicate_staff_id"
+          ? 409
+          : // A failed sign-in is a 401 so the login page can tell it apart from a
+            // malformed request, and so the fetch wrapper's redirect-on-401 does
+            // not fire on the page that *is* the login screen.
+            error.code === "invalid_credentials" || error.code === "account_inactive"
+            ? 401
+            : 400;
     res.status(status).json({ error: error.code, message: error.message, details: error.details });
     return;
   }

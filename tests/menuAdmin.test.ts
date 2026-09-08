@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Services } from "../src/app/container.js";
 import { InMemoryProofRepository } from "../src/game/proofs.js";
 import { InMemoryStaffAccountRepository, StaffAccountService } from "../src/staff/accounts.js";
+import { InMemoryRoleRepository, RoleService } from "../src/staff/roles.js";
 import { config } from "../src/config/env.js";
 import { createServer } from "../src/http/app.js";
 import { MenuService } from "../src/menu/service.js";
@@ -43,6 +44,7 @@ function buildServices(): Services {
     payments: createPaymentService(orders),
     proofs: new InMemoryProofRepository(),
     staffAccounts: new StaffAccountService(new InMemoryStaffAccountRepository()),
+    staffRoles: new RoleService(new InMemoryRoleRepository()),
     storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} } as const,
   };
 }

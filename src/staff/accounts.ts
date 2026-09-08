@@ -1,5 +1,7 @@
 import { randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
 
+import { isOwnerRole } from "./roles.js";
+
 /**
  * Individual staff accounts, for **attribution** — not for signing in.
  *
@@ -10,9 +12,9 @@ import { randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto
  * cashier types at the moment they take a payment, checked against a real
  * active record, and stamped onto the order.
  *
- * The password is hashed and stored because these records are the obvious
- * foundation for per-user login later, and a column added afterwards would mean
- * a shop-wide password reset. Nothing reads it yet — see `passwordMatches`.
+ * The password is hashed and stored, and `login` is what reads it: these
+ * records are now what signing in to the staff area goes through, with the
+ * shared password kept only as an emergency door. See `staff/auth.ts`.
  *
  * Deactivating is a soft delete, and that is load-bearing rather than tidy:
  * every order this person ever settled carries their name, and a report that
@@ -23,9 +25,9 @@ export interface StaffAccount {
   /** Short code the cashier types, e.g. "AR47". Normalised uppercase; unique. */
   staffId: string;
   name: string;
-  /** `scrypt$<salt>$<hash>`. Stored for a future login; nothing checks it today. */
+  /** `scrypt$<salt>$<hash>`. Checked by `login`. */
   passwordHash: string;
-  /** Free text — "Cashier", "Kitchen", "Manager". No permission hangs off it yet. */
+  /** The role's name — see `staff/roles.ts`. What sections this person can reach. */
   role: string;
   /** False once deactivated. The record stays, so old orders still resolve a name. */
   active: boolean;
@@ -210,6 +212,61 @@ export class StaffAccountService {
   }
 
   /**
+   * Signing in as this person.
+   *
+   * The password that has been stored since accounts existed, finally read: this
+   * is the check `passwordMatches` was written for and nothing called. Failure
+   * is uniform between "no such id" and "wrong password", so the form cannot be
+   * used to find out which staff codes exist.
+   *
+   * A deactivated account is told apart, and deliberately: it is not a secret —
+   * the person holding it is standing at the counter — and "your account was
+   * switched off" is the one message here that tells somebody what to do next
+   * instead of leaving them retyping a password that was never the problem.
+   */
+  async login(staffId: unknown, password: unknown): Promise<StaffAccount> {
+    const account = await this.repo.get(normaliseId(String(staffId ?? "")));
+    const given = String(password ?? "");
+
+    if (account === undefined || !passwordMatches(given, account.passwordHash)) {
+      throw new StaffAccountError("That staff ID and password do not match.", "invalid_credentials");
+    }
+    if (!account.active) {
+      throw new StaffAccountError(
+        `${account.name} (${account.staffId}) is no longer an active account.`,
+        "account_inactive",
+        { staffId: account.staffId },
+      );
+    }
+    return account;
+  }
+
+  /** Every distinct role name in use, for migrating the free-text ones. */
+  async roleNames(): Promise<string[]> {
+    return [...new Set((await this.repo.list()).map((account) => account.role.trim()).filter(Boolean))];
+  }
+
+  /** Who still holds this role. Names, because it is shown to whoever tried to delete it. */
+  async holdersOf(roleName: string): Promise<string[]> {
+    const key = roleName.trim().toLowerCase();
+    return (await this.repo.list())
+      .filter((account) => account.role.trim().toLowerCase() === key)
+      .map((account) => account.name);
+  }
+
+  /**
+   * Whether anybody is an Owner yet.
+   *
+   * The emergency door is held open by this being false and closed by it being
+   * true, so it counts **active** accounts only: an Owner who has been
+   * deactivated cannot let anybody in, and the shop would otherwise be locked
+   * out with no way back.
+   */
+  async hasActiveOwner(): Promise<boolean> {
+    return (await this.repo.list()).some((account) => account.active && isOwnerRole(account.role));
+  }
+
+  /**
    * The attribution check the two cashiering flows run.
    *
    * Not a login: there is no password here and no session comes out of it. It
@@ -312,13 +369,7 @@ export function hashPassword(password: string): string {
   return `scrypt$${salt.toString("hex")}$${scryptSync(password, salt, 32).toString("hex")}`;
 }
 
-/**
- * Checks a password against a stored hash.
- *
- * **Nothing calls this yet** — there is no per-account login, on purpose. It is
- * here so the hash being stored is a hash that demonstrably works, rather than a
- * write-only column nobody discovers is malformed until the day it matters.
- */
+/** Checks a password against a stored hash. Used by `StaffAccountService.login`. */
 export function passwordMatches(password: string, stored: string): boolean {
   const [scheme, saltHex, hashHex] = stored.split("$");
   if (scheme !== "scrypt" || saltHex === undefined || hashHex === undefined) return false;

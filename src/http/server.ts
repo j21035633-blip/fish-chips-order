@@ -24,6 +24,17 @@ async function connectStorage(): Promise<void> {
       // being left to the first staff edit: an edit made against the seed and
       // then written through would overwrite the stored menu.
       await services.menuStore.hydrate();
+      // Roles were free text on the account until this release. Every distinct
+      // value becomes a real Role with the default sections, so nobody's access
+      // changes shape on the day of the deploy and an Owner can widen them
+      // afterwards. Idempotent, so it is safe on every boot.
+      const migrated = await services.staffRoles.ensureRolesFor(await services.staffAccounts.roleNames());
+      if (migrated.length > 0) {
+        console.log(
+          `[staff] migrated ${migrated.length} role(s) from free text: ${migrated.join(", ")}. ` +
+            "They start with Kitchen & Counter and Menu — widen them on the Staff page.",
+        );
+      }
       console.log(`[storage] connected to MongoDB on attempt ${attempt}`);
       return;
     } catch (error) {
@@ -44,12 +55,21 @@ createServer(services).listen(config.port, () => {
   console.log(`fish-chips-order listening on ${config.publicBaseUrl} (storage: ${services.storage.kind})`);
 });
 
+if (config.staffSessionSecret === undefined && config.staffPassword === undefined) {
+  console.warn(
+    "[staff] neither STAFF_SESSION_SECRET nor STAFF_PASSWORD is set — staff sessions are signed with " +
+      "a key generated at startup, so everyone is signed out on every restart and deploy. Fine locally; " +
+      "set STAFF_SESSION_SECRET before this is somewhere people work.",
+  );
+}
+
 if (staffGateMode() === "open") {
   console.warn(
     `[staff] STAFF_PASSWORD is not set — the staff area at ${config.staffDashboardPath} is open to ` +
       "anyone who reaches it, including the routes that edit the menu and accept uploads. This is " +
       "allowed here because nothing about this deployment looks public; set the password before it " +
-      "is. /health reports \"staffAuth\": \"disabled\" until you do.",
+      "is. Individual staff accounts and their roles are not enforced while it is open. " +
+      "/health reports \"staffAuth\": \"disabled\" until you do.",
   );
 } else if (staffGateMode() === "locked") {
   // Loud, and worth being loud about: the shop is up, the staff area is not,

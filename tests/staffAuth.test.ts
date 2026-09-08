@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { Services } from "../src/app/container.js";
 import { InMemoryProofRepository } from "../src/game/proofs.js";
 import { InMemoryStaffAccountRepository, StaffAccountService } from "../src/staff/accounts.js";
+import { InMemoryRoleRepository, RoleService } from "../src/staff/roles.js";
 import { config } from "../src/config/env.js";
 import { createServer } from "../src/http/app.js";
 import { MenuService } from "../src/menu/service.js";
@@ -20,6 +21,7 @@ import { MenuStore } from "../src/menu/store.js";
 import { InMemoryCartRepository, InMemoryOrderRepository } from "../src/orders/repository.js";
 import { CartService, OrderService } from "../src/orders/service.js";
 import { createPaymentService } from "../src/payments/service.js";
+import { NAV_SECTIONS } from "../src/staff/roles.js";
 import {
   issueSession,
   readSession,
@@ -31,6 +33,25 @@ import {
 } from "../src/staff/auth.js";
 
 const PASSWORD = "fry-station-42";
+
+/**
+ * The Owner everybody in this suite signs in as.
+ *
+ * Sign-in is per person now, so the gate needs a real account behind it. This
+ * one is an Owner because most of what is asserted here is about the gate
+ * rather than about roles — `staffRoles.test.ts` is where a narrowed role is
+ * put through its paces.
+ */
+const OWNER = { staffId: "OWN1", name: "Nadia Owner", password: "owner-pass-1", role: "Owner" };
+
+/** A token for the Owner, which is what `issueSession` now needs telling. */
+const ownerToken = (now?: number) =>
+  now === undefined
+    ? issueSession({ staffId: OWNER.staffId, name: OWNER.name, role: "Owner", sections: [...NAV_SECTIONS] })
+    : issueSession(
+        { staffId: OWNER.staffId, name: OWNER.name, role: "Owner", sections: [...NAV_SECTIONS] },
+        now,
+      );
 
 let server: Server;
 let base: string;
@@ -49,12 +70,14 @@ function buildServices(): Services {
     payments: createPaymentService(orders),
     proofs: new InMemoryProofRepository(),
     staffAccounts: new StaffAccountService(new InMemoryStaffAccountRepository()),
+    staffRoles: new RoleService(new InMemoryRoleRepository()),
     storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} } as const,
   };
 }
 
 beforeAll(async () => {
   app = buildServices();
+  await app.staffAccounts.create(OWNER);
   server = createServer(app).listen(0);
   await new Promise((resolve) => server.once("listening", resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -101,12 +124,12 @@ function page(path: string, cookie?: string): Promise<Response> {
 
 const json = (res: Response): Promise<any> => res.json() as Promise<any>;
 
-/** Signs in and returns the cookie header to replay on later requests. */
-async function signIn(password = PASSWORD): Promise<string> {
+/** Signs in as the Owner and returns the cookie header to replay on later requests. */
+async function signIn(password = OWNER.password, staffId = OWNER.staffId): Promise<string> {
   const response = await fetch(`${base}/api/staff/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ staffId, password }),
   });
   expect(response.status).toBe(200);
   const cookie = response.headers.get("set-cookie");
@@ -195,25 +218,34 @@ describe("staff API gate", () => {
 
 describe("login", () => {
   it("refuses the wrong password without saying why", async () => {
-    const response = await call("POST", "/api/staff/login", { password: "not-it" });
+    const response = await call("POST", "/api/staff/login", { staffId: OWNER.staffId, password: "not-it" });
 
     expect(response.status).toBe(401);
     expect(response.headers.get("set-cookie")).toBeNull();
     const body = await json(response);
-    expect(body.error).toBe("invalid_password");
+    expect(body.error).toBe("invalid_credentials");
     // Nothing about the real password's length, shape or existence.
-    expect(JSON.stringify(body)).not.toContain(PASSWORD);
+    expect(JSON.stringify(body)).not.toContain(OWNER.password);
+
+    // And a staff id nobody has fails identically, so the form cannot be used
+    // to find out which codes exist.
+    const unknown = await call("POST", "/api/staff/login", { staffId: "ZZ99", password: "not-it" });
+    expect(unknown.status).toBe(401);
+    const unknownBody = await json(unknown);
+    expect(unknownBody.error).toBe("invalid_credentials");
+    expect(unknownBody.message).toBe(body.message);
   });
 
   it("rejects an empty password as a bad request, not a wrong one", async () => {
     // A blank field is a form error the page can explain; calling it a wrong
     // password would send someone hunting for a password that was never typed.
-    expect((await call("POST", "/api/staff/login", { password: "" })).status).toBe(400);
+    expect((await call("POST", "/api/staff/login", { staffId: OWNER.staffId, password: "" })).status).toBe(400);
+    expect((await call("POST", "/api/staff/login", { password: OWNER.password })).status).toBe(400);
     expect((await call("POST", "/api/staff/login", {})).status).toBe(400);
   });
 
   it("issues an httpOnly session cookie that is not the password", async () => {
-    const response = await call("POST", "/api/staff/login", { password: PASSWORD });
+    const response = await call("POST", "/api/staff/login", { staffId: OWNER.staffId, password: OWNER.password });
     const header = response.headers.get("set-cookie") ?? "";
 
     expect(response.status).toBe(200);
@@ -226,17 +258,25 @@ describe("login", () => {
   });
 
   it("reports the session state for the login page", async () => {
-    await expect(json(await call("GET", "/api/staff/session"))).resolves.toEqual({
+    await expect(json(await call("GET", "/api/staff/session"))).resolves.toMatchObject({
       authenticated: false,
       authRequired: true,
       configured: true,
+      sections: [],
+      isOwner: false,
     });
 
     const cookie = await signIn();
-    await expect(json(await call("GET", "/api/staff/session", undefined, cookie))).resolves.toEqual({
+    // Signed in, and carrying who they are — this is what the nav draws from.
+    await expect(json(await call("GET", "/api/staff/session", undefined, cookie))).resolves.toMatchObject({
       authenticated: true,
       authRequired: true,
       configured: true,
+      staffId: OWNER.staffId,
+      name: OWNER.name,
+      role: "Owner",
+      isOwner: true,
+      emergency: false,
     });
   });
 
@@ -255,23 +295,25 @@ describe("login", () => {
 
   it("locks out after repeated failures, and a correct password later still works", async () => {
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      expect((await call("POST", "/api/staff/login", { password: "guess" })).status).toBe(401);
+      expect(
+        (await call("POST", "/api/staff/login", { staffId: OWNER.staffId, password: "guess" })).status,
+      ).toBe(401);
     }
 
     // The ninth is refused before the password is even looked at — including
     // the right one, which is the point of a throttle.
-    const throttled = await call("POST", "/api/staff/login", { password: PASSWORD });
+    const throttled = await call("POST", "/api/staff/login", { staffId: OWNER.staffId, password: OWNER.password });
     expect(throttled.status).toBe(429);
     expect(throttled.headers.get("retry-after")).toBeTruthy();
 
     resetLoginThrottle();
-    expect((await call("POST", "/api/staff/login", { password: PASSWORD })).status).toBe(200);
+    expect((await call("POST", "/api/staff/login", { staffId: OWNER.staffId, password: OWNER.password })).status).toBe(200);
   });
 });
 
 describe("session tokens", () => {
   it("refuses a token that was tampered with", async () => {
-    const token = issueSession();
+    const token = ownerToken();
     const [payload, signature] = token.split(".");
 
     for (const forged of [
@@ -285,23 +327,24 @@ describe("session tokens", () => {
     }
   });
 
-  it("refuses a token signed under a different password", async () => {
+  it("refuses a token signed under a different session secret", async () => {
     const cookie = await signIn();
 
-    // The manager changes the password. Everyone signed in under the old one is
-    // out, without anything having to be revoked.
+    // Rotating the secret invalidates every session issued under the old one,
+    // without anything having to be revoked. It falls back to STAFF_PASSWORD
+    // when STAFF_SESSION_SECRET is unset, which is what this moves.
     config.staffPassword = "new-password-after-someone-left";
     expect((await call("GET", "/api/staff/overview", undefined, cookie)).status).toBe(401);
   });
 
   it("expires after twelve hours", async () => {
     const now = Date.now();
-    const token = issueSession(now);
+    const token = ownerToken(now);
 
     expect(readSession(token, now + SESSION_TTL_MS - 1000)).toBeDefined();
     expect(readSession(token, now + SESSION_TTL_MS + 1000)).toBeUndefined();
 
-    const expired = issueSession(now - SESSION_TTL_MS - 1000);
+    const expired = ownerToken(now - SESSION_TTL_MS - 1000);
     expect((await call("GET", "/api/staff/overview", undefined, `${STAFF_SESSION_COOKIE}=${expired}`)).status).toBe(401);
   });
 });
@@ -497,12 +540,12 @@ describe("logging out invalidates the session server-side", () => {
     // hours a time.
     expect(revokeSession(undefined)).toBe(false);
     expect(revokeSession("not-a-token")).toBe(false);
-    expect(revokeSession(`${issueSession().split(".")[0]}.forged`)).toBe(false);
+    expect(revokeSession(`${ownerToken().split(".")[0]}.forged`)).toBe(false);
   });
 
   it("survives the sessions it revoked expiring", async () => {
     const now = Date.now();
-    const token = issueSession(now);
+    const token = ownerToken(now);
 
     expect(revokeSession(token, now)).toBe(true);
     expect(readSession(token, now + 1000)).toBeUndefined();
@@ -525,13 +568,17 @@ describe("the whole sign-in journey", () => {
     expect(cold.status).toBe(302);
     expect(cold.headers.get("location")).toBe(`/staff/login?next=${encodeURIComponent("/staff")}`);
 
-    // 2. The login page it was sent to renders, and renders a password field.
+    // 2. The login page it was sent to renders, and asks for both halves.
     const login = await page("/staff/login");
     expect(login.status).toBe(200);
-    await expect(login.text()).resolves.toContain('type="password"');
+    const loginHtml = await login.text();
+    expect(loginHtml).toContain('type="password"');
+    expect(loginHtml).toContain('id="staff-id"');
 
     // 3. The wrong password gets nowhere.
-    expect((await call("POST", "/api/staff/login", { password: "not-it" })).status).toBe(401);
+    expect(
+      (await call("POST", "/api/staff/login", { staffId: OWNER.staffId, password: "not-it" })).status,
+    ).toBe(401);
     expect((await page("/staff")).status).toBe(302);
 
     // 4. The right one lands on the dashboard.
@@ -563,7 +610,7 @@ describe("a cleared or expired session reaches no staff page by URL", () => {
     ["a cleared cookie", `${STAFF_SESSION_COOKIE}=`],
     ["a cookie cleared to the empty pair", `${STAFF_SESSION_COOKIE}=; other=1`],
     ["junk typed into devtools", `${STAFF_SESSION_COOKIE}=let-me-in`],
-    ["an expired token", `${STAFF_SESSION_COOKIE}=${issueSession(Date.now() - SESSION_TTL_MS - 1000)}`],
+    ["an expired token", `${STAFF_SESSION_COOKIE}=${ownerToken(Date.now() - SESSION_TTL_MS - 1000)}`],
   ];
 
   it("redirects every staff page to login, whatever is in the cookie jar", async () => {
@@ -588,7 +635,7 @@ describe("a cleared or expired session reaches no staff page by URL", () => {
   it("expires a session that was valid when the shift started", async () => {
     // Not a cleared cookie but a stale one: the tablet was signed in, and then
     // sat on the pass overnight.
-    const overnight = `${STAFF_SESSION_COOKIE}=${issueSession(Date.now() - SESSION_TTL_MS - 1)}`;
+    const overnight = `${STAFF_SESSION_COOKIE}=${ownerToken(Date.now() - SESSION_TTL_MS - 1)}`;
 
     expect((await page("/staff", overnight)).status).toBe(302);
     expect((await call("GET", "/api/staff/overview", undefined, overnight)).status).toBe(401);
@@ -621,7 +668,7 @@ describe("a public deployment with no password configured", () => {
 
   it("says so on /health and on the session probe", async () => {
     await expect(json(await fetch(`${base}/health`))).resolves.toMatchObject({ staffAuth: "unconfigured" });
-    await expect(json(await call("GET", "/api/staff/session"))).resolves.toEqual({
+    await expect(json(await call("GET", "/api/staff/session"))).resolves.toMatchObject({
       authenticated: false,
       // Sign-in required, and nothing to sign in with. The login page needs
       // both halves to explain itself rather than showing a dead form.
