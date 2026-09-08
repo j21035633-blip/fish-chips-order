@@ -19,6 +19,11 @@ async function connectStorage(): Promise<void> {
   for (let attempt = 1; ; attempt += 1) {
     try {
       await services.storage.connect();
+      // Only now is there a database to read the menu out of. Until this lands
+      // the store is serving the seed, which is why it belongs here rather than
+      // being left to the first staff edit: an edit made against the seed and
+      // then written through would overwrite the stored menu.
+      await services.menuStore.hydrate();
       console.log(`[storage] connected to MongoDB on attempt ${attempt}`);
       return;
     } catch (error) {

@@ -42,7 +42,7 @@ describe("seed menu data", () => {
   it("gives every required option group a default choice", () => {
     for (const item of MENU.items) {
       for (const group of item.optionGroups) {
-        if (group.minSelections === 0) continue;
+        if (!group.required) continue;
         const defaults = group.choices.filter((choice) => choice.isDefault);
         expect(defaults.length, `${item.id}/${group.id} needs exactly one default`).toBe(1);
       }
@@ -52,8 +52,16 @@ describe("seed menu data", () => {
   it("keeps option group bounds sane", () => {
     for (const item of MENU.items) {
       for (const group of item.optionGroups) {
-        expect(group.maxSelections).toBeGreaterThanOrEqual(group.minSelections);
-        expect(group.choices.length).toBeGreaterThanOrEqual(group.maxSelections);
+        expect(group.choices.length, `${item.id}/${group.id} has nothing to pick`).toBeGreaterThan(0);
+        if (group.selectionType === "single") {
+          // A pick-one group is capped at one by definition; a ceiling on it
+          // would be a second, contradictable statement of the same thing.
+          expect(group.maxSelect, `${item.id}/${group.id} is pick-one`).toBeUndefined();
+          continue;
+        }
+        if (group.maxSelect === undefined) continue;
+        expect(group.maxSelect).toBeGreaterThanOrEqual(1);
+        expect(group.choices.length).toBeGreaterThanOrEqual(group.maxSelect);
       }
     }
   });

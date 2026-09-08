@@ -10,6 +10,7 @@
     "tests/staffNav.test.ts",
     "tests/fishingGame.test.ts",
     "tests/cancellationUi.test.ts",
+    "tests/menuOptionsUi.test.ts",
     "src/web/**/*",
     "src/staff-web/**/*"
   ],

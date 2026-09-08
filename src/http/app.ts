@@ -982,11 +982,33 @@ function menuItemInput(req: Request): MenuItemInput {
     if (body[field] !== undefined) input[field] = String(body[field]);
   }
   if (body.priceSen !== undefined) input.priceSen = menuPriceSen(body.priceSen);
+  if (body.optionGroups !== undefined) input.optionGroups = menuOptionGroups(body.optionGroups);
   if (body.available !== undefined) input.available = formBoolean(body.available, "available");
   if (body.removeImage !== undefined) input.removeImage = formBoolean(body.removeImage, "removeImage");
   if (file) input.imageUrl = servedImageUrl(file);
 
   return input;
+}
+
+/**
+ * The Options section of the staff form, which is structured where the rest of
+ * the form is flat.
+ *
+ * Multipart has no arrays, so the builder sends one JSON string. A JSON client
+ * posting the array directly is handed straight through. Everything past the
+ * shape — names, prices, what a maximum may sit on — is the store's to judge,
+ * so this only gets it into a value `normalizeOptionGroups` can read.
+ */
+function menuOptionGroups(raw: unknown): unknown {
+  if (Array.isArray(raw)) return raw;
+
+  try {
+    return JSON.parse(String(raw));
+  } catch {
+    throw new MenuValidationError("The options could not be read.", "invalid_option_groups", {
+      field: "optionGroups",
+    });
+  }
 }
 
 /** Rejects a non-integer rather than truncating it — a silently halved price is worse. */

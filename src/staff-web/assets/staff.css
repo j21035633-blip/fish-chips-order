@@ -307,12 +307,16 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 
 /* --------------------------------------------------------------- the form */
 .form-dialog {
-  width: min(560px, calc(100vw - 32px));
+  width: min(620px, calc(100vw - 32px));
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--panel);
   color: var(--ink);
   padding: 0;
+  /* The Options section makes this form as tall as staff care to build. Scroll
+     the dialog rather than letting the browser clip the Save button off it. */
+  max-height: min(88vh, 900px);
+  overflow-y: auto;
 }
 .form-dialog::backdrop { background: rgba(16, 36, 31, 0.4); }
 .form-dialog form { padding: 18px 20px 20px; }
@@ -348,6 +352,89 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 .ghost { background: transparent; border: 1px solid var(--line); color: var(--ink-soft); padding: 9px 13px; font-weight: 650; }
 .ghost:hover { color: var(--ink); }
 .hint { font-size: 12px; color: var(--ink-soft); }
+
+/* --- the option-group builder -------------------------------------------- */
+/* Indented and boxed because it is the one nested thing on a flat form: a
+   choice belongs to a group, and that has to read at a glance on a tablet. */
+.options-section { border-top: 1px solid var(--line); padding-top: 14px; }
+.options-section h3 { font-size: 13px; margin: 0 0 2px; text-transform: uppercase; letter-spacing: 0.05em; }
+.options-section > .hint { margin: 0 0 12px; }
+.option-group {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--sea);
+  border-radius: 10px;
+  padding: 12px;
+  margin: 0 0 10px;
+  background: var(--bg);
+}
+.option-head { display: flex; gap: 8px; align-items: center; }
+.option-head .option-name {
+  font: inherit;
+  font-weight: 650;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+}
+.option-rules { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; margin-top: 10px; }
+.option-rules .field span, .option-rules label span { font-size: 12px; color: var(--ink-soft); }
+.option-rules select, .option-max input {
+  font: inherit;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+}
+.option-max input { width: 88px; }
+.option-summary { font-size: 12px; color: var(--ink-soft); margin-left: auto; font-style: italic; }
+
+.option-choices { display: grid; gap: 6px; margin: 12px 0 8px; }
+.option-choice { display: flex; gap: 8px; align-items: center; }
+.option-choice .choice-name {
+  font: inherit;
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+}
+.choice-price { display: flex; gap: 5px; align-items: center; flex: 0 0 auto; }
+.choice-price input {
+  font: inherit;
+  width: 84px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  text-align: right;
+}
+/* Small, quiet and side by side: reordering is a nudge, not a decision. */
+.option-move { display: flex; gap: 2px; flex: 0 0 auto; }
+.option-move button { padding: 5px 8px; font-size: 12px; line-height: 1; border-radius: 6px; }
+.option-move button:disabled { opacity: 0.3; cursor: default; }
+.option-group .destroy {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  padding: 6px 9px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+.option-group .destroy:hover { color: var(--danger); border-color: var(--danger); }
+.add-choice { padding: 7px 11px; font-size: 13px; }
+.add-group { width: 100%; }
+
+@media (max-width: 520px) {
+  .option-rules { gap: 8px 10px; }
+  .option-summary { margin-left: 0; flex-basis: 100%; }
+}
 
 /* --- sign in and out ----------------------------------------------------- */
 /* Quieter than the view links beside it: leaving is not the thing anyone came

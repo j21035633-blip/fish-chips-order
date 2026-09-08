@@ -261,6 +261,32 @@ converts from ringgit and back; nothing on the wire is a float.
 Deleting an item leaves a cart that still holds it failing to price with `unknown_item` — the same
 400 an unavailable item already produced.
 
+**Option groups are staff-editable, from the same form.** `src/staff-web/assets/optionGroups.js` is
+the builder: add/rename/reorder/delete groups and choices, pick-one versus pick-several, required,
+and a maximum on a pick-several. It holds its own state array rather than reading the DOM back on
+save, because a redraw follows every add, remove and reorder and a half-typed name has to survive it.
+Prices are ringgit in the field and sen on the wire, the same split the price field above it uses.
+
+Multipart carries no arrays, so the whole builder travels as one JSON field named `optionGroups` on
+the existing item endpoint. **Replace on save**: what arrives *is* the item's groups afterwards. Two
+things the form cannot show — a choice's `allergens` and its `isDefault` — are carried forward
+from whatever choice already held that id, so a rename cannot drop the egg warning off the salted egg
+dust. Ids are equally sticky: a cart in someone's hand holds `{ groupId, choiceId }`, so an id is
+minted once and never re-slugged.
+
+Validation lives in `src/menu/optionGroups.ts` and is strict about staff input: names non-empty,
+choice names unique within a group, `priceDeltaSen` a non-negative whole number of sen, a required
+group needs at least one choice, and a maximum only sits on a pick-several and only at 1 or more. The
+one exception is a delta that is *already* negative and unchanged — the combos price a downgrade to
+mineral water at -RM1.00, and refusing to save that back would make those items uneditable.
+
+**The stored shape changed; the wire did not.** A group was `minSelections`/`maxSelections`; it is
+now `selectionType` + `required` + `maxSelect`. `toItemView` derives the old pair from the new
+fields, so the customer's item modal, the kitchen ticket and `priceCart` are untouched, and a menu
+document written the old way is migrated on `hydrate()` and written back once. That migration is
+also why `hydrate()` is now called from `connectStorage()` — it was defined but never invoked, so
+staff menu edits were being written to Mongo and never read back on restart.
+
 ### Takeaway orders, rung up by staff
 
 **Quick add (take away)** sits permanently below the live orders on the Kitchen & Counter page — not
@@ -752,6 +778,10 @@ float. See `src/menu/types.ts` and `src/orders/types.ts` for what is actually th
   portion, allergens[], mayContain[], dietary[], tags[], optionGroups[], available (bool, default
   true), unavailableReason?, **imageUrl?** (the served `/uploads/menu-items/<file>` path; absent
   when nobody has uploaded a photo)
+- `OptionGroup`: id, name, selectionType (`single` | `multi`), required (bool), maxSelect? (only
+  on `multi`; absent means "as many as there are"), choices[]. The API additionally emits the
+  derived `minSelections`/`maxSelections` pair the customer app renders on.
+- `OptionChoice`: id, name, priceDeltaSen, isDefault?, available, allergens?
 - `Category`: id (slug), name (as staff typed it), blurb, sortOrder
 - `Order`: id, reference, lines[], totals, paymentStatus (pending|paid|failed|expired),
   **kitchenStatus (received|cooking|ready|collected)**, tableNumber?, createdAt, updatedAt

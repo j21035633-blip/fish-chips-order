@@ -9,6 +9,7 @@ import type {
   ItemTag,
   MenuItem,
   OptionGroup,
+  SelectionType,
 } from "./types.js";
 
 /**
@@ -47,12 +48,24 @@ export interface OptionChoiceView {
   allergens: Allergen[];
 }
 
+/**
+ * An option group as everything downstream reads it.
+ *
+ * `selectionType`, `required` and `maxSelect` are what the item now stores and
+ * what the staff builder edits. `minSelections`/`maxSelections` are derived
+ * from them and kept on the wire because the customer modal, the kitchen ticket
+ * and cart pricing were all written against that pair — deriving here means the
+ * migration to the new shape changed nothing any of them see.
+ */
 export interface OptionGroupView {
   id: string;
   name: string;
+  selectionType: SelectionType;
   minSelections: number;
   maxSelections: number;
   required: boolean;
+  /** Only ever set on a `multi` group; absent means "as many as there are". */
+  maxSelect?: number;
   choices: OptionChoiceView[];
 }
 
@@ -324,13 +337,22 @@ function portionSummary(item: MenuItem): string {
   return `${head} — serves ${item.portion.serves}`;
 }
 
+/**
+ * A pick-one group caps at one; a pick-several caps at its `maxSelect`, or at
+ * the number of choices when staff left the ceiling off. The minimum is 1 for a
+ * required group and 0 otherwise, which is exactly what the pair meant before.
+ */
 function toOptionGroupView(group: OptionGroup): OptionGroupView {
-  return {
+  const maxSelections =
+    group.selectionType === "single" ? 1 : (group.maxSelect ?? Math.max(1, group.choices.length));
+
+  const view: OptionGroupView = {
     id: group.id,
     name: group.name,
-    minSelections: group.minSelections,
-    maxSelections: group.maxSelections,
-    required: group.minSelections > 0,
+    selectionType: group.selectionType,
+    minSelections: group.required ? 1 : 0,
+    maxSelections,
+    required: group.required,
     choices: group.choices.map((choice) => ({
       id: choice.id,
       name: choice.name,
@@ -341,6 +363,8 @@ function toOptionGroupView(group: OptionGroup): OptionGroupView {
       allergens: choice.allergens ?? [],
     })),
   };
+  if (group.maxSelect !== undefined) view.maxSelect = group.maxSelect;
+  return view;
 }
 
 export function toItemView(item: MenuItem): MenuItemView {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { MENU } from "./data/menu.js";
+import { migrateOptionGroups, normalizeOptionGroups } from "./optionGroups.js";
 import type { MenuRepository } from "./repository.js";
 import {
   MenuValidationError,
@@ -43,6 +44,14 @@ export interface MenuItemInput {
   imageUrl?: string | undefined;
   /** True to drop the current image without uploading a replacement. */
   removeImage?: boolean | undefined;
+  /**
+   * The item's whole customization builder, as the staff form last saw it.
+   *
+   * Replace-on-save: what arrives *is* the item's option groups afterwards, so a
+   * group left out has been deleted. Left `undefined` — which is what every
+   * caller that is not the builder sends — the groups are not touched at all.
+   */
+  optionGroups?: unknown;
 }
 
 const MAX_NAME = 80;
@@ -79,6 +88,12 @@ export class MenuStore implements MenuRepository {
     const stored = await this.persistence.load();
     if (stored) {
       this.menu = stored;
+      // A menu written before the option builder existed stores its groups as a
+      // min/max pair. Rewritten here, once, on the way in — and written back so
+      // the next boot has nothing to do. The version is deliberately left alone:
+      // what the customer app sees is identical either side of this, so bumping
+      // it would invalidate caches over a change nobody can observe.
+      if (migrateOptionGroups(this.menu)) await this.persistence.save(this.menu);
       return;
     }
     await this.persistence.save(this.menu);
@@ -124,7 +139,9 @@ export class MenuStore implements MenuRepository {
       mayContain: [],
       dietary: [],
       tags: [],
-      optionGroups: [],
+      // Nothing unless the form's Options section was filled in; `normalize`
+      // is what turns it into groups the customer modal can render.
+      optionGroups: input.optionGroups === undefined ? [] : normalizeOptionGroups(input.optionGroups),
       available: input.available ?? true,
     };
     if (input.imageUrl !== undefined) item.imageUrl = input.imageUrl;
@@ -149,6 +166,11 @@ export class MenuStore implements MenuRepository {
     }
     if (input.flavourNotes !== undefined) {
       item.flavourNotes = optionalText(input.flavourNotes, "flavourNotes", MAX_DESCRIPTION) ?? "";
+    }
+    // Validated against what the item currently holds, so the per-choice fields
+    // the form cannot see — allergens, and the defaults — survive a save.
+    if (input.optionGroups !== undefined) {
+      item.optionGroups = normalizeOptionGroups(input.optionGroups, item.optionGroups);
     }
     if (input.available !== undefined) item.available = input.available;
     if (input.unavailableReason !== undefined) {

@@ -415,6 +415,20 @@ nothing else — it fires on a single tap during service, so it must not be able
 price with it. With no database configured the seed menu still serves; edits just do not survive a
 restart.
 
+**Option groups are built in the item form.** "Seasoning" as a pick-one, "Extra dips" as a
+pick-up-to-three: staff add, rename, reorder and delete groups and their choices, set each group to
+pick-one or pick-several, mark it required, and cap a pick-several at a number. Choice prices are
+typed in ringgit and stored as sen like every other price. Saving replaces the item's whole
+`optionGroups` array — a group left out has been deleted — and the two fields the form has no
+control over, a choice's allergen list and which choice is preselected, are carried through by id so
+a rename cannot quietly drop them.
+
+The stored shape is `selectionType` + `required` + `maxSelect`. It used to be a
+`minSelections`/`maxSelections` pair, and a menu written that way is rewritten on the first boot
+after this and written back once. Nothing downstream noticed: the pair is still what the API emits,
+derived from the three fields, because the customer's item modal, the kitchen ticket and cart
+pricing were all written against it.
+
 ### Uploaded photos need a Railway volume — manual step
 
 Photos are written to `UPLOADS_DIR/menu-items/` and served read-only at `/uploads/...`; the item

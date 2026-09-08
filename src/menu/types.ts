@@ -68,7 +68,11 @@ export interface Portion {
 export interface OptionChoice {
   id: string;
   name: string;
-  /** Added to the item price. May be 0 or negative. */
+  /**
+   * Added to the item price. The staff builder only accepts a surcharge, but
+   * seeded data carries one discount — mineral water inside a combo — so the
+   * type still allows a negative. See `normalizeOptionGroups`.
+   */
   priceDeltaSen: number;
   isDefault?: boolean;
   available: boolean;
@@ -76,13 +80,26 @@ export interface OptionChoice {
   allergens?: Allergen[];
 }
 
+/**
+ * How many choices a group takes. `single` is a radio group, `multi` a set of
+ * checkboxes — the same split the customer's item modal already renders on.
+ */
+export const SELECTION_TYPES = ["single", "multi"] as const;
+export type SelectionType = (typeof SELECTION_TYPES)[number];
+
 export interface OptionGroup {
   id: string;
   name: string;
-  /** Fewest choices the customer must pick. 0 means the whole group is optional. */
-  minSelections: number;
-  /** Most choices allowed. 1 = pick-one, >1 = multi-select (e.g. sauces). */
-  maxSelections: number;
+  /** `single` = pick one, `multi` = pick several (e.g. sauces). */
+  selectionType: SelectionType;
+  /** True when the customer has to pick before the line can be added. */
+  required: boolean;
+  /**
+   * Ceiling on a `multi` group, e.g. "pick up to 3". Meaningless on a
+   * `single` group, which is capped at one by definition, and rejected there
+   * on input. Absent on a `multi` group means "as many as there are".
+   */
+  maxSelect?: number;
   choices: OptionChoice[];
 }
 

@@ -55,6 +55,15 @@
             <input id="available" name="available" type="checkbox" checked />
             <span>Available to order</span>
           </label>
+
+          <section class="options-section">
+            <h3>Options</h3>
+            <p class="hint">
+              What the customer is asked when they tap this item — a seasoning to pick, dips to add.
+              Leave it empty and the item is added straight to the order.
+            </p>
+            <div id="option-groups"></div>
+          </section>
         </div>
 
         <p id="form-error" class="form-error" hidden></p>
@@ -69,6 +78,7 @@
     <script type="module">
       import { api, el, errorBanner, redirectToLogin } from "{{STAFF_BASE}}/assets/common.js";
       import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
+      import { optionGroupsEditor } from "{{STAFF_BASE}}/assets/optionGroups.js";
 
       const { slot } = mountStaffChrome({ title: "Menu" });
       const countEl = el("span", { class: "card-count", text: "—" });
@@ -87,6 +97,9 @@
       const formError = document.getElementById("form-error");
       const saveButton = document.getElementById("save");
       const showError = errorBanner();
+      // Owns the Options section: it holds its own state across the redraws that
+      // adding, removing and reordering cause, and hands back the payload on save.
+      const options = optionGroupsEditor(document.getElementById("option-groups"));
 
       // The item being edited, or null when adding. `removeImage` is separate
       // from the file input: clearing a photo is its own instruction, not the
@@ -235,6 +248,10 @@
         document.getElementById("category").value = item ? categoryName(item.categoryId) : "";
         document.getElementById("available").checked = item ? item.available : true;
 
+        // Exactly what the item is configured with today — the same array the
+        // customer modal renders from, read straight off the listing response.
+        options.load(item?.optionGroups ?? []);
+
         showPreview(item?.imageUrl ?? null);
         saveButton.textContent = item ? "Save changes" : "Add item";
         dialog.showModal();
@@ -281,6 +298,17 @@
           return;
         }
 
+        // Read before anything is sent: a price that is not a number throws, and
+        // the message belongs on this form rather than after a round trip.
+        let optionGroups;
+        try {
+          optionGroups = options.value();
+        } catch (error) {
+          formError.textContent = error.message;
+          formError.hidden = false;
+          return;
+        }
+
         const body = new FormData();
         body.set("name", document.getElementById("name").value.trim());
         body.set("description", document.getElementById("description").value.trim());
@@ -289,6 +317,9 @@
         body.set("priceSen", String(Math.round(price * 100)));
         body.set("category", document.getElementById("category").value.trim());
         body.set("available", document.getElementById("available").checked ? "true" : "false");
+        // Multipart has no arrays, so the whole builder travels as one JSON
+        // field. Replace-on-save: this *is* the item's options afterwards.
+        body.set("optionGroups", JSON.stringify(optionGroups));
         if (removeImage) body.set("removeImage", "true");
 
         const [file] = imageInput.files;

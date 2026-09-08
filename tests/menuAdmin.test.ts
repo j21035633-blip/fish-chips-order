@@ -517,3 +517,97 @@ describe("the customer menu after a staff edit", () => {
     expect(items.every((item: { available: boolean }) => item.available)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------- options over HTTP
+
+/**
+ * The Options section, end to end over the endpoint the form actually posts to.
+ *
+ * Multipart has no arrays, so the whole builder arrives as one JSON string in a
+ * form field. That encoding is the part worth pinning down: everything either
+ * side of it is covered in menuOptions.test.ts.
+ */
+describe("the item endpoint takes option groups", () => {
+  const DORY = "fish-dory-classic";
+
+  /** The item as the staff page lists it, which is what the builder loads from. */
+  async function listed(itemId: string) {
+    const body = await json(await fetch(`${base}/api/staff/menu-items`));
+    return body.items.find((item: { id: string }) => item.id === itemId);
+  }
+
+  it("offers the existing groups on the listing the form is opened from", async () => {
+    const dory = await listed(DORY);
+
+    expect(dory.optionGroups.map((group: { name: string }) => group.name)).toEqual(["Seasoning", "Extra dips"]);
+    expect(dory.optionGroups[0]).toMatchObject({ selectionType: "single", required: true });
+    expect(dory.optionGroups[1]).toMatchObject({ selectionType: "multi", required: false, maxSelect: 3 });
+  });
+
+  it("saves a rebuilt set of groups through the multipart form", async () => {
+    const optionGroups = [
+      {
+        id: "seasoning",
+        name: "Seasoning",
+        selectionType: "single",
+        required: true,
+        choices: [
+          { id: "sea_salt", name: "Sea salt", priceDeltaSen: 0 },
+          { name: "Smoked paprika", priceDeltaSen: 100 },
+        ],
+      },
+      {
+        name: "Sides to add",
+        selectionType: "multi",
+        required: false,
+        maxSelect: 2,
+        choices: [{ name: "Mushy peas", priceDeltaSen: 350 }],
+      },
+    ];
+
+    const response = await fetch(`${base}/api/staff/menu-items/${DORY}`, {
+      method: "PUT",
+      body: itemForm({ optionGroups: JSON.stringify(optionGroups) }),
+    });
+    expect(response.status).toBe(200);
+
+    const saved = (await json(response)).item;
+    expect(saved.optionGroups.map((group: { id: string }) => group.id)).toEqual(["seasoning", "sides-to-add"]);
+    expect(saved.optionGroups[0].choices[1]).toMatchObject({ id: "smoked-paprika", priceDeltaSen: 100 });
+    expect(saved.optionGroups[1]).toMatchObject({ maxSelect: 2, maxSelections: 2, minSelections: 0 });
+
+    // And it is what the next open of the form reads back.
+    expect((await listed(DORY)).optionGroups).toEqual(saved.optionGroups);
+  });
+
+  it("leaves the groups alone on a save that does not mention them", async () => {
+    const before = (await listed(DORY)).optionGroups;
+    await fetch(`${base}/api/staff/menu-items/${DORY}`, { method: "PUT", body: itemForm({ name: "Dory" }) });
+
+    expect((await listed(DORY)).optionGroups).toEqual(before);
+  });
+
+  it("explains a bad group rather than saving half of it", async () => {
+    const response = await fetch(`${base}/api/staff/menu-items/${DORY}`, {
+      method: "PUT",
+      body: itemForm({
+        optionGroups: JSON.stringify([
+          { name: "Dips", selectionType: "multi", choices: [{ name: "Gravy" }, { name: "Gravy" }] },
+        ]),
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "duplicate_option_choice" });
+  });
+
+  it("rejects a field that is not JSON at all", async () => {
+    const response = await fetch(`${base}/api/staff/menu-items/${DORY}`, {
+      method: "PUT",
+      body: itemForm({ optionGroups: "Seasoning, dips" }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "invalid_option_groups" });
+  });
+});
