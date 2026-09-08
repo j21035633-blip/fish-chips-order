@@ -12,6 +12,7 @@
     "tests/cancellationUi.test.ts",
     "tests/menuOptionsUi.test.ts",
     "tests/staffAccountsUi.test.ts",
+    "tests/theme.test.ts",
     "src/web/**/*",
     "src/staff-web/**/*"
   ],

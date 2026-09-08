@@ -12,6 +12,21 @@
   --batter: #e0a03a;
   --danger: #a8321f;
   --ok: #1c7a4a;
+  /* Washes behind a status pill. Named rather than inlined because each one
+     has to flip in dark mode, and a literal buried in a rule cannot. */
+  /*
+   * Text on a solid --sea fill: the topbar, the cart bar, the primary button.
+   *
+   * It has to be a token. In dark, --sea is a *light* green (#4cbfae), and the
+   * white this file used to hard-code sat on it at about 1.9:1 — the topbar and
+   * every primary button were unreadable for anyone whose phone was in dark
+   * mode, and had been since the dark palette was added. This is that bug.
+   */
+  --on-sea: #ffffff;
+  --violet: #5b3d86;
+  --violet-wash: #efe7f7;
+  --amber-ink: #8a5a00;
+  --amber-wash: #fdf1dd;
   --radius: 12px;
   --shadow: 0 1px 2px rgba(20, 33, 31, 0.06), 0 8px 24px rgba(20, 33, 31, 0.06);
   /* The collapsed cart bar's height, in one place: the bar is fixed, and the
@@ -19,8 +34,25 @@
   --cart-bar-h: 60px;
 }
 
+/*
+ * Dark, in three states.
+ *
+ * The device's preference is the default and always was; `data-theme` is the
+ * override a person sets with the toggle, and it has to win in both directions —
+ * hence the `:not([data-theme="light"])` guard on the media block, so choosing
+ * light on a dark device actually stays light.
+ *
+ * The two blocks below MUST declare the same tokens. They are duplicated because
+ * one is inside a media query and one is not, and CSS has no way to share them;
+ * `theme.test.ts` compares the pair and fails if they drift.
+ *
+ * The values themselves are the ones this file already shipped — the palette
+ * that has been behind `prefers-color-scheme` since the customer app was
+ * written. Nothing here is new, so a customer who was already seeing dark sees
+ * exactly what they saw before.
+ */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --ink: #eef2f0;
     --ink-soft: #a8b3af;
     --ink-faint: #79847f;
@@ -32,8 +64,41 @@
     --batter: #e8b25a;
     --danger: #e8836f;
     --ok: #5ec98d;
+    --on-sea: #06211d;
+    --violet: #cbb0ee;
+    --violet-wash: #2e2440;
+    --amber-ink: #ffd98a;
+    --amber-wash: #3a2f16;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
   }
+}
+
+:root[data-theme="dark"] {
+  --ink: #eef2f0;
+  --ink-soft: #a8b3af;
+  --ink-faint: #79847f;
+  --paper: #121917;
+  --card: #1a2321;
+  --line: #2c3835;
+  --sea: #4cbfae;
+  --sea-dark: #3aa697;
+  --batter: #e8b25a;
+  --danger: #e8836f;
+  --ok: #5ec98d;
+  --on-sea: #06211d;
+  --violet: #cbb0ee;
+  --violet-wash: #2e2440;
+  --amber-ink: #ffd98a;
+  --amber-wash: #3a2f16;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+/* Tells the browser to theme its own furniture too — form controls, the
+   scrollbar, and the flash of white between documents. */
+:root { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark; }
 }
 
 * { box-sizing: border-box; }
@@ -66,7 +131,7 @@ h1, h2, h3 { line-height: 1.25; margin: 0; }
   top: 0;
   z-index: 20;
   background: var(--sea);
-  color: #fff;
+  color: var(--on-sea);
   padding-top: env(safe-area-inset-top);
 }
 .topbar-inner {
@@ -78,7 +143,7 @@ h1, h2, h3 { line-height: 1.25; margin: 0; }
   justify-content: space-between;
   gap: 12px;
 }
-.brand { display: flex; align-items: center; gap: 8px; color: #fff; text-decoration: none; }
+.brand { display: flex; align-items: center; gap: 8px; color: var(--on-sea); text-decoration: none; }
 .brand-mark { font-size: 20px; opacity: 0.9; }
 .brand-name { font-weight: 650; letter-spacing: -0.01em; }
 
@@ -211,7 +276,7 @@ body.has-cart .view { padding-bottom: calc(var(--cart-bar-h) + 24px + env(safe-a
   width: min(720px, 100%);
   margin: 0 auto;
   background: var(--sea);
-  color: #fff;
+  color: var(--on-sea);
   border: 0;
   border-radius: 14px 14px 0 0;
   font: inherit;
@@ -361,7 +426,7 @@ body.cart-open { overflow: hidden; }
 
 .primary {
   background: var(--sea);
-  color: #fff;
+  color: var(--on-sea);
   border: 0;
   border-radius: 10px;
   padding: 13px 18px;
@@ -548,7 +613,7 @@ body.cart-open { overflow: hidden; }
 .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .status.pending { background: color-mix(in srgb, var(--batter) 16%, transparent); color: color-mix(in srgb, var(--batter) 75%, var(--ink)); }
 .status.paid { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
-.status.refunded { background: #efe7f7; color: #5b3d86; }
+.status.refunded { background: var(--violet-wash); color: var(--violet); }
 .status.failed, .status.expired { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
 
 .reference { font-size: 30px; font-weight: 700; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
@@ -993,7 +1058,7 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
   border: 0;
   border-radius: 16px;
   background: var(--sea);
-  color: #fff;
+  color: var(--on-sea);
   font: inherit;
   font-size: 21px;
   font-weight: 800;
@@ -1081,12 +1146,22 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
   color: #5c3d05;
   font-size: 15px;
 }
+/*
+ * The kitchen badges in dark, unchanged from what this file already shipped —
+ * and now reached by the toggle as well as by the device. Same duplication and
+ * same reason as the palette above.
+ */
 @media (prefers-color-scheme: dark) {
-  .kitchen-status.cooking { background: #4a3a12; color: #ffd98a; }
-  .kitchen-status.ready { background: #16412f; color: #a8e6c6; }
-  .kitchen-status.cancelled { background: #4a221d; color: #ffb3a7; }
-  .denied-note { background: #3a2f16; color: #ffd98a; }
+  :root:not([data-theme="light"]) .kitchen-status.cooking { background: #4a3a12; color: #ffd98a; }
+  :root:not([data-theme="light"]) .kitchen-status.ready { background: #16412f; color: #a8e6c6; }
+  :root:not([data-theme="light"]) .kitchen-status.cancelled { background: #4a221d; color: #ffb3a7; }
+  :root:not([data-theme="light"]) .denied-note { background: #3a2f16; color: #ffd98a; }
 }
+
+:root[data-theme="dark"] .kitchen-status.cooking { background: #4a3a12; color: #ffd98a; }
+:root[data-theme="dark"] .kitchen-status.ready { background: #16412f; color: #a8e6c6; }
+:root[data-theme="dark"] .kitchen-status.cancelled { background: #4a221d; color: #ffb3a7; }
+:root[data-theme="dark"] .denied-note { background: #3a2f16; color: #ffd98a; }
 
 /* The Play QR landing, when there is no chance to spend yet. */
 .game-intro h2 { font-size: 21px; margin-bottom: 8px; }
@@ -1095,7 +1170,7 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
 .earn-ways li { margin-bottom: 6px; }
 
 /* Paying at the counter: an order that is placed but not settled. */
-.status.unpaid_counter { background: #fdf1dd; color: #8a5a00; }
+.status.unpaid_counter { background: var(--amber-wash); color: var(--amber-ink); }
 
 /* Edit and Remove, beside the quantity stepper on each line of the order. */
 .cart-line-actions {
@@ -1121,3 +1196,34 @@ body:not(.has-cart) .chance-pill { bottom: calc(14px + env(safe-area-inset-botto
    destructive act here — re-adding it is two taps. */
 .line-action.remove { color: var(--ink-soft); }
 .line-action:active { transform: translateY(1px); }
+
+/* --- the light/dark toggle ------------------------------------------------ */
+/*
+ * Quiet, and the same shape on both sides of the app. It sits in the topbar
+ * beside the table badge, where it is reachable one-handed on a phone without
+ * being the first thing a hungry customer's eye lands on.
+ */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.theme-toggle:hover { color: var(--ink); }
+.theme-toggle:focus-visible { outline: 2px solid var(--sea); outline-offset: 2px; }
+.theme-toggle-icon { font-size: 15px; line-height: 1; }
+@media (max-width: 380px) {
+  /* On a narrow phone the brand and the table badge come first; the word goes
+     and the icon carries it, which is still a 36px target. */
+  .theme-toggle-text { display: none; }
+  .theme-toggle { padding: 0 10px; }
+}

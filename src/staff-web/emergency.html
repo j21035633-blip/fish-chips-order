@@ -6,6 +6,15 @@
     <meta name="robots" content="noindex, nofollow" />
     <title>Emergency access — Anchor &amp; Batter</title>
     <link rel="stylesheet" href="{{STAFF_BASE}}/assets/staff.css" />
+    <script>
+      // Applied before first paint, so a stored choice never flashes the other
+      // way round. Deliberately inline: a module would be deferred. Key must
+      // match THEME_KEY in theme.js.
+      try {
+        var t = localStorage.getItem("ab-theme");
+        if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
   </head>
   <body class="login-page" data-staff-base="{{STAFF_BASE}}" data-staff-view="login">
     <main>
@@ -45,10 +54,16 @@
           sign in here, make a new Owner, then unset it again.
         </p>
       </form>
+
+      <!-- Signing in is not a prerequisite for being able to read the screen. -->
+      <div id="theme-slot" class="theme-slot"></div>
     </main>
 
     <script type="module">
       import { staffBase } from "{{STAFF_BASE}}/assets/nav.js";
+      import { mountThemeToggle } from "/theme.js";
+
+      mountThemeToggle(document.getElementById("theme-slot"), { label: "Switch between light and dark" });
 
       const form = document.getElementById("login-form");
       const password = document.getElementById("password");

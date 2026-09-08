@@ -20,6 +20,107 @@
      grey rather than green. Checked against the panel, not eyeballed. */
   --chart: #0f8f7c;
   --grid: #e9edec;
+
+  /*
+   * Named washes for the badges. Every one of these was a literal buried in a
+   * rule, which is exactly what cannot flip in dark mode. The light values are
+   * the ones already shipping, so nothing about today's look moves.
+   *
+   * `--on-sea` is the text on a solid `--sea` fill. It has to be a token: in
+   * dark, `--sea` becomes a *light* green, and white-on-that is unreadable.
+   */
+  --danger-wash: #fbe6e4;
+  --amber-wash: #fdf1dd;
+  --violet: #5b3d86;
+  --violet-wash: #efe7f7;
+  --neutral-wash: #eef1f0;
+  --row-off: #fafbfb;
+  --on-sea: #fff;
+  --on-danger: #fff;
+  --on-ink: #fff;
+  --knob: #fff;
+  --backdrop: rgba(16, 36, 31, 0.4);
+  --sheet-backdrop: rgba(10, 20, 18, 0.45);
+}
+
+/*
+ * Dark, in three states.
+ *
+ * The device decides by default; `data-theme` is the toggle's override and wins
+ * in both directions — hence `:not([data-theme="light"])` on the media block, so
+ * choosing light on a dark tablet actually stays light.
+ *
+ * The two blocks MUST declare the same tokens. They are duplicated because one
+ * is inside a media query and one is not, and CSS cannot share them; the theme
+ * test compares the pair and fails if they drift.
+ *
+ * **The values are the customer app's dark palette.** Same shop, one set of
+ * colours: `--panel` is its `--card`, `--bg` its `--paper`, and the badge
+ * washes are the exact pairs `styles.css` has been using for the kitchen
+ * statuses since the game shipped — so a tablet showing the staff board and a
+ * phone showing the order agree with each other rather than clashing.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: #eef2f0;
+    --ink-soft: #a8b3af;
+    --line: #2c3835;
+    --panel: #1a2321;
+    --bg: #121917;
+    --sea: #4cbfae;
+    --sea-wash: #16412f;
+    --amber: #ffd98a;
+    --danger: #ffb3a7;
+    --chart: #3fb9a4;
+    --grid: #263230;
+    --danger-wash: #4a221d;
+    --amber-wash: #4a3a12;
+    --violet: #cbb0ee;
+    --violet-wash: #2e2440;
+    --neutral-wash: #26312e;
+    --row-off: #161e1c;
+    /* Dark ink on the light-green and salmon fills, not white. */
+    --on-sea: #08211d;
+    --on-danger: #2b0f0a;
+    --on-ink: #10241f;
+    --knob: #dfe6e3;
+    --backdrop: rgba(0, 0, 0, 0.6);
+    --sheet-backdrop: rgba(0, 0, 0, 0.65);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ink: #eef2f0;
+  --ink-soft: #a8b3af;
+  --line: #2c3835;
+  --panel: #1a2321;
+  --bg: #121917;
+  --sea: #4cbfae;
+  --sea-wash: #16412f;
+  --amber: #ffd98a;
+  --danger: #ffb3a7;
+  --chart: #3fb9a4;
+  --grid: #263230;
+  --danger-wash: #4a221d;
+  --amber-wash: #4a3a12;
+  --violet: #cbb0ee;
+  --violet-wash: #2e2440;
+  --neutral-wash: #26312e;
+  --row-off: #161e1c;
+  --on-sea: #08211d;
+  --on-danger: #2b0f0a;
+  --on-ink: #10241f;
+  --knob: #dfe6e3;
+  --backdrop: rgba(0, 0, 0, 0.6);
+  --sheet-backdrop: rgba(0, 0, 0, 0.65);
+}
+
+/* The browser's own furniture — form controls, scrollbars, the gap between
+   documents — follows too, rather than staying stubbornly white. */
+:root { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark; }
 }
 * { box-sizing: border-box; }
 
@@ -74,7 +175,7 @@ h1 { font-size: 17px; margin: 0; }
 .staff-nav a[aria-current="page"] {
   background: var(--sea);
   border-color: var(--sea);
-  color: #fff;
+  color: var(--on-sea);
 }
 .staff-nav a:focus-visible { outline: 2px solid var(--sea); outline-offset: 2px; }
 
@@ -87,7 +188,7 @@ h1 { font-size: 17px; margin: 0; }
 .feed-state.stale { color: var(--danger); font-weight: 650; }
 
 main { padding: 18px 20px 60px; }
-.error { margin: 0 20px 14px; padding: 10px 12px; border-radius: 8px; background: #fbe6e4; color: var(--danger); font-size: 14px; }
+.error { margin: 0 20px 14px; padding: 10px 12px; border-radius: 8px; background: var(--danger-wash); color: var(--danger); font-size: 14px; }
 .empty { color: var(--ink-soft); font-size: 14px; padding: 10px 2px; }
 
 /* ------------------------------------------------------- board and tickets */
@@ -125,13 +226,13 @@ main { padding: 18px 20px 60px; }
 
 .tag { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }
 .tag.paid { background: var(--sea-wash); color: var(--sea); }
-.tag.pending { background: #fdf1dd; color: var(--amber); }
+.tag.pending { background: var(--amber-wash); color: var(--amber); }
 /* Money that has gone back. Distinct from paid, and from an unpaid order. */
-.tag.refunded { background: #efe7f7; color: #5b3d86; }
-.tag.failed, .tag.expired { background: #fbe6e4; color: var(--danger); }
+.tag.refunded { background: var(--violet-wash); color: var(--violet); }
+.tag.failed, .tag.expired { background: var(--danger-wash); color: var(--danger); }
 
 button { font: inherit; border-radius: 8px; cursor: pointer; }
-.advance { background: var(--sea); color: #fff; border: 0; padding: 9px 14px; font-weight: 650; }
+.advance { background: var(--sea); color: var(--on-sea); border: 0; padding: 9px 14px; font-weight: 650; }
 .advance:disabled { opacity: 0.45; cursor: not-allowed; }
 .undo { background: transparent; border: 1px solid var(--line); color: var(--ink-soft); padding: 8px 10px; font-size: 13px; }
 
@@ -191,7 +292,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   z-index: 5;
   pointer-events: none;
   background: var(--ink);
-  color: #fff;
+  color: var(--on-ink);
   padding: 6px 9px;
   border-radius: 8px;
   font-size: 12px;
@@ -233,7 +334,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   padding: 10px 14px;
   margin-bottom: 8px;
 }
-.menu-row.off { background: #fafbfb; }
+.menu-row.off { background: var(--row-off); }
 .menu-row.off .row-name, .menu-row.off .row-price { color: var(--ink-soft); }
 .menu-row.off .thumb { filter: grayscale(1); opacity: 0.6; }
 .thumb {
@@ -272,7 +373,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 }
 .row-actions button:hover { color: var(--ink); }
 .row-actions .destroy:hover { color: var(--danger); border-color: var(--danger); }
-.row-actions .confirming { color: #fff; background: var(--danger); border-color: var(--danger); }
+.row-actions .confirming { color: var(--on-danger); background: var(--danger); border-color: var(--danger); }
 
 /* The 86 switch. One tap, saved immediately — there is no form around it. */
 .switch {
@@ -294,7 +395,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: var(--panel);
+  background: var(--knob);
   box-shadow: 0 1px 2px rgba(16, 36, 31, 0.25);
   transition: transform 120ms ease;
 }
@@ -318,7 +419,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   max-height: min(88vh, 900px);
   overflow-y: auto;
 }
-.form-dialog::backdrop { background: rgba(16, 36, 31, 0.4); }
+.form-dialog::backdrop { background: var(--backdrop); }
 .form-dialog form { padding: 18px 20px 20px; }
 .form-dialog h2 { font-size: 17px; margin: 0 0 14px; }
 .form-grid { display: grid; gap: 12px; }
@@ -412,7 +513,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   font-size: 12px;
   font-weight: 700;
   color: var(--amber);
-  background: #fdf1dd;
+  background: var(--amber-wash);
   border-radius: 999px;
   padding: 5px 11px;
   text-align: center;
@@ -515,7 +616,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   color: var(--ink);
   padding: 0;
 }
-.attribution-dialog::backdrop { background: rgba(16, 36, 31, 0.4); }
+.attribution-dialog::backdrop { background: var(--backdrop); }
 .attribution-body { padding: 14px 18px 18px; display: grid; gap: 10px; }
 .attribution-detail { margin: 0 0 4px; font-size: 13px; color: var(--ink-soft); }
 .attribution-body .field span, .pay-staff .field span { font-size: 12px; color: var(--ink-soft); }
@@ -705,7 +806,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
    table. Small, because the label beside it already says which. */
 .tag.takeaway-tag {
   margin-left: 8px;
-  background: #eef1f0;
+  background: var(--neutral-wash);
   color: var(--ink-soft);
   vertical-align: 2px;
 }
@@ -830,7 +931,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   background: var(--panel);
   color: var(--ink);
 }
-.pay-dialog::backdrop, .opts-dialog::backdrop { background: rgba(10, 20, 18, 0.45); }
+.pay-dialog::backdrop, .opts-dialog::backdrop { background: var(--sheet-backdrop); }
 .pay-body { padding: 16px 18px 18px; display: grid; gap: 10px; }
 .pay-total { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 4px; font-variant-numeric: tabular-nums; }
 .pay-body .wide { width: 100%; padding: 14px; font-size: 15px; }
@@ -899,7 +1000,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   padding: 5px 10px;
   border-radius: 999px;
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.01em;
@@ -918,7 +1019,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 }
 .cancel-actions button { flex: 1; min-height: 44px; font-weight: 750; }
 /* Approve is the one that moves money, so it is the one that looks serious. */
-.approve-cancel { background: var(--danger); color: #fff; border: 0; border-radius: 10px; font: inherit; cursor: pointer; }
+.approve-cancel { background: var(--danger); color: var(--on-danger); border: 0; border-radius: 10px; font: inherit; cursor: pointer; }
 .deny-cancel { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; font: inherit; cursor: pointer; }
 .cancel-actions button:disabled { opacity: 0.55; cursor: default; }
 .cancel-note { margin-top: 8px; font-size: 13px; color: var(--ink-soft); }
@@ -966,7 +1067,7 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   cursor: pointer;
 }
 .cancel-no { border: 1px solid var(--line); background: var(--card); color: var(--ink); }
-.cancel-yes { border: 0; background: var(--danger); color: #fff; }
+.cancel-yes { border: 0; background: var(--danger); color: var(--on-danger); }
 .cancel-no:disabled, .cancel-yes:disabled { opacity: 0.5; cursor: default; }
 
 /* The kitchen card's action row: the one advance button, plus Cancel. */
@@ -996,14 +1097,14 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   text-transform: uppercase;
 }
 .qr-order .qr-kind { background: var(--sea-wash); color: var(--sea); }
-.qr-play .qr-kind { background: #fdf1dd; color: var(--amber); }
+.qr-play .qr-kind { background: var(--amber-wash); color: var(--amber); }
 /* On paper the label has to survive being printed in grey. */
 @media print {
   .qr-kind { border: 1px solid #000; background: transparent !important; color: #000 !important; }
 }
 
 /* An order placed but not yet settled at the counter. */
-.tag.unpaid-counter { background: #fdf1dd; color: var(--amber); font-weight: 800; }
+.tag.unpaid-counter { background: var(--amber-wash); color: var(--amber); font-weight: 800; }
 .settle-actions {
   display: flex;
   align-items: center;
@@ -1024,6 +1125,42 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
   cursor: pointer;
 }
 /* Cash finishes on the tap; the other two only open a session. */
-.settle-cash { border: 0; background: var(--sea); color: #fff; }
+.settle-cash { border: 0; background: var(--sea); color: var(--on-sea); }
 .settle-gateway { border: 1px solid var(--line); background: var(--card); color: var(--ink); }
 .settle-cash:disabled, .settle-gateway:disabled { opacity: 0.5; cursor: default; }
+
+/* --- the light/dark toggle ------------------------------------------------ */
+/*
+ * The same control the customer app has, drawn in staff tokens. The markup
+ * comes from the one shared module at /theme.js; only the paint is per-side,
+ * because the two areas have different chrome.
+ */
+.theme-slot { display: flex; align-items: center; }
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.theme-toggle:hover { color: var(--ink); border-color: var(--ink-soft); }
+.theme-toggle:focus-visible { outline: 2px solid var(--sea); outline-offset: 2px; }
+.theme-toggle-icon { font-size: 14px; line-height: 1; }
+/* The login screens have room for the word; a busy board header does not. */
+/* The sign-in main is a centring flex row, so the slot became a second column
+   beside the card. Column, and the slot matches the card width so the toggle
+   lands under it rather than off to one side. */
+.login-page main { flex-direction: column; align-items: center; }
+.login-page .theme-slot { justify-content: center; width: 100%; max-width: 380px; margin-top: 16px; }
+/* Icon only in the board header — the most crowded strip in the app, and the
+   title and aria-label still name the action. The login screens keep the word. */
+header .theme-toggle-text { display: none; }
+header .theme-toggle { padding: 7px 10px; }
+@media print { .theme-slot { display: none; } }
