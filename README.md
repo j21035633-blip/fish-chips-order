@@ -446,6 +446,46 @@ socket on a kitchen tablet that silently stops updating is worse than a request 
 The header shows `not updating` if the feed stalls, so a frozen board is visible rather than quietly
 wrong.
 
+### Individual staff accounts, for attribution
+
+Separate from the gate below, and **not a replacement for it**: the shared password still decides who
+gets in, and there is no per-account login. What these add is the question the shared password cannot
+answer — *which* of the six people who know it took the money for order AB-4821.
+
+An account is a short code, a name, a free-text role and an active flag, managed from the **Staff**
+page. Both cashiering flows — settling a pay-at-counter order, and ringing up a takeaway — now ask
+for a staff ID and name, check the pair against a real active account server-side, and stamp the
+verified id and name onto the order as `processedBy`. A pair that does not check out fails the whole
+action, so an unattributed settlement is not something the UI could skip past. Both boards then show
+"Settled by: …" on the order for as long as it is on screen.
+
+**Deleting deactivates.** The record stays and the name stays with it, because every order that
+person ever settled carries a *copy* of their name taken at the time — rename them or take them off
+the till, and last March's orders still say who was on it. A deactivated account stops passing the
+check immediately, and its code is never handed to anyone else.
+
+A password is stored, hashed with scrypt, for a per-account login later. Nothing reads it yet.
+
+### Individual staff accounts, for attribution
+
+Separate from the gate below, and **not a replacement for it**: the shared password still decides who
+gets in, and there is no per-account login. What these add is the question the shared password cannot
+answer — *which* of the six people who know it took the money for order AB-4821.
+
+An account is a short code, a name, a free-text role and an active flag, managed from the **Staff**
+page. Both cashiering flows — settling a pay-at-counter order, and ringing up a takeaway — now ask
+for a staff ID and name, check the pair against a real active account server-side, and stamp the
+verified id and name onto the order as `processedBy`. A pair that does not check out fails the whole
+action, so an unattributed settlement is not something the UI could skip past. Both boards then show
+"Settled by: …" on the order for as long as it is on screen.
+
+**Deleting deactivates.** The record stays and the name stays with it, because every order that
+person ever settled carries a *copy* of their name taken at the time — rename them or take them off
+the till, and last March's orders still say who was on it. A deactivated account stops passing the
+check immediately, and its code is never handed to anyone else.
+
+A password is stored, hashed with scrypt, for a per-account login later. Nothing reads it yet.
+
 ### One shared password, on the pages and the API
 
 Everyone behind the counter signs in with the same password, set in `STAFF_PASSWORD`. Not per-user

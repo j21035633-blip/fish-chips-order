@@ -33,7 +33,15 @@ beforeEach(() => {
 describe("staff nav", () => {
   it("offers every view, in order", () => {
     const labels = [...nav.staffNav().querySelectorAll("a")].map((link: Element) => link.textContent);
-    expect(labels).toEqual(["Dashboard", "Kitchen & Counter", "Sales Report", "Menu", "Table QR Codes", "Approvals"]);
+    expect(labels).toEqual([
+      "Dashboard",
+      "Kitchen & Counter",
+      "Sales Report",
+      "Menu",
+      "Table QR Codes",
+      "Approvals",
+      "Staff",
+    ]);
   });
 
   it("builds links from the path the area is mounted at", () => {
@@ -45,6 +53,7 @@ describe("staff nav", () => {
       "/staff-a8f3k2m9/menu",
       "/staff-a8f3k2m9/qr",
       "/staff-a8f3k2m9/approvals",
+      "/staff-a8f3k2m9/accounts",
     ]);
 
     // The mount point is configurable, so nothing may be hard-coded.
@@ -57,6 +66,7 @@ describe("staff nav", () => {
       "/staff/menu",
       "/staff/qr",
       "/staff/approvals",
+      "/staff/accounts",
     ]);
   });
 
@@ -68,6 +78,7 @@ describe("staff nav", () => {
       ["menu", "Menu"],
       ["qr", "Table QR Codes"],
       ["approvals", "Approvals"],
+      ["accounts", "Staff"],
     ];
     for (const [view, expected] of views) {
       mountAs(view);
@@ -91,7 +102,7 @@ describe("staff nav", () => {
   });
 
   it("puts a log out button on every view, last in the header", () => {
-    for (const view of ["dashboard", "kitchen", "sales", "menu", "qr", "approvals"]) {
+    for (const view of ["dashboard", "kitchen", "sales", "menu", "qr", "approvals", "accounts"]) {
       mountAs(view);
       const { header } = nav.mountStaffChrome({ title: "Anything" });
 
@@ -174,6 +185,7 @@ describe("staff page markup", () => {
     ["menu.html", "menu"],
     ["qr.html", "qr"],
     ["approvals.html", "approvals"],
+    ["accounts.html", "accounts"],
     ["login.html", "login"],
   ];
 
@@ -301,7 +313,7 @@ describe("quick add on the pass", () => {
 
   it("still posts to the takeaway route the backend already has", () => {
     expect(html).toContain("/api/staff/orders/takeaway");
-    expect(html).toContain('JSON.stringify({ cartId: walkin.cartId, payment })');
+    expect(html).toContain('JSON.stringify({ cartId: walkin.cartId, payment, staffId, staffName })');
     // Built on the customer's own cart endpoints, not a second pricing path.
     expect(html).toContain("/api/carts");
   });

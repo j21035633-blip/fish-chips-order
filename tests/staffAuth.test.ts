@@ -12,6 +12,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import type { Services } from "../src/app/container.js";
 import { InMemoryProofRepository } from "../src/game/proofs.js";
+import { InMemoryStaffAccountRepository, StaffAccountService } from "../src/staff/accounts.js";
 import { config } from "../src/config/env.js";
 import { createServer } from "../src/http/app.js";
 import { MenuService } from "../src/menu/service.js";
@@ -47,6 +48,7 @@ function buildServices(): Services {
     menuStore,
     payments: createPaymentService(orders),
     proofs: new InMemoryProofRepository(),
+    staffAccounts: new StaffAccountService(new InMemoryStaffAccountRepository()),
     storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} } as const,
   };
 }
@@ -79,7 +81,15 @@ afterEach(() => {
 });
 
 /** Every staff page, including the two the original list forgot. */
-const STAFF_PAGES = ["/staff", "/staff/kitchen", "/staff/sales", "/staff/menu", "/staff/qr", "/staff/approvals"];
+const STAFF_PAGES = [
+  "/staff",
+  "/staff/kitchen",
+  "/staff/sales",
+  "/staff/menu",
+  "/staff/qr",
+  "/staff/approvals",
+  "/staff/accounts",
+];
 
 /** A GET that follows nothing, so a redirect is visible rather than followed. */
 function page(path: string, cookie?: string): Promise<Response> {

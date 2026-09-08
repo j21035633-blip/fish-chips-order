@@ -33,6 +33,7 @@ import {
   STAFF_SESSION_COOKIE,
   throttleKey,
 } from "../staff/auth.js";
+import { StaffAccountError } from "../staff/accounts.js";
 import { createMenuTools } from "../tools/menuTools.js";
 import { createOrderTools } from "../tools/orderTools.js";
 
@@ -458,8 +459,12 @@ export function createServer(app: Services = services) {
    */
   server.patch("/api/staff/orders/:orderId/settle", (req, res) => {
     void runAsync(res, async () => {
-      const { method } = settleInput.parse(req.body ?? {});
-      const { order, settled } = await app.payments.settleAtCounter(req.params.orderId, method);
+      const { method, staffId, staffName } = settleInput.parse(req.body ?? {});
+      // Before anything moves: an id and a name that name a real person who is
+      // on shift. The shared password already said somebody behind the counter
+      // sent this; this says which of them, and it goes onto the order.
+      const processedBy = await app.staffAccounts.verify({ staffId, staffName });
+      const { order, settled } = await app.payments.settleAtCounter(req.params.orderId, method, processedBy);
       return { order, settled, payment: order.payment };
     });
   });
@@ -523,6 +528,9 @@ export function createServer(app: Services = services) {
   server.post("/api/staff/orders/takeaway", (req, res) => {
     void runAsync(res, async () => {
       const input = takeawayInput.parse(req.body ?? {});
+      // Checked *before* the order is confirmed: a wrong staff code must not
+      // leave a real order sitting on the pass that nobody meant to ring up.
+      const processedBy = await app.staffAccounts.verify(input);
 
       const order = await app.orders.confirm({
         cartId: input.cartId,
@@ -531,6 +539,11 @@ export function createServer(app: Services = services) {
         // them, so the ticket waits for the money. Cash is already in the till.
         takeaway: { holdForPayment: input.payment === "card" },
       });
+
+      // Stamped on the order itself rather than only on the payment, so it is
+      // there whichever way the money lands — and still there for a card order
+      // that is settled by somebody else's webhook hours later.
+      await app.orders.recordProcessedBy(order.id, processedBy);
 
       if (input.payment === "cash") {
         const paid = await app.orders.takeCash(order.id);
@@ -541,6 +554,62 @@ export function createServer(app: Services = services) {
       const started = await app.payments.initiate(order.id, "card");
       return { order: started, payment: started.payment ?? null };
     });
+  });
+
+  // ---------------------------------------------------------- staff accounts
+  /**
+   * Individual staff records, for attributing cashiering.
+   *
+   * Behind the same shared-password gate as everything else under
+   * `/api/staff` — these routes create the accounts, they are not a way in.
+   * The password hash never leaves the server: every response goes through
+   * `toView`.
+   */
+  server.get("/api/staff/accounts", (_req, res) => {
+    void runAsync(res, async () => ({
+      // Deactivated ones included, flagged rather than hidden: this is the page
+      // that shows who used to be on the till, and the page that puts them back.
+      accounts: await app.staffAccounts.list(),
+    }));
+  });
+
+  server.post("/api/staff/accounts", (req, res) => {
+    void runAsync(res, async () => {
+      const input = staffAccountInput.parse(req.body ?? {});
+      const account = await app.staffAccounts.create(input);
+      res.status(201).json({ account });
+      return undefined;
+    });
+  });
+
+  /**
+   * Name, role and — only when one is sent — the password.
+   *
+   * The staff id is deliberately not editable: every order this person has
+   * processed points back at it.
+   */
+  server.patch("/api/staff/accounts/:staffId", (req: Request<{ staffId: string }>, res) => {
+    void runAsync(res, async () => {
+      const input = staffAccountPatch.parse(req.body ?? {});
+      // `active` is its own instruction rather than a field of the patch, so a
+      // form resubmitting everything it loaded cannot silently reinstate
+      // somebody who was taken off the till.
+      if (input.active === true) await app.staffAccounts.reactivate(req.params.staffId);
+      const { active: _active, ...fields } = input;
+      return { account: await app.staffAccounts.update(req.params.staffId, fields) };
+    });
+  });
+
+  /**
+   * Deactivate. **Not** a delete, and the difference matters: the orders this
+   * person settled carry their name, and a record that can be erased is a
+   * report that can develop holes.
+   */
+  server.delete("/api/staff/accounts/:staffId", (req: Request<{ staffId: string }>, res) => {
+    void runAsync(res, async () => ({
+      account: await app.staffAccounts.deactivate(req.params.staffId),
+      deactivated: true,
+    }));
   });
 
   // --------------------------------------------------------- staff approvals
@@ -761,6 +830,7 @@ export function createServer(app: Services = services) {
     server.get(`${config.staffDashboardPath}/menu`, requireStaffPage, staffPage("menu.html"));
     server.get(`${config.staffDashboardPath}/qr`, requireStaffPage, staffPage("qr.html"));
     server.get(`${config.staffDashboardPath}/approvals`, requireStaffPage, staffPage("approvals.html"));
+    server.get(`${config.staffDashboardPath}/accounts`, requireStaffPage, staffPage("accounts.html"));
 
     // The shared nav, styles and helpers the three pages import. Mounted under
     // the dashboard's own path so nothing about the staff area leaks a route at
@@ -838,7 +908,35 @@ const staffStatusInput = z.object({ status: z.enum(PASS_STATUSES) });
  * put it in the *customer's* payment picker, which is the one place it must
  * never appear.
  */
-const settleInput = z.object({ method: z.enum(["cash", ...PAYMENT_METHODS]) });
+/**
+ * Settling takes the cashier along with the method.
+ *
+ * Required, not optional: this endpoint exists to move money at a counter, and
+ * an unattributed settlement is the exact thing the accounts were added for.
+ * Whether the pair names a real active person is `StaffAccountService.verify`'s
+ * to say — this only insists that both were sent.
+ */
+const settleInput = z.object({
+  method: z.enum(["cash", ...PAYMENT_METHODS]),
+  staffId: z.string().min(1),
+  staffName: z.string().min(1),
+});
+
+const staffAccountInput = z.object({
+  staffId: z.string().optional(),
+  name: z.string(),
+  password: z.string(),
+  role: z.string().optional(),
+});
+
+const staffAccountPatch = z.object({
+  name: z.string().optional(),
+  role: z.string().optional(),
+  /** Absent leaves the stored hash alone; present resets it. */
+  password: z.string().optional(),
+  /** True puts a deactivated account back on shift. */
+  active: z.boolean().optional(),
+});
 
 /**
  * Length-capped so a megabyte of "password" cannot be hashed on demand, and
@@ -864,6 +962,10 @@ const takeawayInput = z.object({
   cartId: z.string().min(1),
   payment: z.enum(["cash", "card"]),
   customerName: z.string().trim().min(1).max(60).optional(),
+  // Whoever is on the till. Required for the same reason it is on `settle`:
+  // both are a person taking money across a counter.
+  staffId: z.string().min(1),
+  staffName: z.string().min(1),
 });
 
 const registerInput = z.object({
@@ -1081,6 +1183,15 @@ function respondToError(res: Response, error: unknown): void {
     // Same split as OrderValidationError: a missing item is a 404, everything
     // else is something the staff member can fix in the form.
     const status = error.code === "unknown_menu_item" ? 404 : 400;
+    res.status(status).json({ error: error.code, message: error.message, details: error.details });
+    return;
+  }
+  if (error instanceof StaffAccountError) {
+    // A missing account is a 404 on the admin routes; a code already in use is
+    // a conflict; everything else — including a cashier's id/name pair that does
+    // not check out — is something the person at the keyboard can fix.
+    const status =
+      error.code === "unknown_staff_account" ? 404 : error.code === "duplicate_staff_id" ? 409 : 400;
     res.status(status).json({ error: error.code, message: error.message, details: error.details });
     return;
   }

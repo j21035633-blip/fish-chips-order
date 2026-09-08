@@ -32,9 +32,9 @@ The plan called for FastAPI + Next.js. What actually shipped is Node, and new wo
    confirmed orders, table carried from the scan onto the ticket
 3. **Payments** — Stripe (cards) + Revenue Monster (e-wallets/DuitNow) behind a `PaymentAdapter`,
    webhooks with real signature verification, simulated when no credentials are configured
-4. **Staff area** — six views: kitchen status, daily sales total, sales reporting, menu management,
-   table QR codes and the proof-approval queue, all behind one shared password. See *Staff area* and
-   *Staff auth* below.
+4. **Staff area** — seven views: kitchen status, daily sales total, sales reporting, menu
+   management, table QR codes, the proof-approval queue and individual staff accounts, all behind one
+   shared password. See *Staff area*, *Staff auth* and *Staff accounts* below.
 5. **Fishing game** — session-scoped chances, four earning triggers, staff-approved review/share
    proofs, and a server-rolled weighted reward applied to the cart. See *The fishing game* below.
 
@@ -52,7 +52,7 @@ Ask before deciding anything not specified here (exact menu items, styling detai
 
 ## Staff area
 
-Six views plus a login screen under `STAFF_DASHBOARD_PATH` (default `/staff`), sharing one nav and one
+Seven views plus a login screen under `STAFF_DASHBOARD_PATH` (default `/staff`), sharing one nav and one
 stylesheet in `src/staff-web/assets/`:
 
 | Path | View | What it does |
@@ -63,6 +63,7 @@ stylesheet in `src/staff-web/assets/`:
 | `/menu` | **Menu** | Add / edit / delete items, upload photos, one-tap availability toggle |
 | `/qr` | **Table QR Codes** | Type the tables, generate, print the sheet or download a PNG each |
 | `/approvals` | **Approvals** | Review and share screenshots waiting on a yes or a no — see *The fishing game* |
+| `/accounts` | **Staff** | Individual staff records, for attributing cashiering — see *Staff accounts* |
 | `/login` | **Sign in** | The one page outside the gate. No nav, one password field — see *Staff auth* |
 
 Each view is its own document rather than a client-side router, so a tablet on the pass reloads into
@@ -227,8 +228,8 @@ off both boards, while staying in the day's trade so the sales report still coun
 Counter view is where it is set ("Mark Collected"); the Dashboard's chain still ends at Ready.
 
 `cancelled` is reachable only through `approve-cancel` — see above. Any *pass* status is accepted
-rather than forward-only — a mis-tap on a busy pass has to be undoable, and
-a shared password means there is no per-person audit trail to protect anyway. The change is
+rather than forward-only — a mis-tap on a busy pass has to be undoable, and moving a ticket along
+is not attributed to anybody (the two *cashiering* flows are — see *Staff accounts*). The change is
 idempotent, so a double-tap is not an error. Kitchen status never touches payment status: money and food move independently.
 
 ### Menu management
@@ -559,6 +560,51 @@ against someone else's table.
 > A missing volume looks exactly like a working directory until the next deploy, when every stored
 > image URL starts 404ing while the menu still lists the items.
 
+### Staff accounts
+
+`src/staff/accounts.ts`. Individual staff records for **attribution**, sitting on top of the shared
+password rather than replacing it. There is no per-account login and no session comes out of this —
+the shared gate is untouched.
+
+```
+GET    /api/staff/accounts              list, deactivated ones included and flagged
+POST   /api/staff/accounts              { staffId?, name, password, role? }
+PATCH  /api/staff/accounts/{staffId}    name / role / password / active:true to reinstate
+DELETE /api/staff/accounts/{staffId}    deactivate — never removes the record
+```
+
+`StaffAccountService.verify({ staffId, staffName })` is the check: a real account, active, whose name
+matches. Case and spacing are typing noise on both fields — it is entered on a tablet mid-service.
+One error code (`staff_verification_failed`) with the reason in `details` (`unknown` / `inactive` /
+`name_mismatch` / `missing`), and a message that says which, because there is nobody behind the
+shared gate to withhold it from and a cashier needs to know whether to fix the code or the spelling.
+
+**Two flows require it**, and both refuse without it:
+
+- `PATCH /api/staff/orders/{id}/settle` — `{ method, staffId, staffName }`
+- `POST /api/staff/orders/takeaway` — `{ cartId, payment, staffId, staffName }`
+
+Both verify *before* anything moves — the takeaway check runs before the order is confirmed, so a
+wrong code cannot leave a real ticket on the pass — then stamp `Order.processedBy` via
+`OrderService.recordProcessedBy`. `PaymentService.settleAtCounter` takes `processedBy` as a
+**required** parameter for the same reason: an optional one is a forgetful call site away from an
+unattributed transaction.
+
+**`processedBy` copies the name; it is not a pointer.** Rename an account or switch it off and the
+order still reads correctly, which is the whole reason deactivating is a soft delete. A deactivated
+code is never reissued either — two people under one name would be worse than no name.
+
+The password is hashed with scrypt (`node:crypto`, no dependency, same reasoning as the session HMAC)
+and stored for a future login. `passwordMatches` exists and is tested; **nothing calls it**.
+
+On the pages: `assets/attribution.js` owns the "who is taking this?" sheet and the "Settled by: …"
+line. The sheet is a modal rather than two fields on the order card because **both boards redraw from
+the poll every two seconds** — inline inputs would be rebuilt underneath whoever was typing into
+them. Nothing is prefilled between transactions, deliberately: a remembered id one tap from Confirm
+is exactly the accountability hole this closes. The takeaway's pay sheet asks inline instead, because
+it is already a dialog outside the polled region, and it stays open on a rejection so a wrong code is
+a correction rather than a lost walk-in.
+
 ### Staff auth — one shared password
 
 Everything under the staff path and everything under `/api/staff/` is behind a single password that
@@ -782,6 +828,11 @@ float. See `src/menu/types.ts` and `src/orders/types.ts` for what is actually th
   on `multi`; absent means "as many as there are"), choices[]. The API additionally emits the
   derived `minSelections`/`maxSelections` pair the customer app renders on.
 - `OptionChoice`: id, name, priceDeltaSen, isDefault?, available, allergens?
+- `StaffAccount`: staffId (short code, normalised uppercase, unique, never reissued), name,
+  passwordHash (scrypt; stored for a future login, unread today), role (free text), active,
+  createdAt, updatedAt, deactivatedAt?
+- `ProcessedBy`: staffId, name (**copied** at the time, not resolved later), at — stamped on
+  `Order.processedBy` by the two cashiering flows
 - `Category`: id (slug), name (as staff typed it), blurb, sortOrder
 - `Order`: id, reference, lines[], totals, paymentStatus (pending|paid|failed|expired),
   **kitchenStatus (received|cooking|ready|collected)**, tableNumber?, createdAt, updatedAt

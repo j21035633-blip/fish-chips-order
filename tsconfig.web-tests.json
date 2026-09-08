@@ -11,6 +11,7 @@
     "tests/fishingGame.test.ts",
     "tests/cancellationUi.test.ts",
     "tests/menuOptionsUi.test.ts",
+    "tests/staffAccountsUi.test.ts",
     "src/web/**/*",
     "src/staff-web/**/*"
   ],

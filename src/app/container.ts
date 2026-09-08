@@ -10,6 +10,7 @@ import {
 } from "../orders/repository.js";
 import { CartService, OrderService } from "../orders/service.js";
 import { createPaymentService, PaymentService } from "../payments/service.js";
+import { InMemoryStaffAccountRepository, StaffAccountService } from "../staff/accounts.js";
 import { MongoStorage, type IndexState } from "../storage/mongo.js";
 
 /**
@@ -46,6 +47,12 @@ export interface Services {
   menuStore: MenuStore;
   /** Review and share screenshots, and the queue staff approve them from. */
   proofs: ProofRepository;
+  /**
+   * Individual staff, for attributing cashiering. Separate from the shared
+   * password gate in `staff/auth.ts` and no substitute for it: that decides who
+   * gets in, this decides whose name goes on a transaction.
+   */
+  staffAccounts: StaffAccountService;
 }
 
 export function createServices(): Services {
@@ -72,6 +79,9 @@ export function createServices(): Services {
     menu,
     menuStore,
     proofs: mongo ? mongo.proofs() : new InMemoryProofRepository(),
+    staffAccounts: new StaffAccountService(
+      mongo ? mongo.staffAccounts() : new InMemoryStaffAccountRepository(),
+    ),
   };
 }
 

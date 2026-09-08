@@ -1,5 +1,6 @@
 import type { Reward } from "../game/rewards.js";
 import type { Allergen } from "../menu/types.js";
+import type { ProcessedBy } from "../staff/accounts.js";
 
 /**
  * Cart and order types (Phase 2).
@@ -382,6 +383,19 @@ export interface Order {
   holdForPayment?: boolean;
   /** Kitchen progress. Every order starts `received`; staff move it on. */
   kitchenStatus: KitchenStatus;
+  /**
+   * Which member of staff took the money for this one.
+   *
+   * Set on the two flows where a person behind the counter handles a payment:
+   * settling a pay-at-counter order, and ringing up a takeaway. The shared
+   * password says somebody on shift did it; this says who.
+   *
+   * The name is a **copy** taken at the time, not a pointer to be resolved
+   * later — the account can be renamed or deactivated afterwards and this order
+   * still says who was on the till that day. Absent on every order nobody
+   * behind the counter touched, which is every ordinary QR order.
+   */
+  processedBy?: ProcessedBy;
 
   /**
    * The customer has asked for this order to be called off, and nobody behind

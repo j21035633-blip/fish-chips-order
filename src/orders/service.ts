@@ -5,6 +5,7 @@ import { menuService, type MenuService } from "../menu/service.js";
 import { formatSen } from "../menu/money.js";
 import { businessDay, businessDayRange, businessDaysBetween, isBusinessDay } from "./businessDay.js";
 import { rollTier, toReward, type Reward } from "../game/rewards.js";
+import type { ProcessedBy } from "../staff/accounts.js";
 import { priceCart } from "./pricing.js";
 import {
   InMemoryCartRepository,
@@ -635,6 +636,26 @@ export class OrderService {
     if (order.paymentStatus !== "pending") return order;
 
     order.paymentStatus = "unpaid_counter";
+    order.updatedAt = new Date().toISOString();
+    await this.orders.save(order);
+    return order;
+  }
+
+  /**
+   * Stamps who is handling this transaction onto the order.
+   *
+   * Called *after* the eligibility check and *before* the money moves, so an
+   * order that could not be settled anyway is never attributed to the person who
+   * tried — and so every step that follows re-reads an order that already
+   * carries the name.
+   *
+   * The last person to touch it wins, which is the honest answer: a counter
+   * order that had a QR put in front of it and was then paid in cash by someone
+   * else on the next shift was processed by the second person.
+   */
+  async recordProcessedBy(orderId: string, processedBy: ProcessedBy): Promise<Order> {
+    const order = await this.get(orderId);
+    order.processedBy = processedBy;
     order.updatedAt = new Date().toISOString();
     await this.orders.save(order);
     return order;

@@ -18,6 +18,9 @@ export const STAFF_VIEWS = [
   { id: "menu", label: "Menu", path: "/menu" },
   { id: "qr", label: "Table QR Codes", path: "/qr" },
   { id: "approvals", label: "Approvals", path: "/approvals" },
+  // Individual staff records, for attributing cashiering. Not a way in — the
+  // shared password is still the only gate; see `staff/auth.ts`.
+  { id: "accounts", label: "Staff", path: "/accounts" },
 ];
 
 /** The path the staff area is served under, e.g. "/staff-a8f3k2m9". */

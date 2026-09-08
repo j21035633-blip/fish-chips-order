@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Services } from "../src/app/container.js";
 import type { RevenueMonsterConfig, StripeConfig } from "../src/config/env.js";
 import { InMemoryProofRepository } from "../src/game/proofs.js";
+import { InMemoryStaffAccountRepository, StaffAccountService } from "../src/staff/accounts.js";
 import { createServer } from "../src/http/app.js";
 import { MenuService } from "../src/menu/service.js";
 import { MenuStore } from "../src/menu/store.js";
@@ -63,6 +64,7 @@ function buildServices(): Services {
     menu,
     menuStore,
     proofs: new InMemoryProofRepository(),
+    staffAccounts: new StaffAccountService(new InMemoryStaffAccountRepository()),
     storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} } as const,
   };
 }
@@ -606,6 +608,13 @@ describe("isolation", async () => {
 });
 
 describe("staff takeaway over HTTP", () => {
+  /** Whoever is ringing it up. The endpoint refuses an unattributed takeaway. */
+  const ON_TILL = { staffId: "AR47", staffName: "Aisyah Rahman" };
+
+  beforeAll(async () => {
+    await app.staffAccounts.create({ staffId: ON_TILL.staffId, name: ON_TILL.staffName, password: "till-pass" });
+  });
+
   /** Opens a cart the way the staff panel does, with one item in it. */
   async function counterCart(): Promise<string> {
     const cartId = await openCart();
@@ -615,7 +624,7 @@ describe("staff takeaway over HTTP", () => {
 
   it("rings up a cash takeaway as paid, straight onto the board", async () => {
     const cartId = await counterCart();
-    const body = await json(await post("/api/staff/orders/takeaway", { cartId, payment: "cash" }));
+    const body = await json(await post("/api/staff/orders/takeaway", { cartId, payment: "cash", ...ON_TILL }));
 
     expect(body.order.paymentStatus).toBe("paid");
     expect(body.order.takeawayNumber).toBeGreaterThan(0);
@@ -628,7 +637,7 @@ describe("staff takeaway over HTTP", () => {
 
   it("routes a card takeaway through the same payment flow, held off the board", async () => {
     const cartId = await counterCart();
-    const body = await json(await post("/api/staff/orders/takeaway", { cartId, payment: "card" }));
+    const body = await json(await post("/api/staff/orders/takeaway", { cartId, payment: "card", ...ON_TILL }));
 
     expect(body.order.paymentStatus).toBe("pending");
     expect(body.order.holdForPayment).toBe(true);
@@ -651,7 +660,7 @@ describe("staff takeaway over HTTP", () => {
   it("charges a takeaway the same total, tax included", async () => {
     const cartId = await counterCart();
     const { cart } = await json(await fetch(`${base}/api/carts/${cartId}`));
-    const body = await json(await post("/api/staff/orders/takeaway", { cartId, payment: "cash" }));
+    const body = await json(await post("/api/staff/orders/takeaway", { cartId, payment: "cash", ...ON_TILL }));
 
     expect(body.order.subtotalSen).toBe(cart.subtotalSen);
     expect(body.order.taxSen).toBe(cart.taxSen);
@@ -660,10 +669,10 @@ describe("staff takeaway over HTTP", () => {
 
   it("refuses an empty cart and an unknown payment kind", async () => {
     const empty = await openCart();
-    expect((await post("/api/staff/orders/takeaway", { cartId: empty, payment: "cash" })).status).toBe(400);
+    expect((await post("/api/staff/orders/takeaway", { cartId: empty, payment: "cash", ...ON_TILL })).status).toBe(400);
 
     const cartId = await counterCart();
-    expect((await post("/api/staff/orders/takeaway", { cartId, payment: "voucher" })).status).toBe(400);
+    expect((await post("/api/staff/orders/takeaway", { cartId, payment: "voucher", ...ON_TILL })).status).toBe(400);
     // Cash is not a customer payment method and must not appear as one.
     const methods = await json(await fetch(`${base}/api/payments/methods`));
     expect(JSON.stringify(methods)).not.toContain("cash");

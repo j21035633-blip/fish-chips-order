@@ -18,6 +18,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import type { Services } from "../src/app/container.js";
 import { InMemoryProofRepository } from "../src/game/proofs.js";
+import { InMemoryStaffAccountRepository, StaffAccountService } from "../src/staff/accounts.js";
 import { createServer } from "../src/http/app.js";
 import { menuService } from "../src/menu/service.js";
 import { InMemoryCartRepository, InMemoryOrderRepository } from "../src/orders/repository.js";
@@ -28,6 +29,12 @@ import { StripeAdapter } from "../src/payments/stripeAdapter.js";
 import { RevenueMonsterAdapter } from "../src/payments/revenueMonsterAdapter.js";
 
 const BASE_URL = "http://localhost:3000";
+/**
+ * Whoever is on the till. `settleAtCounter` takes an already-verified person —
+ * checking that they are real is the HTTP layer's job, exercised in
+ * staffAccounts.test.ts — so these tests hand it one and get on with the money.
+ */
+const CASHIER = { staffId: "AR47", name: "Aisyah Rahman", at: "2026-03-01T10:00:00.000Z" };
 const NO_KEYS = { secretKey: undefined, webhookSecret: undefined, apiBase: "https://api.stripe.test" };
 
 let carts: CartService;
@@ -113,7 +120,7 @@ describe("settling one at the counter", () => {
   it("takes cash on the spot", async () => {
     const order = await counterOrder();
 
-    const { order: settled, settled: done } = await payments.settleAtCounter(order.id, "cash");
+    const { order: settled, settled: done } = await payments.settleAtCounter(order.id, "cash", CASHIER);
 
     expect(done).toBe(true);
     expect(settled.paymentStatus).toBe("paid");
@@ -128,7 +135,7 @@ describe("settling one at the counter", () => {
     it(`opens a ${method} session and waits for the webhook before it counts`, async () => {
       const order = await counterOrder();
 
-      const { order: started, settled } = await payments.settleAtCounter(order.id, method);
+      const { order: started, settled } = await payments.settleAtCounter(order.id, method, CASHIER);
 
       // Something to turn round to the customer...
       expect(settled).toBe(false);
@@ -152,15 +159,15 @@ describe("settling one at the counter", () => {
     // A gateway order mid-flight is somebody else's: settling it here would take
     // the money twice when its own webhook lands.
     const gateway = await gatewayOrder();
-    await expect(payments.settleAtCounter(gateway.id, "cash")).rejects.toThrow(/not waiting to be paid/i);
-    await expect(payments.settleAtCounter(gateway.id, "cash")).rejects.toThrow(OrderValidationError);
+    await expect(payments.settleAtCounter(gateway.id, "cash", CASHIER)).rejects.toThrow(/not waiting to be paid/i);
+    await expect(payments.settleAtCounter(gateway.id, "cash", CASHIER)).rejects.toThrow(OrderValidationError);
   });
 
   it("refuses to take the money twice", async () => {
     const order = await counterOrder();
-    await payments.settleAtCounter(order.id, "cash");
+    await payments.settleAtCounter(order.id, "cash", CASHIER);
 
-    await expect(payments.settleAtCounter(order.id, "cash")).rejects.toThrow(/already paid/i);
+    await expect(payments.settleAtCounter(order.id, "cash", CASHIER)).rejects.toThrow(/already paid/i);
     expect(await takings()).toBe(order.totalSen);
   });
 
@@ -168,7 +175,7 @@ describe("settling one at the counter", () => {
     // The realistic failure: the customer walks off mid-QR. The order must go
     // back to being collectable rather than being stuck or silently counted.
     const order = await counterOrder();
-    await payments.settleAtCounter(order.id, "ewallet");
+    await payments.settleAtCounter(order.id, "ewallet", CASHIER);
 
     expect(await takings()).toBe(0);
     expect((await orders.get(order.id)).paymentStatus).toBe("unpaid_counter");
@@ -180,9 +187,9 @@ describe("settling one at the counter", () => {
     // of that is a double charge. `takeCash` has refused this since it was
     // written for takeaways, and it goes on refusing it here.
     const order = await counterOrder();
-    await payments.settleAtCounter(order.id, "ewallet");
+    await payments.settleAtCounter(order.id, "ewallet", CASHIER);
 
-    await expect(payments.settleAtCounter(order.id, "cash")).rejects.toThrow(/already has a card payment/i);
+    await expect(payments.settleAtCounter(order.id, "cash", CASHIER)).rejects.toThrow(/already has a card payment/i);
 
     // Still owed, still off the report, still on the boards as Unpaid — which
     // is what a staff member needs in order to sort it out with the customer.
@@ -196,6 +203,8 @@ describe("over HTTP", () => {
   let server: Server;
   let base: string;
 
+  const accounts = new StaffAccountService(new InMemoryStaffAccountRepository());
+
   beforeAll(async () => {
     const cartRepo = new InMemoryCartRepository();
     const orderRepo = new InMemoryOrderRepository();
@@ -208,8 +217,13 @@ describe("over HTTP", () => {
       menuStore: undefined as never,
       payments: new PaymentService(orderService, [new StripeAdapter(NO_KEYS, BASE_URL)], BASE_URL),
       proofs: new InMemoryProofRepository(),
+      staffAccounts: accounts,
       storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} },
     } as unknown as Services;
+
+    // The settle endpoint refuses an unattributed payment, so there has to be
+    // somebody on the till for these to be about anything else.
+    await accounts.create({ staffId: CASHIER.staffId, name: CASHIER.name, password: "till-pass", role: "Cashier" });
 
     server = createServer(app).listen(0);
     await new Promise((resolve) => server.once("listening", resolve));
@@ -252,7 +266,7 @@ describe("over HTTP", () => {
     // block, so the day's total already has other orders in it.
     const before = (await json(await call("GET", "/api/staff/overview"))).sales.totalSen;
 
-    const response = await call("PATCH", `/api/staff/orders/${order.id}/settle`, { method: "cash" });
+    const response = await call("PATCH", `/api/staff/orders/${order.id}/settle`, { method: "cash", staffId: CASHIER.staffId, staffName: CASHIER.name });
     expect(response.status).toBe(200);
     await expect(json(response)).resolves.toMatchObject({ settled: true, order: { paymentStatus: "paid" } });
 
@@ -264,7 +278,7 @@ describe("over HTTP", () => {
     const order = await placeAtCounter();
 
     const before = (await json(await call("GET", "/api/staff/overview"))).sales.totalSen;
-    const body = await json(await call("PATCH", `/api/staff/orders/${order.id}/settle`, { method: "card" }));
+    const body = await json(await call("PATCH", `/api/staff/orders/${order.id}/settle`, { method: "card", staffId: CASHIER.staffId, staffName: CASHIER.name }));
 
     expect(body.settled).toBe(false);
     expect(body.payment.checkoutUrl ?? body.payment.qrCodeUrl).toBeTruthy();
@@ -278,7 +292,9 @@ describe("over HTTP", () => {
 
   it("rejects a settle method that is not one of the three", async () => {
     const order = await placeAtCounter();
-    expect((await call("PATCH", `/api/staff/orders/${order.id}/settle`, { method: "crypto" })).status).toBe(400);
+    expect(
+      (await call("PATCH", `/api/staff/orders/${order.id}/settle`, { method: "crypto", staffId: CASHIER.staffId, staffName: CASHIER.name })).status,
+    ).toBe(400);
     expect((await call("PATCH", `/api/staff/orders/${order.id}/settle`, {})).status).toBe(400);
   });
 

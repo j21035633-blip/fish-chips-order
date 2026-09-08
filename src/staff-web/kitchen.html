@@ -68,6 +68,25 @@
       </div>
       <div class="pay-body">
         <p id="pay-total" class="pay-total">RM0.00</p>
+        <!--
+          Who is ringing it up, asked here rather than in a second sheet: this
+          dialog is already the step between "there is an order" and "money has
+          moved", and it sits outside the polled board, so what is typed into it
+          is not rebuilt underneath the person typing.
+        -->
+        <div class="pay-staff">
+          <label class="field" for="pay-staff-id">
+            <span>Staff ID</span>
+            <input id="pay-staff-id" class="attribution-input" type="text" autocomplete="off"
+                   autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="e.g. AR47" />
+          </label>
+          <label class="field" for="pay-staff-name">
+            <span>Name</span>
+            <input id="pay-staff-name" class="attribution-input" type="text" autocomplete="off"
+                   maxlength="60" placeholder="Full name" />
+          </label>
+        </div>
+        <p id="pay-error" class="form-error" hidden></p>
         <button id="pay-cash" class="advance wide" type="button">Cash — paid now</button>
         <button id="pay-card" class="ghost wide" type="button">Card — Stripe</button>
       </div>
@@ -105,6 +124,7 @@
         orderLabel,
         takeawayTag,
       } from "{{STAFF_BASE}}/assets/common.js";
+      import { askStaff, processedByLine } from "{{STAFF_BASE}}/assets/attribution.js";
       import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
       // The customer app's own menu UI. Public because it is menu rendering, the
       // same code /app.js already serves — see the note at the top of that file.
@@ -219,6 +239,8 @@
               ]),
             ),
           ),
+          // Who took the money, on both boards, for as long as the order shows.
+          processedByLine(order),
           el("div", { class: "status-line" }, [
             el("span", { class: "status-name", text: STATUS_NAME[order.kitchenStatus] }),
             el("span", { class: "total", text: order.total }),
@@ -243,38 +265,57 @@
           // Last, because taking money is the ordinary case and cancelling is
           // the exception — and the two must never sit next to each other.
           owesAtCounter(order)
-            ? settleActions(order, (how) => settle(order.id, how), busy.has(order.id))
+            ? settleActions(order, (how) => settle(order, how), busy.has(order.id))
             : null,
         ]);
       }
 
+      /** How the sheet names the money it is about to take. */
+      const SETTLE_LABEL = { cash: "cash", card: "card", ewallet: "e-wallet" };
+
       /**
        * Take the money for an order the customer left owing at the counter.
+       *
+       * Who is taking it is asked first, and the pair they type goes with the
+       * request: the endpoint refuses an unattributed settlement, so this is not
+       * a check the page could skip. A rejected pair is reported inside the
+       * sheet, which is where whoever typed it is looking.
        *
        * Cash comes back settled. Card and e-wallet come back with a link or a
        * QR to turn round to the customer, and the order stays unpaid until the
        * provider's webhook says otherwise — so what is shown says which of the
-       * two just happened, rather than claiming the money is in.
+       * two just happened, rather than claiming the money is in. That note waits
+       * until the sheet is closed; a banner behind a modal is a banner nobody
+       * reads.
        */
-      async function settle(orderId, method) {
-        busy.add(orderId);
-        try {
-          const { settled, payment } = await api(`/api/staff/orders/${orderId}/settle`, {
-            method: 'PATCH',
-            body: JSON.stringify({ method }),
-          });
-          if (!settled) {
-            const where = payment?.checkoutUrl ?? payment?.qrCodeUrl;
-            showError(where
-              ? `Show the customer: ${where} — the order stays unpaid until they pay.`
-              : 'Payment started. The order stays unpaid until it confirms.');
-          }
-          await feed.refresh();
-        } catch (error) {
-          showError(error.message);
-        } finally {
-          busy.delete(orderId);
-        }
+      async function settle(order, method) {
+        let note = null;
+
+        const done = await askStaff({
+          title: `Take ${order.total} — ${SETTLE_LABEL[method]}`,
+          detail: `Order ${order.reference}. Who is taking this payment?`,
+          onConfirm: async ({ staffId, staffName }) => {
+            busy.add(order.id);
+            try {
+              const { settled, payment } = await api(`/api/staff/orders/${order.id}/settle`, {
+                method: "PATCH",
+                body: JSON.stringify({ method, staffId, staffName }),
+              });
+              if (!settled) {
+                const where = payment?.checkoutUrl ?? payment?.qrCodeUrl;
+                note = where
+                  ? `Show the customer: ${where} — the order stays unpaid until they pay.`
+                  : "Payment started. The order stays unpaid until it confirms.";
+              }
+            } finally {
+              busy.delete(order.id);
+            }
+          },
+        });
+
+        if (!done) return;
+        if (note) showError(note);
+        await feed.refresh();
       }
 
       /**
@@ -556,8 +597,17 @@
       });
 
       // ------------------------------------------------------------- payment
+      const payStaffId = document.getElementById("pay-staff-id");
+      const payStaffName = document.getElementById("pay-staff-name");
+      const payError = document.getElementById("pay-error");
+
       createOrder.addEventListener("click", () => {
         document.getElementById("pay-total").textContent = walkin.cart?.total ?? "RM0.00";
+        // Blank every time, never remembered: an id already in the box is one
+        // tap from putting the last person's name on this person's transaction.
+        payStaffId.value = "";
+        payStaffName.value = "";
+        payError.hidden = true;
         payDialog.showModal();
       });
       document.getElementById("pay-close").addEventListener("click", () => payDialog.close());
@@ -565,17 +615,33 @@
         if (event.target === payDialog) payDialog.close();
       });
 
+      /**
+       * Rings the order up, attributed to whoever is on the till.
+       *
+       * The sheet stays open until the server has accepted the pair, and the
+       * error is shown inside it: a staff code that does not check out is a
+       * correction to make right here, not a reason to lose the order and start
+       * the whole walk-in again.
+       */
       async function place(payment) {
-        payDialog.close();
-        createOrder.disabled = true;
-        showWalkinError();
-        walkinNote.hidden = true;
+        const staffId = payStaffId.value.trim();
+        const staffName = payStaffName.value.trim();
+        if (staffId.length === 0 || staffName.length === 0) {
+          payError.textContent = "Enter the staff ID and name of whoever is ringing this up.";
+          payError.hidden = false;
+          return;
+        }
+        payError.hidden = true;
 
         try {
           const result = await api("/api/staff/orders/takeaway", {
             method: "POST",
-            body: JSON.stringify({ cartId: walkin.cartId, payment }),
+            body: JSON.stringify({ cartId: walkin.cartId, payment, staffId, staffName }),
           });
+          payDialog.close();
+          createOrder.disabled = true;
+          showWalkinError();
+          walkinNote.hidden = true;
           const label = `Takeaway #${result.order.takeawayNumber}`;
 
           // The cart is spent either way; the next walk-in starts from nothing.
@@ -605,6 +671,13 @@
               : document.createTextNode("No payment link came back from the provider."),
           );
         } catch (error) {
+          // The sheet is still open if the request never got past the server,
+          // so the message belongs in it rather than on a banner behind it.
+          if (payDialog.open) {
+            payError.textContent = error.message;
+            payError.hidden = false;
+            return;
+          }
           showWalkinError(error.message);
           createOrder.disabled = (walkin.cart?.lines?.length ?? 0) === 0;
         }

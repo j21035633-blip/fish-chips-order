@@ -42,6 +42,7 @@
         orderLabel,
         takeawayTag,
       } from "{{STAFF_BASE}}/assets/common.js";
+      import { askStaff, processedByLine } from "{{STAFF_BASE}}/assets/attribution.js";
       import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
 
       // The board's three columns. `collected` is a status but not a column —
@@ -148,6 +149,8 @@
               ]),
             ),
           ),
+          // Who took the money, on both boards, for as long as the order shows.
+          processedByLine(order),
           el("div", { class: "foot" }, [
             el("span", { class: "total", text: order.total }),
             owesAtCounter(order)
@@ -183,38 +186,57 @@
           // Last, because taking money is the ordinary case and cancelling is
           // the exception — and the two must never sit next to each other.
           owesAtCounter(order)
-            ? settleActions(order, (how) => settle(order.id, how), busy.has(order.id))
+            ? settleActions(order, (how) => settle(order, how), busy.has(order.id))
             : null,
         ]);
       }
 
+      /** How the sheet names the money it is about to take. */
+      const SETTLE_LABEL = { cash: "cash", card: "card", ewallet: "e-wallet" };
+
       /**
        * Take the money for an order the customer left owing at the counter.
+       *
+       * Who is taking it is asked first, and the pair they type goes with the
+       * request: the endpoint refuses an unattributed settlement, so this is not
+       * a check the page could skip. A rejected pair is reported inside the
+       * sheet, which is where whoever typed it is looking.
        *
        * Cash comes back settled. Card and e-wallet come back with a link or a
        * QR to turn round to the customer, and the order stays unpaid until the
        * provider's webhook says otherwise — so what is shown says which of the
-       * two just happened, rather than claiming the money is in.
+       * two just happened, rather than claiming the money is in. That note waits
+       * until the sheet is closed; a banner behind a modal is a banner nobody
+       * reads.
        */
-      async function settle(orderId, method) {
-        busy.add(orderId);
-        try {
-          const { settled, payment } = await api(`/api/staff/orders/${orderId}/settle`, {
-            method: 'PATCH',
-            body: JSON.stringify({ method }),
-          });
-          if (!settled) {
-            const where = payment?.checkoutUrl ?? payment?.qrCodeUrl;
-            showError(where
-              ? `Show the customer: ${where} — the order stays unpaid until they pay.`
-              : 'Payment started. The order stays unpaid until it confirms.');
-          }
-          await feed.refresh();
-        } catch (error) {
-          showError(error.message);
-        } finally {
-          busy.delete(orderId);
-        }
+      async function settle(order, method) {
+        let note = null;
+
+        const done = await askStaff({
+          title: `Take ${order.total} — ${SETTLE_LABEL[method]}`,
+          detail: `Order ${order.reference}. Who is taking this payment?`,
+          onConfirm: async ({ staffId, staffName }) => {
+            busy.add(order.id);
+            try {
+              const { settled, payment } = await api(`/api/staff/orders/${order.id}/settle`, {
+                method: "PATCH",
+                body: JSON.stringify({ method, staffId, staffName }),
+              });
+              if (!settled) {
+                const where = payment?.checkoutUrl ?? payment?.qrCodeUrl;
+                note = where
+                  ? `Show the customer: ${where} — the order stays unpaid until they pay.`
+                  : "Payment started. The order stays unpaid until it confirms.";
+              }
+            } finally {
+              busy.delete(order.id);
+            }
+          },
+        });
+
+        if (!done) return;
+        if (note) showError(note);
+        await feed.refresh();
       }
 
       /**

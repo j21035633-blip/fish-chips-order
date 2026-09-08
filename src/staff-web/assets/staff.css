@@ -353,6 +353,67 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 .ghost:hover { color: var(--ink); }
 .hint { font-size: 12px; color: var(--ink-soft); }
 
+/* --- staff accounts, and the per-transaction check ----------------------- */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.accounts { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.accounts th, .accounts td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.accounts th { font-size: 12px; color: var(--ink-soft); font-weight: 650; background: var(--bg); }
+.accounts tr:last-child td { border-bottom: 0; }
+/* Dimmed, never hidden: a deactivated account still explains a name on an
+   old order, so it has to stay readable. */
+.accounts tr.inactive td { color: var(--ink-soft); }
+.accounts .staff-code { font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.03em; }
+.accounts .staff-role { color: var(--ink-soft); }
+.accounts .row-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.accounts .row-actions button {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.accounts .row-actions button:hover { color: var(--ink); }
+.accounts .row-actions .destroy:hover { color: var(--danger); border-color: var(--danger); }
+.accounts .row-actions .destroy.confirming { color: var(--danger); border-color: var(--danger); font-weight: 650; }
+
+/* The "who is taking this?" sheet, and the same pair inside the pay sheet. */
+.attribution-dialog {
+  width: min(380px, calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 0;
+}
+.attribution-dialog::backdrop { background: rgba(16, 36, 31, 0.4); }
+.attribution-body { padding: 14px 18px 18px; display: grid; gap: 10px; }
+.attribution-detail { margin: 0 0 4px; font-size: 13px; color: var(--ink-soft); }
+.attribution-body .field span, .pay-staff .field span { font-size: 12px; color: var(--ink-soft); }
+.attribution-input {
+  font: inherit;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+}
+/* The code is short and typed under pressure — give it room to be read back. */
+#attribution-id, #pay-staff-id { text-transform: uppercase; letter-spacing: 0.08em; font-weight: 650; }
+.pay-staff { display: grid; gap: 8px; padding: 4px 0 2px; border-top: 1px solid var(--line); margin-top: 4px; }
+.pay-staff .field { display: flex; flex-direction: column; gap: 4px; }
+
+/* Who took the money, on a ticket and on a dashboard card. */
+.processed-by { font-size: 12px; color: var(--ink-soft); margin: 8px 0 0; }
+.processed-by-name { font-weight: 650; color: var(--ink); }
+
 /* --- the option-group builder -------------------------------------------- */
 /* Indented and boxed because it is the one nested thing on a flat form: a
    choice belongs to a group, and that has to read at a glance on a tablet. */

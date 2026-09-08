@@ -10,6 +10,7 @@ import {
   type PaymentMethod,
   type PaymentProvider,
 } from "../orders/types.js";
+import type { ProcessedBy } from "../staff/accounts.js";
 import { RevenueMonsterAdapter } from "./revenueMonsterAdapter.js";
 import { isSimulatedPaymentId } from "./simulation.js";
 import { StripeAdapter } from "./stripeAdapter.js";
@@ -256,12 +257,22 @@ export class PaymentService {
    *
    * The eligibility check comes first, so an order that is already paid, or one
    * with a gateway of its own mid-flight, cannot be settled twice.
+   *
+   * `processedBy` is required rather than optional: taking money at the counter
+   * is exactly the act this shop wanted attributable, and an optional parameter
+   * is one forgetful call site away from an unattributed transaction. Verifying
+   * the person stays at the HTTP edge, where their typed id and name arrive —
+   * this takes the answer, not the question.
    */
   async settleAtCounter(
     orderId: string,
     method: "cash" | PaymentMethod,
+    processedBy: ProcessedBy,
   ): Promise<{ order: Order; settled: boolean }> {
     await this.orders.counterSettlementTarget(orderId);
+    // Eligibility first, attribution second, money third. An order that cannot
+    // be settled must not end up stamped with the name of whoever tried.
+    await this.orders.recordProcessedBy(orderId, processedBy);
 
     if (method === "cash") {
       return { order: await this.orders.takeCash(orderId), settled: true };

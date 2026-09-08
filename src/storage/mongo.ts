@@ -4,6 +4,7 @@ import { formatSen } from "../menu/money.js";
 import type { MenuPersistence } from "../menu/store.js";
 import type { Menu } from "../menu/types.js";
 import type { Proof, ProofRepository, ProofStatus } from "../game/proofs.js";
+import type { StaffAccount, StaffAccountRepository } from "../staff/accounts.js";
 import type { CartRepository, OrderRepository } from "../orders/repository.js";
 import type { Cart, Order } from "../orders/types.js";
 
@@ -28,6 +29,8 @@ type StoredCart = Cart & { _id: string; expiresAt: Date };
 type StoredOrder = Order & { _id: string };
 type StoredMenu = Menu & { _id: string };
 type StoredProof = Proof & { _id: string };
+/** Keyed by the staff code itself, so the code is unique by construction. */
+type StoredStaffAccount = StaffAccount & { _id: string };
 
 /**
  * The menu is one document under a fixed id. Staff edits replace it wholesale,
@@ -134,6 +137,30 @@ export class MongoStorage {
       async forCart(cartId: string): Promise<Proof[]> {
         const docs = await collection().find({ cartId }).toArray();
         return docs.map(strip);
+      },
+    };
+  }
+
+  /**
+   * Staff accounts, keyed by the staff code.
+   *
+   * `_id` *is* `staffId` — normalised uppercase before it ever gets here — so
+   * two people cannot end up sharing a code, and no unique index is needed to
+   * say so. Nothing is ever deleted from this collection: deactivating flips
+   * `active`, because orders point back at these records by name.
+   */
+  staffAccounts(): StaffAccountRepository {
+    const collection = () => this.database.collection<StoredStaffAccount>("staff_accounts");
+    return {
+      async get(staffId: string): Promise<StaffAccount | undefined> {
+        const doc = await collection().findOne({ _id: staffId });
+        return doc === null ? undefined : strip(doc);
+      },
+      async save(account: StaffAccount): Promise<void> {
+        await collection().replaceOne({ _id: account.staffId }, account, { upsert: true });
+      },
+      async list(): Promise<StaffAccount[]> {
+        return (await collection().find({}).sort({ name: 1 }).toArray()).map(strip);
       },
     };
   }
@@ -262,9 +289,10 @@ function toCart(doc: StoredCart): Cart {
   return cart;
 }
 
-function strip(doc: StoredProof): Proof {
-  const { _id, ...proof } = doc;
-  return proof;
+/** Drops the `_id` a document is keyed by, leaving the domain object behind. */
+function strip<T>(doc: T & { _id: string }): T {
+  const { _id, ...rest } = doc;
+  return rest as unknown as T;
 }
 
 function toOrder(doc: StoredOrder): Order {
