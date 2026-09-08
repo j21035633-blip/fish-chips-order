@@ -606,6 +606,36 @@ is exactly the accountability hole this closes. The takeaway's pay sheet asks in
 it is already a dialog outside the polled region, and it stays open on a rejection so a wrong code is
 a correction rather than a lost walk-in.
 
+### Who's on duty — the shift log
+
+`src/staff/checkIns.ts` + `assets/onDuty.js`. A `DeviceCheckIn` is `{ id, staffId, name,
+checkedInAt, checkedOutAt? }`; the open one is the one with no `checkedOutAt`.
+
+**Three things involve a staff ID and they do not overlap.** Signing in decides what a browser may
+open; the cashiering check decides whose name goes on a payment; this decides **nothing**. Nothing is
+gated on it anywhere — a fryer that stops because somebody forgot to tap a pill is worse than not
+knowing who was on the fryer — and `checkIns.test.ts` asserts that line directly, including that a
+payment is attributed to whoever rang it up rather than whoever is on duty.
+
+Check-in runs the pair through the **same `StaffAccountService.verify`** the till uses (with a
+`purpose` of "checking in", which is the only thing that differs), and stores the account's own
+spelling of the name — a copy, like `processedBy`, so the log still reads after a rename. The check
+runs *before* anything is closed, so a typo cannot end somebody's shift.
+
+**One check-in at a time, shop-wide.** No device field: checking somebody in closes whoever was on,
+with `checkedOutAt === checkedInAt` so the log has no gap or overlap. Right for one tablet on one
+pass; a second till would need a device id here and in the two "active" reads. Closing happens before
+opening, so a half-failure leaves a gap rather than two open shifts.
+
+Sections: `/checkin`, `/checkin/current` and `/checkout` are `dashboard` + `kitchen_counter` (the
+pill is on both boards); `/checkin/history` is `staff`, because the log is a management view on the
+Staff page — so a cashier can check in and out but cannot read the log.
+
+The pill's state is the server's, not the browser's: no cookie and no `localStorage`, so it survives
+a reload and is the same on every tablet. It polls every 30s and on wake, which is the rate a shift
+changes hands. Checking in reuses `askStaff` from `attribution.js` — one place knows how to ask for
+an id and a name and how to show the server refusing them.
+
 ### Staff auth — individual sign-in, roles, and one emergency door
 
 `src/staff/auth.ts` + `src/staff/roles.ts`. Everyone signs in with their own staff ID and the
@@ -884,6 +914,8 @@ float. See `src/menu/types.ts` and `src/orders/types.ts` for what is actually th
   createdAt, updatedAt, deactivatedAt?
 - `ProcessedBy`: staffId, name (**copied** at the time, not resolved later), at — stamped on
   `Order.processedBy` by the two cashiering flows
+- `DeviceCheckIn`: id, staffId, name (**copied** at check-in), checkedInAt, checkedOutAt? — the
+  shift log for the shared tablet. Informational; nothing is gated on it
 - `Category`: id (slug), name (as staff typed it), blurb, sortOrder
 - `Order`: id, reference, lines[], totals, paymentStatus (pending|paid|failed|expired),
   **kitchenStatus (received|cooking|ready|collected)**, tableNumber?, createdAt, updatedAt

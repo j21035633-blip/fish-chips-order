@@ -292,3 +292,161 @@ describe("the Staff page", () => {
     expect(css).toContain(".processed-by");
   });
 });
+
+/**
+ * The "Who's on duty" pill.
+ *
+ * Its whole job is to be informational, so most of what is checked here is that
+ * it says the right thing and that nothing anywhere depends on what it says.
+ */
+describe("the on-duty pill", () => {
+  let onDuty: any;
+  let responses: Record<string, unknown>;
+  let calls: { path: string; method: string; body: unknown }[];
+  let widget: any;
+
+  beforeAll(async () => {
+    onDuty = await import(pathToFileURL(resolve(staffDir, "assets/onDuty.js")).href);
+  });
+
+  beforeEach(() => {
+    calls = [];
+    responses = { "/api/staff/checkin/current": { checkIn: null } };
+    (globalThis as any).fetch = async (path: string, init?: any) => {
+      calls.push({ path, method: init?.method ?? "GET", body: init?.body ? JSON.parse(init.body) : undefined });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => responses[path] ?? {},
+      } as unknown as Response;
+    };
+  });
+
+  afterEach(() => {
+    widget?.stop();
+    widget = undefined;
+  });
+
+  /** Mounts the pill and lets its first load settle. */
+  async function mount() {
+    widget = onDuty.onDutyWidget();
+    document.body.replaceChildren(widget.node);
+    await new Promise((done) => setTimeout(done, 0));
+    return widget.node as HTMLElement;
+  }
+
+  const label = () => document.querySelector(".on-duty-label")!.textContent;
+  const action = () => document.querySelector(".on-duty-action") as HTMLButtonElement;
+
+  it("says nobody is on, and offers to check in", async () => {
+    const pill = await mount();
+
+    expect(label()).toBe("Not checked in");
+    expect(action().textContent).toBe("Check in");
+    expect(pill.className).toBe("on-duty");
+  });
+
+  it("shows the name and offers to check out when somebody is on", async () => {
+    responses["/api/staff/checkin/current"] = { checkIn: { staffId: "AR47", name: "Aisyah Rahman" } };
+    const pill = await mount();
+
+    expect(label()).toBe("Aisyah Rahman");
+    expect(action().textContent).toBe("Check out");
+    // Styled apart, so a glance at the header answers the question.
+    expect(pill.className).toBe("on-duty on");
+  });
+
+  it("reads its state from the server on load, not from this browser", async () => {
+    await mount();
+    // No localStorage, no cookie: the pill is the same on every tablet, and a
+    // reload asks again rather than trusting anything local.
+    expect(calls.map((entry) => entry.path)).toEqual(["/api/staff/checkin/current"]);
+    expect(localStorage.length).toBe(0);
+  });
+
+  it("checks out on a tap, and goes back to saying nobody is on", async () => {
+    responses["/api/staff/checkin/current"] = { checkIn: { staffId: "AR47", name: "Aisyah Rahman" } };
+    await mount();
+
+    responses["/api/staff/checkout"] = { checkIn: null };
+    action().click();
+    await new Promise((done) => setTimeout(done, 0));
+
+    expect(calls.some((entry) => entry.path === "/api/staff/checkout" && entry.method === "POST")).toBe(true);
+    expect(label()).toBe("Not checked in");
+  });
+
+  it("posts the pair as { staffId, name }, which is what the endpoint takes", () => {
+    // The till's sheet calls its second field staffName; this endpoint calls it
+    // name. The mapping happens here, once.
+    const source = readFileSync(resolve(staffDir, "assets/onDuty.js"), "utf8");
+    expect(source).toContain("body: JSON.stringify({ staffId, name: staffName })");
+    // And it reuses the sheet rather than growing a second one.
+    expect(source).toContain('import { askStaff } from "./attribution.js"');
+  });
+
+  it("says a shift's length, and that an open one is still running", () => {
+    const start = "2026-03-01T10:00:00.000Z";
+    const at = (minutes: number) => new Date(Date.parse(start) + minutes * 60000).toISOString();
+
+    expect(onDuty.shiftLength({ checkedInAt: start, checkedOutAt: at(45) })).toBe("45 min");
+    expect(onDuty.shiftLength({ checkedInAt: start, checkedOutAt: at(120) })).toBe("2 h");
+    expect(onDuty.shiftLength({ checkedInAt: start, checkedOutAt: at(135) })).toBe("2 h 15 min");
+    // Still on: measured to now rather than reading as zero.
+    expect(onDuty.shiftLength({ checkedInAt: start }, Date.parse(start) + 30 * 60000)).toBe("30 min");
+  });
+
+  it("dates a time from another day, and does not date today's", () => {
+    const today = new Date();
+    today.setHours(14, 5, 0, 0);
+    expect(onDuty.shiftTime(today.toISOString(), today)).not.toMatch(/[A-Za-z]/);
+
+    const earlier = new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000);
+    expect(onDuty.shiftTime(earlier.toISOString(), today)).toMatch(/[A-Za-z]/);
+    expect(onDuty.shiftTime(undefined, today)).toBe("—");
+  });
+});
+
+describe("the boards carry the pill, and nothing waits on it", () => {
+  it("mounts it beside the live indicator on both boards", () => {
+    for (const file of ["staff.html", "kitchen.html"]) {
+      const html = page(file);
+      expect(html, file).toContain('import { onDutyWidget } from "{{STAFF_BASE}}/assets/onDuty.js"');
+      expect(html, file).toContain("const onDuty = onDutyWidget();");
+      expect(html, file).toContain("slot.append(onDuty.node, feedState");
+    }
+  });
+
+  it("gates nothing on it, on either board", () => {
+    // The line this feature must not cross. If any of these ever appears, the
+    // pill has stopped being a note and started being a lock.
+    for (const file of ["staff.html", "kitchen.html"]) {
+      const html = page(file);
+      for (const pattern of ["onDuty.current", "if (!onDuty", "checkedIn &&"]) {
+        expect(html.includes(pattern), `${file} must not gate on ${pattern}`).toBe(false);
+      }
+    }
+  });
+});
+
+describe("the shift log on the Staff page", () => {
+  const html = () => page("accounts.html");
+
+  it("lists name and both times", () => {
+    const source = html();
+    for (const heading of ["Name", "Checked in", "Checked out", "For"]) {
+      expect(source, heading).toContain(`>${heading}</th>`);
+    }
+    expect(source).toContain('api("/api/staff/checkin/history")');
+  });
+
+  it("marks the shift nobody has closed rather than leaving a blank cell", () => {
+    expect(html()).toContain('text: "On now"');
+  });
+
+  it("says what it is, and what it is not", () => {
+    // Somebody reading this page must not think it is a login or an audit of
+    // who took the money.
+    expect(html()).toMatch(/does not sign anybody in and blocks nothing/);
+  });
+});

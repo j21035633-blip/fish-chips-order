@@ -44,6 +44,7 @@
       } from "{{STAFF_BASE}}/assets/common.js";
       import { askStaff, processedByLine } from "{{STAFF_BASE}}/assets/attribution.js";
       import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
+      import { onDutyWidget } from "{{STAFF_BASE}}/assets/onDuty.js";
 
       // The board's three columns. `collected` is a status but not a column —
       // an order that has been handed over drops off this view, and the Kitchen
@@ -55,7 +56,10 @@
       const feedState = el("span", { id: "feed-state", class: "feed-state", text: "connecting…" });
       const salesTotal = el("div", { class: "sales-total", text: "—" });
       const salesLabel = el("div", { class: "sales-label", text: "Today's sales" });
-      slot.append(feedState, el("div", { class: "sales" }, [el("div", {}, [salesTotal, salesLabel])]));
+      // Beside the live indicator, because both answer "what is the state of
+      // this tablet right now" — and neither gates anything.
+      const onDuty = onDutyWidget();
+      slot.append(onDuty.node, feedState, el("div", { class: "sales" }, [el("div", {}, [salesTotal, salesLabel])]));
 
       const showError = errorBanner();
       const busy = new Set();

@@ -283,13 +283,13 @@ export class StaffAccountService {
    * there is nobody to withhold it from, and a cashier needs to know whether to
    * fix the code or the spelling.
    */
-  async verify(input: { staffId?: unknown; staffName?: unknown }): Promise<ProcessedBy> {
+  async verify(input: { staffId?: unknown; staffName?: unknown }, purpose = "taking this payment"): Promise<ProcessedBy> {
     const staffId = normaliseId(String(input.staffId ?? ""));
     const staffName = String(input.staffName ?? "").trim();
 
     if (staffId.length === 0 || staffName.length === 0) {
       throw new StaffAccountError(
-        "Enter the staff ID and name of whoever is taking this payment.",
+        `Enter the staff ID and name of whoever is ${purpose}.`,
         "staff_verification_failed",
         { reason: "missing" },
       );

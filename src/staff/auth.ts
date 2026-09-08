@@ -58,6 +58,12 @@ const SECTION_ROUTES: readonly (readonly [RegExp, readonly SectionKey[]])[] = [
   [/^\/overview$/, ["dashboard", "kitchen_counter"]],
   [/^\/orders\/takeaway$/, ["kitchen_counter"]],
   [/^\/orders\/[^/]+\/(status|approve-cancel|deny-cancel|cancel|settle)$/, ["dashboard", "kitchen_counter"]],
+  // The on-duty pill lives on both boards, so either section may work it.
+  [/^\/checkin$/, ["dashboard", "kitchen_counter"]],
+  [/^\/checkin\/current$/, ["dashboard", "kitchen_counter"]],
+  [/^\/checkout$/, ["dashboard", "kitchen_counter"]],
+  // The log itself is a management view, and lives on the Staff page.
+  [/^\/checkin\/history$/, ["staff"]],
   [/^\/sales-report$/, ["sales_report"]],
   [/^\/menu-items(\/.*)?$/, ["menu"]],
   [/^\/qr-codes$/, ["table_qr"]],

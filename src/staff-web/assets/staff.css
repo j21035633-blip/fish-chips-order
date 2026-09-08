@@ -353,6 +353,54 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 .ghost:hover { color: var(--ink); }
 .hint { font-size: 12px; color: var(--ink-soft); }
 
+/* --- who's on duty, and the shift log ------------------------------------ */
+/* Quiet by design. It sits beside the live indicator and it gates nothing, so
+   it must not compete with the one control on the header that does. */
+.on-duty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 5px 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 12px;
+}
+.on-duty-label { color: var(--ink-soft); white-space: nowrap; }
+/* Somebody is on: their name is the point, so it stops being grey. */
+.on-duty.on { border-color: var(--sea-wash); background: var(--sea-wash); }
+.on-duty.on .on-duty-label { color: var(--sea); font-weight: 650; }
+.on-duty-action {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.on-duty-action:hover { color: var(--ink); border-color: var(--ink-soft); }
+.on-duty-action:disabled { opacity: 0.45; cursor: not-allowed; }
+.on-duty.on .on-duty-action { border-color: rgba(18, 119, 106, 0.35); color: var(--sea); background: var(--panel); }
+
+.shift-log-section { margin-top: 26px; }
+.shift-log-section .section-head-row { display: flex; align-items: center; gap: 12px; margin-bottom: 2px; }
+.shift-log-section .section-head { font-size: 15px; margin: 0; margin-right: auto; }
+.shift-log-section > .hint { margin: 0 0 14px; display: block; }
+.shift-log { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.shift-log th, .shift-log td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.shift-log th { font-size: 12px; color: var(--ink-soft); font-weight: 650; background: var(--bg); }
+.shift-log tr:last-child td { border-bottom: 0; }
+.shift-log .shift-time { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.shift-log tr.on-now td { background: var(--sea-wash); }
+.shift-log tr.on-now td:first-child { font-weight: 650; }
+
+@media (max-width: 720px) {
+  /* The header is already crowded on a phone; the pill keeps its button and
+     drops to the next line rather than squeezing the sales total. */
+  .on-duty { order: 1; }
+}
+
 /* --- roles, and who is signed in ----------------------------------------- */
 .signed-in-slot { display: flex; align-items: center; }
 .signed-in { display: flex; flex-direction: column; line-height: 1.2; text-align: right; }

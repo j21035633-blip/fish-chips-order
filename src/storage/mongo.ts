@@ -5,6 +5,7 @@ import type { MenuPersistence } from "../menu/store.js";
 import type { Menu } from "../menu/types.js";
 import type { Proof, ProofRepository, ProofStatus } from "../game/proofs.js";
 import type { StaffAccount, StaffAccountRepository } from "../staff/accounts.js";
+import type { DeviceCheckIn, DeviceCheckInRepository } from "../staff/checkIns.js";
 import type { Role, RoleRepository } from "../staff/roles.js";
 import type { CartRepository, OrderRepository } from "../orders/repository.js";
 import type { Cart, Order } from "../orders/types.js";
@@ -34,6 +35,7 @@ type StoredProof = Proof & { _id: string };
 type StoredStaffAccount = StaffAccount & { _id: string };
 /** Keyed by the role's normalised name, so "Cashier" and "cashier " are one role. */
 type StoredRole = Role & { _id: string };
+type StoredCheckIn = DeviceCheckIn & { _id: string };
 
 /**
  * The menu is one document under a fixed id. Staff edits replace it wholesale,
@@ -192,6 +194,34 @@ export class MongoStorage {
     };
   }
 
+  /**
+   * The shift log. Append-only in practice: a record is written once on the way
+   * in and once more to close it, and nothing ever deletes one.
+   *
+   * "Who is on" is the single document with no `checkedOutAt`. The driver is
+   * built with `ignoreUndefined`, so leaving the field undefined omits it
+   * rather than storing a null the `$exists` query would match.
+   */
+  checkIns(): DeviceCheckInRepository {
+    const collection = () => this.database.collection<StoredCheckIn>("staff_checkins");
+    return {
+      async active(): Promise<DeviceCheckIn | undefined> {
+        const doc = await collection().findOne(
+          { checkedOutAt: { $exists: false } },
+          { sort: { checkedInAt: -1 } },
+        );
+        return doc === null ? undefined : strip(doc);
+      },
+      async save(record: DeviceCheckIn): Promise<void> {
+        await collection().replaceOne({ _id: record.id }, record, { upsert: true });
+      },
+      async recent(limit: number): Promise<DeviceCheckIn[]> {
+        const docs = await collection().find({}).sort({ checkedInAt: -1 }).limit(limit).toArray();
+        return docs.map(strip);
+      },
+    };
+  }
+
   menu(): MenuPersistence {
     const collection = () => this.database.collection<StoredMenu>("menu");
     return {
@@ -234,6 +264,9 @@ export class MongoStorage {
     await this.db.collection("orders").createIndex({ "payment.providerPaymentId": 1 });
     await this.db.collection("orders").createIndex({ createdAt: -1 });
     await this.db.collection("orders").createIndex({ paymentStatus: 1, "payment.paidAt": 1 });
+    // Both reads the shift log does: newest first, and "who is still on".
+    await this.db.collection("staff_checkins").createIndex({ checkedInAt: -1 });
+    await this.db.collection("staff_checkins").createIndex({ checkedOutAt: 1, checkedInAt: -1 });
   }
 }
 

@@ -36,6 +36,7 @@ import {
   throttleKey,
 } from "../staff/auth.js";
 import { StaffAccountError } from "../staff/accounts.js";
+import { MAX_HISTORY } from "../staff/checkIns.js";
 import { isOwnerRole, NAV_SECTIONS, OWNER_ROLE, RoleError, type SectionKey } from "../staff/roles.js";
 import { createMenuTools } from "../tools/menuTools.js";
 import { createOrderTools } from "../tools/orderTools.js";
@@ -758,6 +759,67 @@ export function createServer(app: Services = services) {
     }));
   });
 
+  // ------------------------------------------------------------- on duty
+  /**
+   * Who is physically standing at the shared tablet.
+   *
+   * A shift log and nothing more. **Nothing is gated on it** — not the boards,
+   * not Quick Add, not settling — because a fryer that stops working because
+   * somebody forgot to tap a pill is worse than not knowing who was on the
+   * fryer. It is deliberately separate from both the login session and the
+   * per-transaction cashiering check, and coexists with them.
+   *
+   * There is one check-in at a time, shop-wide: the record has no device field,
+   * which is right for one tablet on one pass. A second till would need one.
+   */
+  server.get("/api/staff/checkin/current", (_req, res) => {
+    void runAsync(res, async () => ({ checkIn: (await app.checkIns.current()) ?? null }));
+  });
+
+  /**
+   * Puts somebody on duty.
+   *
+   * The id and name go through the **same check the till uses** —
+   * `StaffAccountService.verify` — so a name that does not go with the code, or
+   * an account that has been switched off, is refused with the same words in
+   * the same shape. What is stored is the account's own spelling of the name,
+   * copied, so the log still reads correctly after a rename.
+   */
+  server.post("/api/staff/checkin", (req, res) => {
+    void runAsync(res, async () => {
+      const input = checkInInput.parse(req.body ?? {});
+      const who = await app.staffAccounts.verify({ staffId: input.staffId, staffName: input.name }, "checking in");
+      // Whoever was on is checked out by this, which is the honest reading of
+      // one person picking the tablet up from another.
+      const { checkIn, replaced } = await app.checkIns.checkIn(who);
+      res.status(201).json({ checkIn, replaced: replaced ?? null });
+      return undefined;
+    });
+  });
+
+  /**
+   * Takes whoever is on, off.
+   *
+   * Needs nobody's id: the person tapping it is the person standing there, and
+   * asking them to prove who they are in order to *stop* being recorded would
+   * only produce shifts that never end.
+   *
+   * A checkout with nobody on is a 200 with `checkIn: null` rather than an
+   * error — a second tap, or a tablet somebody else already signed off, should
+   * be boring.
+   */
+  server.post("/api/staff/checkout", (_req, res) => {
+    void runAsync(res, async () => ({ checkIn: (await app.checkIns.checkOut()) ?? null }));
+  });
+
+  /** The shift log for the Staff page. Newest first; whoever is on is still open. */
+  server.get("/api/staff/checkin/history", (req, res) => {
+    void runAsync(res, async () => {
+      const { limit } = checkInHistoryQuery.parse({ limit: single(req.query.limit) });
+      return { checkIns: await app.checkIns.history(limit) };
+    });
+  });
+
   // ------------------------------------------------------------ staff roles
   /**
    * Roles and what each one can reach.
@@ -1157,6 +1219,19 @@ const staffLoginInput = z.object({ staffId: z.string().min(1).max(12), password:
 
 /** The recovery door still takes only the one shared password. */
 const emergencyLoginInput = z.object({ password: z.string().min(1).max(200) });
+
+/**
+ * Check-in takes `name` where the till takes `staffName`.
+ *
+ * Different word for the same thing, because this form is not about a payment
+ * and "staffName" reads as boilerplate on it. Mapped onto `verify`'s parameter
+ * at the route rather than renamed there, so the till's wire shape is untouched.
+ */
+const checkInInput = z.object({ staffId: z.string().min(1).max(12), name: z.string().min(1).max(60) });
+
+const checkInHistoryQuery = z.object({
+  limit: z.coerce.number().int().positive().max(MAX_HISTORY).optional(),
+});
 
 const roleInput = z.object({
   name: z.string(),

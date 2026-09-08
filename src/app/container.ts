@@ -11,6 +11,7 @@ import {
 import { CartService, OrderService } from "../orders/service.js";
 import { createPaymentService, PaymentService } from "../payments/service.js";
 import { InMemoryStaffAccountRepository, StaffAccountService } from "../staff/accounts.js";
+import { DeviceCheckInService, InMemoryDeviceCheckInRepository } from "../staff/checkIns.js";
 import { InMemoryRoleRepository, RoleService } from "../staff/roles.js";
 import { MongoStorage, type IndexState } from "../storage/mongo.js";
 
@@ -59,6 +60,11 @@ export interface Services {
    * a role narrowed on the Staff page takes effect on the next one.
    */
   staffRoles: RoleService;
+  /**
+   * Who is physically on the shared tablet. Informational only — nothing is
+   * gated on it, and it is not a login. See `staff/checkIns.ts`.
+   */
+  checkIns: DeviceCheckInService;
 }
 
 export function createServices(): Services {
@@ -89,6 +95,7 @@ export function createServices(): Services {
       mongo ? mongo.staffAccounts() : new InMemoryStaffAccountRepository(),
     ),
     staffRoles: new RoleService(mongo ? mongo.roles() : new InMemoryRoleRepository()),
+    checkIns: new DeviceCheckInService(mongo ? mongo.checkIns() : new InMemoryDeviceCheckInRepository()),
   };
 }
 

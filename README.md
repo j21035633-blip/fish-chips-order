@@ -541,6 +541,36 @@ Set `STAFF_SESSION_SECRET` as well. Sessions used to be signed with a key derive
 sign the whole shop out. With neither set, sessions are signed with a per-process key and everybody
 is signed out on every restart — the server warns about it at boot.
 
+### Who's on duty — a shift log, and nothing more
+
+A pill in the header of the Dashboard and Kitchen & Counter pages: **Not checked in** with a Check In
+button, or somebody's name with a Check Out button. Checking in asks for a staff ID and name and puts
+them through the same verification the till uses, so a name that does not match the code, or an
+account that has been switched off, is refused.
+
+```
+GET  /api/staff/checkin/current    whoever is on, or null
+POST /api/staff/checkin            { staffId, name }
+POST /api/staff/checkout           closes the open shift; no body, and no error if nobody is on
+GET  /api/staff/checkin/history    the shift log, newest first
+```
+
+**It gates nothing.** Not the boards, not Quick Add, not settling. A fryer that stops working because
+somebody forgot to tap a pill is worse than not knowing who was on the fryer, so this decides
+nothing — it is a note on the wall answering "who was on at four o'clock", which a shop with one
+tablet and one shared login otherwise cannot answer. Tests hold that line explicitly.
+
+It is the third thing that involves a staff ID, and the three do not overlap: **signing in** decides
+what a browser may open, **the cashiering check** decides whose name goes on a payment, and this
+decides nothing. Ringing up a payment still names its own cashier — being checked in does not stand
+in for it, and the order records whoever took the money rather than whoever is on duty.
+
+One check-in at a time, shop-wide: checking somebody in closes whoever was on, at the same instant,
+so the log has no gaps or overlaps. The record has no device field, which is right for one tablet on
+one pass; a second till would need one. State lives on the server, so the pill survives a reload and
+reads the same on every tablet. The Staff page carries the log itself — name, both times, and how
+long — with the open shift marked "On now".
+
 ### Turning the gate on
 
 The gate covers every staff page *and* every `/api/staff/` route — including the ones that write the

@@ -27,6 +27,7 @@ import { InMemoryCartRepository, InMemoryOrderRepository } from "../src/orders/r
 import { CartService, OrderService } from "../src/orders/service.js";
 import { createPaymentService } from "../src/payments/service.js";
 import { InMemoryStaffAccountRepository, StaffAccountService } from "../src/staff/accounts.js";
+import { DeviceCheckInService, InMemoryDeviceCheckInRepository } from "../src/staff/checkIns.js";
 import { resetLoginThrottle, resetRevokedSessions, sectionsForPath, STAFF_SESSION_COOKIE } from "../src/staff/auth.js";
 import {
   DEFAULT_SECTIONS,
@@ -61,6 +62,7 @@ function buildServices(): Services {
     proofs: new InMemoryProofRepository(),
     staffAccounts: new StaffAccountService(new InMemoryStaffAccountRepository()),
     staffRoles: new RoleService(new InMemoryRoleRepository()),
+    checkIns: new DeviceCheckInService(new InMemoryDeviceCheckInRepository()),
     storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} } as const,
   } as unknown as Services;
 }

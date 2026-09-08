@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Services } from "../src/app/container.js";
 import { InMemoryProofRepository } from "../src/game/proofs.js";
 import { InMemoryStaffAccountRepository, StaffAccountService } from "../src/staff/accounts.js";
+import { DeviceCheckInService, InMemoryDeviceCheckInRepository } from "../src/staff/checkIns.js";
 import { InMemoryRoleRepository, RoleService } from "../src/staff/roles.js";
 import { config } from "../src/config/env.js";
 import { createServer } from "../src/http/app.js";
@@ -45,6 +46,7 @@ function buildServices(): Services {
     proofs: new InMemoryProofRepository(),
     staffAccounts: new StaffAccountService(new InMemoryStaffAccountRepository()),
     staffRoles: new RoleService(new InMemoryRoleRepository()),
+    checkIns: new DeviceCheckInService(new InMemoryDeviceCheckInRepository()),
     storage: { kind: "memory", ready: true, indexes: "ready", async connect() {}, async close() {} } as const,
   };
 }

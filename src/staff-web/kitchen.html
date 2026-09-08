@@ -126,6 +126,7 @@
       } from "{{STAFF_BASE}}/assets/common.js";
       import { askStaff, processedByLine } from "{{STAFF_BASE}}/assets/attribution.js";
       import { mountStaffChrome } from "{{STAFF_BASE}}/assets/nav.js";
+      import { onDutyWidget } from "{{STAFF_BASE}}/assets/onDuty.js";
       // The customer app's own menu UI. Public because it is menu rendering, the
       // same code /app.js already serves — see the note at the top of that file.
       import { formatSen, itemDetails, optionGroup, pricedSelection, selectedChoices }
@@ -145,7 +146,10 @@
       const { slot } = mountStaffChrome({ title: "Kitchen & Counter" });
       const feedState = el("span", { id: "feed-state", class: "feed-state", text: "connecting…" });
       const count = el("span", { class: "card-count", text: "—" });
-      slot.append(feedState, count);
+      // Beside the live indicator, because both answer "what is the state of
+      // this tablet right now" — and neither gates anything.
+      const onDuty = onDutyWidget();
+      slot.append(onDuty.node, feedState, count);
 
       const cardsEl = document.getElementById("cards");
       const emptyEl = document.getElementById("empty");
