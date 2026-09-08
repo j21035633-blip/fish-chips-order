@@ -14,7 +14,13 @@
   --bg: #f4f7f6;
   --sea: #12776a;
   --sea-wash: #e3f1ee;
-  --amber: #b06d00;
+  /* PENDING, UNPAID, the Play QR label and the emergency-session pill, all of
+     them this ink on --amber-wash. It was #b06d00, which sat on that wash at
+     3.74:1 and was the one thing on this side failing AA for body text. This
+     value is the customer app's --amber-ink, on an identical wash: an unpaid
+     order is the same status on a phone and on the pass, so it is now also the
+     same colour rather than two near-misses. 5.31:1. */
+  --amber: #8a5a00;
   --danger: #b3261e;
   /* One step more saturated than --sea: at bar size the chrome colour reads
      grey rather than green. Checked against the panel, not eyeballed. */
@@ -1162,5 +1168,15 @@ button { font: inherit; border-radius: 8px; cursor: pointer; }
 /* Icon only in the board header — the most crowded strip in the app, and the
    title and aria-label still name the action. The login screens keep the word. */
 header .theme-toggle-text { display: none; }
-header .theme-toggle { padding: 7px 10px; }
+/* A round icon button rather than a pill with nothing in it: with the word
+   hidden, the padding that suits a label left a squashed oval sitting beside
+   the Log out pill. Same width it already took, so this costs the strip
+   nothing. */
+header .theme-toggle {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+}
 @media print { .theme-slot { display: none; } }

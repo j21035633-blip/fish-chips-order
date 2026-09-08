@@ -133,23 +133,6 @@ const PAIRS: [string, "customer" | "staff", string, string][] = [
   ["staff tooltip", "staff", "--on-ink", "--ink"],
 ];
 
-/**
- * Pairings that ship below the bar in light, and are held there deliberately.
- *
- * The brief for the theme work was explicit that light is not being redesigned,
- * so a shortfall that predates it is recorded rather than quietly repainted —
- * and the dark value for the same pairing is still held to the full 4.5.
- *
- * `--amber` on `--amber-wash` is the PENDING and UNPAID tags. At 3.74:1 they
- * are the one thing on the staff side that does not meet AA for body text, and
- * they have been since those tags were added. Worth fixing, but as a change to
- * the light palette that somebody has actually looked at, not as a side effect.
- */
-const LIGHT_SHORTFALL: Record<string, number> = {
-  "staff PENDING tag": 3.74,
-  "staff UNPAID tag": 3.74,
-};
-
 describe("status colours stay legible in both themes", () => {
   const themes = {
     customer: {
@@ -167,14 +150,12 @@ describe("status colours stay legible in both themes", () => {
       it(`${label} — ${theme}`, () => {
         const tokens = themes[side][theme];
         const ratio = contrast(value(tokens, fg), value(tokens, bg));
-        // Dark is always held to AA. Light is too, except where it already
-        // shipped below it — and there the recorded figure is a ceiling as well
-        // as a floor, so light getting *worse* still fails.
-        const floor = theme === "light" ? (LIGHT_SHORTFALL[label] ?? 4.5) : 4.5;
+        // Both themes, no exceptions. There was one — --amber on --amber-wash
+        // shipped at 3.74:1 in light — and it was fixed rather than recorded.
         expect(
           Number(ratio.toFixed(2)),
           `${fg} on ${bg} is ${ratio.toFixed(2)}:1`,
-        ).toBeGreaterThanOrEqual(floor);
+        ).toBeGreaterThanOrEqual(4.5);
       });
     }
   }
