@@ -6,6 +6,15 @@
     <meta name="robots" content="noindex, nofollow" />
     <title>Staff — Anchor &amp; Batter</title>
     <link rel="stylesheet" href="{{STAFF_BASE}}/assets/staff.css" />
+    <script>
+      // Applied before first paint, so a stored choice never flashes the other
+      // way round. Deliberately inline: a module would be deferred. Key must
+      // match THEME_KEY in theme.js.
+      try {
+        var t = localStorage.getItem("ab-theme");
+        if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
   </head>
   <body data-staff-base="{{STAFF_BASE}}" data-staff-view="accounts">
     <p id="error" class="error" hidden></p>

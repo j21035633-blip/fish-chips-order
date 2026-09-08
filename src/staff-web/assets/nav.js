@@ -5,6 +5,10 @@
 // the list below.
 
 import { el, redirectToLogin } from "./common.js";
+// Served from the customer web root, and imported by absolute path on purpose:
+// the toggle and the storage key have to be the same object on both sides of
+// the app, and the staff mount path is configurable while "/" is not.
+import { mountThemeToggle } from "/theme.js";
 
 /**
  * `path` is relative to wherever the staff area is mounted — the mount point is
@@ -163,7 +167,11 @@ export function mountStaffChrome({ title }) {
   // glitch, and on a tablet it is a tab somebody may already have tapped.
   let nav = staffNav(staffView(), []);
   const identity = el("span", { class: "signed-in-slot" });
-  const header = el("header", {}, [el("h1", { text: title }), nav, slot, identity, logoutButton()]);
+  // Beside Log out, at the end of the header on every view: it is chrome about
+  // this device, like the sign-out button, rather than anything about the shift.
+  const theme = el("span", { class: "theme-slot" });
+  const header = el("header", {}, [el("h1", { text: title }), nav, slot, identity, theme, logoutButton()]);
+  mountThemeToggle(theme, { label: "Switch between light and dark" });
 
   document.body.prepend(header);
 
